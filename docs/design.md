@@ -48,11 +48,12 @@ A published CLI, runtime library and app template that create and reuse each app
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
-    2. **Tokens**: create the scoped Cloudflare and Neon API tokens.
-2. **Platform steps**: `init`, run once from the project's machine with those tokens.
-    1. **Verify**: confirms each token reaches the zone, Workers and Neon.
-    2. **Store**: saves the tokens as GitHub secrets and creates the `production` and `preview` Environments.
-    3. **Wire**: writes the deploy workflow to the repo.
+    2. **Tokens**: create the scoped Cloudflare and Neon API tokens and paste them into `.env.secrets`.
+2. **Platform steps**: `init`, run from the project's machine; safe to rerun until it completes.
+    1. **Prepare**: ensures a gitignored `.env.secrets` exists with a blank entry for every token, each documented with where to create it, and stops until all are filled.
+    2. **Verify**: confirms each token reaches the zone, Workers and Neon.
+    3. **Store**: saves the tokens as GitHub secrets and creates the `production` and `preview` Environments.
+    4. **Wire**: writes the deploy workflow to the repo.
 3. **Handoff**: after `init`, the next push to the main branch deploys prod, and every PR gets a preview.
 
 ## 7. Project Configuration
