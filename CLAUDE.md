@@ -2,6 +2,11 @@
 
 The celsoft-com platform repository.
 
+## Design
+
+- **Source of truth:** read [docs/design.md](docs/design.md) before designing or changing
+  anything; update it when a design decision changes.
+
 ## Code conventions
 
 - **Design:** design and change code following the `codebase-design` skill. If it is not
