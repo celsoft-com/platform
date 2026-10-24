@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Run this repo's platform CLI build: mise run platform -- <command> [--dry-run] [--dir apps/demo]"
+#MISE description="Run the platform CLI for the demo app the way adopters do (npx platform): mise run platform -- <command> [--dry-run]"
 #MISE depends=["build"]
 set -euo pipefail
-cd "$MISE_PROJECT_ROOT"
-node packages/platform/dist/cli.js "$@"
+cd "$MISE_PROJECT_ROOT/apps/demo"
+npx --no-install platform "$@"

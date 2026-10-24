@@ -9,11 +9,13 @@ The celsoft-com platform repository.
 
 ## Setup
 
-- **Guide:** [SETUP.md](SETUP.md) is the one-time setup for accounts and tokens. When a
-  user needs help setting up, walk them through it step by step, and keep it current when
-  setup changes.
-- **Secrets:** `mise run secrets:ensure` creates `.env.secrets` with a blank entry for every
-  name in `secrets.tmpl`. Never read `.env.secrets`; rerun the task to check it.
+- **Guide:** [SETUP.md](SETUP.md) is the one-time setup for adopters. When a user needs
+  help setting up, walk them through it step by step, and keep it current when setup
+  changes.
+- **Dogfood:** this repo is set up and run exactly as SETUP.md tells adopters, with
+  `apps/demo` as the app; never build repo-only tooling that stands in for a user command.
+- **Secrets:** `platform init` (here `mise run platform -- init`) writes a blank entry in
+  `.env.secrets` for each token and reports which are empty. Never read `.env.secrets`.
 
 ## Issues
 
