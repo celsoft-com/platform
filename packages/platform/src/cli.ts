@@ -1,11 +1,14 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
+import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
 import { ConfigError, loadConfig } from "./config.js";
+import { checkWorkflow, init } from "./init.js";
 import { cleanup, deploy, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 import { loadSecrets } from "./secrets.js";
@@ -13,12 +16,13 @@ import { loadSecrets } from "./secrets.js";
 const usage = `usage: platform <command> [--dry-run] [--dir <app dir>]
 
 commands:
+  init             set up GitHub secrets, Environments and the deploy workflow
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "deploy" } | { name: "preview"; pr: number } | { name: "cleanup"; pr: number };
+type Command = { name: "init" } | { name: "deploy" } | { name: "preview"; pr: number } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -31,23 +35,52 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  const command = positionals[0] === "ci" ? await commandForGitHubEvent() : parseCommand(positionals);
+  const appDir = resolve(values.dir);
+  const dryRun = values["dry-run"];
+  const inCi = positionals[0] === "ci";
+  const command = inCi ? await commandForGitHubEvent() : parseCommand(positionals);
   if (!command) {
     console.log("nothing to do for this event");
     return;
   }
 
-  const ctx = await context(resolve(values.dir), values["dry-run"]);
+  if (command.name === "init") {
+    const config = await loadConfig(appDir);
+    await init({
+      repoRoot: repoRoot(appDir),
+      appDir,
+      config,
+      run: new Run(dryRun, (line) => console.log(line)),
+      connect: (tokens) => ({
+        cloudflare: new CloudflareApi(tokens.CLOUDFLARE_API_TOKEN!),
+        neon: new NeonApi(tokens.NEON_API_KEY ?? ""),
+        github: new GhCli(repoRoot(appDir)),
+      }),
+    });
+    return;
+  }
+
+  if (inCi) await checkWorkflow(repoRoot(appDir), appDir);
+  const ctx = await context(appDir, dryRun);
+
   if (command.name === "cleanup") {
     await cleanup(ctx, command.pr);
     return;
   }
+
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
-  if (!values["dry-run"]) console.log(`\nlive at https://${hostname}`);
+  if (dryRun) return;
+  console.log(`\nlive at https://${hostname}`);
+
+  if (inCi && command.name === "preview") {
+    await commentPreviewLink(process.env, command.pr, `https://${hostname}`);
+    console.log("\nprod dry run with this change:");
+    await deploy({ ...ctx, run: new Run(true, (line) => console.log(line)) }, { kind: "prod" });
+  }
 }
 
 function parseCommand([name, pr]: string[]): Command {
-  if (name === "deploy") return { name };
+  if (name === "init" || name === "deploy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
 }
@@ -78,6 +111,14 @@ async function context(appDir: string, dryRun: boolean): Promise<Context> {
       migrator: new ShellMigrator(appDir),
     },
   };
+}
+
+function repoRoot(dir: string): string {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8" }).trim();
+  } catch {
+    throw new PreflightError(`${dir} is not inside a git repository`);
+  }
 }
 
 function requireToken(secrets: Record<string, string>, name: string): string {

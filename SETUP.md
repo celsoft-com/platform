@@ -57,3 +57,13 @@ One Neon project per app. Its default branch is prod; the platform adds a branch
 ## 6. Check
 
 Run `mise run secrets:ensure` again. It exits cleanly once every entry is filled.
+
+## 7. Init
+
+Needs the [GitHub CLI](https://cli.github.com) logged in with access to this repo.
+
+```sh
+mise run platform -- init --dir apps/demo
+```
+
+It checks both tokens can reach your accounts, stores them as GitHub secrets, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`. Commit that file; from then on, pushes to main deploy prod and every PR gets a preview.

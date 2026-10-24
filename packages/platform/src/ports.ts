@@ -42,6 +42,11 @@ export interface Migrator {
   migrate(command: string, databaseUrl: string): Promise<void>;
 }
 
+export interface GitHub {
+  setSecret(name: string, value: string): Promise<void>;
+  ensureEnvironment(name: string): Promise<void>;
+}
+
 export interface Ports {
   neon: Neon;
   cloudflare: Cloudflare;

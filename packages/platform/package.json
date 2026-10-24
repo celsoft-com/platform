@@ -12,11 +12,17 @@
     "dist",
     "schema.json"
   ],
+  "scripts": {
+    "prepare": "tsc -b && node dist/write-schema.js"
+  },
   "dependencies": {
     "@neondatabase/api-client": "^2.7.3",
     "cloudflare": "^7.3.0",
     "jsonc-parser": "^3.3.1",
     "wrangler": "^4.152.0",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
   }
 }
