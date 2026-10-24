@@ -8,7 +8,6 @@ export interface EmailMessage {
 export interface EmailBindings {
   EMAIL_MODE?: "send" | "capture";
   EMAIL_FROM?: string;
-  EMAIL_REPLY_TO?: string;
   EMAIL_API_KEY?: string;
 }
 
@@ -29,7 +28,7 @@ export function createEmail(env: EmailBindings, fetcher: typeof fetch = fetch): 
       const response = await fetcher("https://api.resend.com/emails", {
         method: "POST",
         headers: { authorization: `Bearer ${env.EMAIL_API_KEY}`, "content-type": "application/json" },
-        body: JSON.stringify({ from: env.EMAIL_FROM, reply_to: env.EMAIL_REPLY_TO, ...message }),
+        body: JSON.stringify({ from: env.EMAIL_FROM, ...message }),
       });
       if (!response.ok) throw new Error(`sending email failed: ${response.status} ${await response.text()}`);
     },

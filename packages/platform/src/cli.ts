@@ -56,6 +56,7 @@ async function main(argv: string[]): Promise<void> {
       connect: (tokens) => ({
         cloudflare: new CloudflareApi(tokens.CLOUDFLARE_API_TOKEN!),
         neon: new NeonApi(tokens.NEON_API_KEY ?? ""),
+        mail: new ResendApi(tokens.RESEND_API_KEY ?? ""),
         github: new GhCli(repoRoot(appDir)),
       }),
     });

@@ -128,7 +128,7 @@ describe("preview", () => {
 });
 
 describe("auth and email", () => {
-  const authConfig: Config = { ...config, auth: true, email: { replyTo: "help@example.com" } };
+  const authConfig: Config = { ...config, auth: true, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
 
   it("creates auth tables before the app's migrations", async () => {
@@ -148,7 +148,6 @@ describe("auth and email", () => {
       APP_URL: "https://demo.example.com",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
-      EMAIL_REPLY_TO: "help@example.com",
     });
 
     await deploy(authCtx(), { kind: "prod" });

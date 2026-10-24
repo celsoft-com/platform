@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Config } from "./config.js";
 import { PreflightError } from "./lifecycle.js";
-import type { Cloudflare, GitHub, Neon } from "./ports.js";
+import type { Cloudflare, GitHub, Mail, Neon } from "./ports.js";
 import type { Run } from "./run.js";
 import { parseDotenv, SECRETS_FILE, VARS_FILE } from "./secrets.js";
 import { renderWorkflow, WORKFLOW_PATH, type PackageManager } from "./workflow.js";
@@ -19,7 +19,7 @@ export interface InitInput {
   config: Config;
   variables: Record<string, string>;
   run: Run;
-  connect: (tokens: Record<string, string>) => { cloudflare: Cloudflare; neon: Neon; github: GitHub };
+  connect: (tokens: Record<string, string>) => { cloudflare: Cloudflare; neon: Neon; mail: Mail; github: GitHub };
 }
 
 export function tokenNames(config: Config): string[] {
@@ -31,7 +31,7 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
 
   const tokens = await prepareSecretsFile(repoRoot, names, run);
   if (Object.keys(variables).length > 0) await ensureIgnored(repoRoot, VARS_FILE, run);
-  const { cloudflare, neon, github } = connect(tokens);
+  const { cloudflare, neon, mail, github } = connect(tokens);
 
   await cloudflare.accountId();
   const zone = await cloudflare.findZone(config.hostname);
@@ -40,6 +40,13 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
   if (config.database) {
     await neon.defaultBranch(config.database.neonProject);
     run.note(`✓ Neon project ${config.database.neonProject}`);
+  }
+  if (config.email) {
+    // Listing domains needs the same full access that adding the app's sending domain does.
+    await mail.findDomain(config.hostname).catch((error: Error) => {
+      throw new PreflightError(`the Resend API key cannot manage domains (${error.message}); create one with Full access`);
+    });
+    run.note("✓ Resend API key can manage sending domains");
   }
 
   for (const name of names) {

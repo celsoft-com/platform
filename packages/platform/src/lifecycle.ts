@@ -73,7 +73,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
   const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
   if (config.email) {
-    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${hostname}`, EMAIL_REPLY_TO: config.email.replyTo });
+    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${hostname}` });
   }
 
   const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars });
