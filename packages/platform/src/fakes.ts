@@ -175,15 +175,20 @@ export class FakeWrangler implements Wrangler {
 
 export class FakeMigrator implements Migrator {
   runs: string[] = [];
-  authRuns: string[] = [];
+  generated = 0;
+  current = true;
   failWith: Error | undefined;
 
-  async migrate(_command: string, databaseUrl: string) {
+  async generate() {
+    this.generated++;
+    this.current = true;
+  }
+  async upToDate() {
+    return this.current;
+  }
+  async migrate(databaseUrl: string) {
     if (this.failWith) throw this.failWith;
     this.runs.push(databaseUrl);
-  }
-  async migrateAuth(databaseUrl: string) {
-    this.authRuns.push(databaseUrl);
   }
   dropped: string[] = [];
   async dropAll(databaseUrl: string) {

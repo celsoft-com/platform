@@ -23,12 +23,16 @@ export const configSchema = z
     database: z
       .object({
         neonProject: z.string().regex(/^[a-z]+-[a-z]+-\d+$/, "must be a Neon project id such as quiet-meadow-12345678, not a branch id"),
-        migrate: z.string().min(1).describe("Command that runs migrations against $DATABASE_URL"),
       })
+      .describe("A Neon Postgres 18 database; the app's tables live in src/schema.ts")
       .strict()
       .optional(),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
-    auth: z.boolean().default(false).describe("Sign-up and login with email and password; needs database and email"),
+    auth: z
+      .union([z.boolean(), z.object({ organizations: z.boolean().default(false).describe("Organizations with members, roles, invitations and teams") }).strict()])
+      .default(false)
+      .transform((auth) => (auth === true ? { organizations: false } : auth))
+      .describe("Sign-up and login with email and password; needs database and email"),
     files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
     secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE name")).default([]),
   })

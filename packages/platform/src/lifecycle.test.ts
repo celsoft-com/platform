@@ -11,7 +11,7 @@ const config: Config = parseConfig(`{
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
   "frontend": "dist",
-  "database": { "neonProject": "quiet-meadow-12345678", "migrate": "pnpm migrate" },
+  "database": { "neonProject": "quiet-meadow-12345678" },
   "secrets": ["SESSION_SECRET"]
 }`);
 
@@ -73,6 +73,13 @@ describe("deploy prod", () => {
     ]);
   });
 
+  it("stops before touching anything when the schema has ungenerated changes", async () => {
+    ports.migrator.current = false;
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/db generate/);
+    expect(ports.neon.branches).toHaveLength(1);
+    expect(ports.wrangler.deploys).toEqual([]);
+  });
+
   it("stops before deploying when migrations fail", async () => {
     ports.migrator.failWith = new Error("migration failed");
     await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow("migration failed");
@@ -128,14 +135,8 @@ describe("preview", () => {
 });
 
 describe("auth and email", () => {
-  const authConfig: Config = { ...config, auth: true, email: true };
+  const authConfig: Config = { ...config, auth: { organizations: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
-
-  it("creates auth tables before the app's migrations", async () => {
-    await deploy(authCtx(), { kind: "prod" });
-    expect(ports.migrator.authRuns).toEqual(ports.migrator.runs);
-    expect(log.findIndex((l) => l.includes("update auth tables"))).toBeLessThan(log.findIndex((l) => l.includes("run migrations")));
-  });
 
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
     await deploy(authCtx(), { kind: "prod" });
@@ -146,9 +147,13 @@ describe("auth and email", () => {
     expect(Object.keys(first.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
     expect(first.config.vars).toEqual({
       APP_URL: "https://demo.example.com",
+      APP_NAME: "demo",
+      AUTH_ORGANIZATIONS: "off",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });
+    expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
+    expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
 
     await deploy(authCtx(), { kind: "prod" });
     expect(Object.keys(ports.wrangler.deploys[1]!.secrets)).toEqual(["SESSION_SECRET"]);
@@ -213,7 +218,7 @@ describe("files", () => {
 });
 
 describe("destroy", () => {
-  const full: Config = { ...config, auth: true, email: true, files: true };
+  const full: Config = { ...config, auth: { organizations: false }, email: true, files: true };
 
   async function deployEverything() {
     const c = { ...ctx(), config: full };

@@ -83,8 +83,9 @@ export interface Wrangler {
 }
 
 export interface Migrator {
-  migrate(command: string, databaseUrl: string): Promise<void>;
-  migrateAuth(databaseUrl: string): Promise<void>;
+  generate(): Promise<void>;
+  upToDate(): Promise<boolean>;
+  migrate(databaseUrl: string): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
 }
 

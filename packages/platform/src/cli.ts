@@ -8,7 +8,8 @@ import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { ResendApi } from "./adapters/resend.js";
-import { ShellMigrator, WranglerCli } from "./adapters/process.js";
+import { DrizzleMigrator } from "./adapters/drizzle.js";
+import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
 import { cleanup, deploy, destroy, dev, PreflightError, type Context } from "./lifecycle.js";
@@ -20,13 +21,14 @@ const usage = `usage: npx @celsoft/platform <command> [--dry-run] [--dir <app di
 commands:
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
+  db generate      write migrations for changes to the platform's tables and src/schema.ts
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "db generate" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -67,6 +69,10 @@ async function main(argv: string[]): Promise<void> {
   }
 
   const app = await loadApp(appDir);
+  if (command.name === "db generate") {
+    await new DrizzleMigrator(appDir, app.config).generate();
+    return;
+  }
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
   const ctx = await context(appDir, app.config, dryRun);
 
@@ -95,6 +101,7 @@ async function main(argv: string[]): Promise<void> {
 }
 
 function parseCommand([name, pr]: string[]): Command {
+  if (name === "db" && pr === "generate") return { name: "db generate" };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
@@ -133,7 +140,7 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
       neon: new NeonApi(neonKey),
       mail: new ResendApi(resendKey),
       wrangler: new WranglerCli(appDir, { CLOUDFLARE_API_TOKEN: cloudflareToken }),
-      migrator: new ShellMigrator(appDir),
+      migrator: new DrizzleMigrator(appDir, config),
     },
   };
 }

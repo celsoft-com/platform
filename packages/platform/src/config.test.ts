@@ -8,7 +8,7 @@ const valid = `{
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
-  "database": { "neonProject": "quiet-meadow-12345678", "migrate": "pnpm run migrate" },
+  "database": { "neonProject": "quiet-meadow-12345678" },
 }`;
 
 describe("parseConfig", () => {

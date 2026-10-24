@@ -15,10 +15,13 @@ export interface Context {
 
 export class PreflightError extends Error {}
 
+export const UNGENERATED = "the schema has changes with no migration; run `npx @celsoft/platform db generate`, review the SQL in drizzle/, and commit it";
+
 export async function deploy(ctx: Context, target: Target): Promise<{ hostname: string }> {
   const { config, ports, run } = ctx;
   const secrets = requireSecrets(config, ctx.secrets);
   const n = names(config, target);
+  if (config.database && !(await ports.migrator.upToDate())) throw new PreflightError(UNGENERATED);
 
   const accountId = await ports.cloudflare.accountId();
   const zone = await ports.cloudflare.findZone(config.hostname);
@@ -45,9 +48,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
 
     if (uri) {
-      // Auth tables first, so the app's own migrations can reference them.
-      if (config.auth) await run.mutate(`update auth tables on ${branch.name}`, () => ports.migrator.migrateAuth(uri), undefined);
-      await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(config.database!.migrate, uri), undefined);
+      await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
     } else {
       run.note(`would run migrations on ${branch.name}`);
     }
@@ -116,8 +117,8 @@ export async function dev(ctx: Context): Promise<void> {
       { id: "(new)", name: DEV_BRANCH },
     );
     uri = await ports.neon.connectionUri(project, branch.id);
-    if (config.auth) await run.mutate(`update auth tables on ${DEV_BRANCH}`, () => ports.migrator.migrateAuth(uri!), undefined);
-    await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(config.database!.migrate, uri!), undefined);
+    await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
+    await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
   }
 
   const vars: Record<string, string> = { APP_URL: DEV_URL, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
