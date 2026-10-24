@@ -22,7 +22,7 @@ commands:
   cleanup <pr>     delete the preview for a pull request
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "init" } | { name: "deploy" } | { name: "preview"; pr: number } | { name: "cleanup"; pr: number };
+type Command = { name: "init" } | { name: "deploy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -73,7 +73,7 @@ async function main(argv: string[]): Promise<void> {
   console.log(`\nlive at https://${hostname}`);
 
   if (inCi && command.name === "preview") {
-    await commentPreviewLink(process.env, command.pr, `https://${hostname}`);
+    await commentPreviewLink(process.env, command.pr, `https://${hostname}`, command.sha);
     console.log("\nprod dry run with this change:");
     await deploy({ ...ctx, run: new Run(true, (line) => console.log(line)) }, { kind: "prod" });
   }
@@ -89,9 +89,9 @@ async function commandForGitHubEvent(): Promise<Command | undefined> {
   const name = process.env.GITHUB_EVENT_NAME;
   const path = process.env.GITHUB_EVENT_PATH;
   if (!name || !path) throw new UsageError("`platform ci` runs only inside GitHub Actions");
-  const event = JSON.parse(await readFile(path, "utf8")) as { action?: string; number?: number };
+  const event = JSON.parse(await readFile(path, "utf8")) as { action?: string; number?: number; pull_request?: { head?: { sha?: string } } };
   if (name === "push") return { name: "deploy" };
-  if (name === "pull_request") return event.action === "closed" ? { name: "cleanup", pr: event.number! } : { name: "preview", pr: event.number! };
+  if (name === "pull_request") return event.action === "closed" ? { name: "cleanup", pr: event.number! } : { name: "preview", pr: event.number!, sha: event.pull_request?.head?.sha };
   return undefined;
 }
 

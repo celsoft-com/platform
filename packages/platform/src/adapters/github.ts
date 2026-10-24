@@ -27,7 +27,7 @@ export class GhCli implements GitHub {
 
 const MARKER = "<!-- platform-preview -->";
 
-export async function commentPreviewLink(env: NodeJS.ProcessEnv, pr: number, url: string): Promise<void> {
+export async function commentPreviewLink(env: NodeJS.ProcessEnv, pr: number, url: string, sha?: string): Promise<void> {
   const token = env.GITHUB_TOKEN;
   const repo = env.GITHUB_REPOSITORY;
   if (!token || !repo) return;
@@ -38,7 +38,7 @@ export async function commentPreviewLink(env: NodeJS.ProcessEnv, pr: number, url
       headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json" },
     });
 
-  const body = `${MARKER}\nPreview: ${url}\n\nCommit ${env.GITHUB_SHA?.slice(0, 7) ?? ""}`;
+  const body = `${MARKER}\nPreview: ${url}\n\nCommit ${(sha ?? env.GITHUB_SHA)?.slice(0, 7) ?? ""}`;
   const comments = (await (await api(`issues/${pr}/comments?per_page=100`)).json()) as { id: number; body?: string }[];
   const existing = comments.find((c) => c.body?.startsWith(MARKER));
   const response = existing
