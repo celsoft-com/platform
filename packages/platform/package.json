@@ -3,9 +3,15 @@
   "version": "0.2.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/celsoft-com/platform.git", "directory": "packages/platform" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/celsoft-com/platform.git",
+    "directory": "packages/platform"
+  },
   "homepage": "https://github.com/celsoft-com/platform#readme",
-  "publishConfig": { "access": "public" },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "platform": "./dist/cli.js"
@@ -22,8 +28,11 @@
   },
   "dependencies": {
     "@neondatabase/api-client": "^2.7.3",
+    "better-auth": "^1.7.12",
     "cloudflare": "^7.3.0",
     "jsonc-parser": "^3.3.1",
+    "kysely": "^0.29.7",
+    "kysely-postgres-js": "^5.0.1",
     "postgres": "^3.4.9",
     "wrangler": "^4.152.0",
     "zod": "^4.6.7"

@@ -27,9 +27,18 @@ export const configSchema = z
       })
       .strict()
       .optional(),
+    email: z
+      .object({
+        replyTo: z.email("must be an email address").describe("Where replies to the app's email go; the app only sends"),
+      })
+      .strict()
+      .optional()
+      .describe("Send email through Resend from the app's own hostname"),
+    auth: z.boolean().default(false).describe("Sign-up and login with email and password; needs database and email"),
     secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE name")).default([]),
   })
-  .strict();
+  .strict()
+  .refine((c) => !c.auth || (c.database && c.email), { message: "auth needs both database and email", path: ["auth"] });
 
 export type Config = z.output<typeof configSchema>;
 
