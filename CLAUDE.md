@@ -15,6 +15,11 @@ The celsoft-com platform repository.
 - **Secrets:** `mise run secrets:ensure` creates `.env.secrets` with a blank entry for every
   name in `secrets.tmpl`. Never read `.env.secrets`; rerun the task to check it.
 
+## Issues
+
+- **Tracking:** track things to deal with later as one markdown file each in `tmp/issues/`
+  (gitignored, local only); add new ones as they come up and delete a file when it is done.
+
 ## Code conventions
 
 - **Design:** design and change code following the `codebase-design` skill. If it is not
