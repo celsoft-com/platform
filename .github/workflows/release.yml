@@ -1,0 +1,25 @@
+name: release
+
+on:
+  workflow_run:
+    workflows: [platform]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: jdx/mise-action@v3
+      - run: mise run install
+      - run: mise run test
+      - run: mise run test:template
+      - run: mise run release

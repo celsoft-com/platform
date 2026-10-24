@@ -1,6 +1,11 @@
 {
   "name": "@celsoft/create-app",
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Create an app deployed by @celsoft/platform: npm create @celsoft/app",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/celsoft-com/platform.git", "directory": "packages/create-app" },
+  "homepage": "https://github.com/celsoft-com/platform#readme",
+  "publishConfig": { "access": "public" },
   "type": "module",
   "bin": { "create-app": "./dist/cli.js" },
   "files": ["dist", "template"],
