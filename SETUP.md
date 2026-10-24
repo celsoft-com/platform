@@ -31,6 +31,7 @@ It creates `.env.secrets` (gitignored) with a blank entry for each token below, 
     | Account > Account Settings > Read | Find the account id |
     | Zone > Workers Routes > Edit | Attach app and preview hostnames |
     | Zone > Zone > Read | Find the zone by its domain |
+    | Zone > DNS > Edit | Write the email-sending records for each app hostname |
 
 3. **Account Resources:** Include, your account.
 4. **Zone Resources:** Include, Specific zone, your apex domain.
@@ -54,11 +55,20 @@ One Neon project per app. Its default branch is prod; the platform adds a branch
 3. **No organization?** If the project is in a personal account, create a personal key at [API keys](https://console.neon.tech/app/settings/api-keys) instead.
 4. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`.
 
-## 6. Check
+## 6. Resend API key
+
+Apps send email (verification, password reset, notifications) through [Resend](https://resend.com), from their own hostname, so your existing email setup is never touched.
+
+1. **Sign up:** create an account at [resend.com](https://resend.com).
+2. **Open:** [API Keys](https://resend.com/api-keys), then **Create API Key**.
+3. **Permission:** **Full access**, since the platform adds each app's hostname as a sending domain.
+4. **Save:** paste it after `RESEND_API_KEY=` in `.env.secrets`.
+
+## 7. Check
 
 Run `mise run secrets:ensure` again. It exits cleanly once every entry is filled.
 
-## 7. Demo values
+## 8. Demo values
 
 `apps/demo/platform.jsonc` reads two non-secret values as `${NAME}`, so they stay out of the repo. Put them in a gitignored `.env` at the repo root:
 
@@ -67,7 +77,7 @@ DEMO_HOSTNAME=demo.example.com          # prod hostname, in your Cloudflare zone
 DEMO_NEON_PROJECT=quiet-meadow-12345678 # Neon project id from step 4
 ```
 
-## 8. Init
+## 9. Init
 
 Needs the [GitHub CLI](https://cli.github.com) logged in with access to this repo.
 

@@ -173,7 +173,9 @@ A published CLI, runtime library and app template that create and reuse each app
 ## 13. Roadmap
 
 1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
-2. **Auth and email**: Better Auth in the runtime library, with Resend for its email, and previews capturing email instead of sending it.
+2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.
+    1. **Sender**: each app sends from its own hostname, so the project's existing email setup is never touched; the platform registers the hostname in Resend and writes its DKIM and bounce records in the zone, tagged as its own.
+    2. **Send only**: no receiving; each email's reply-to points at a real address the project sets.
 3. **Files**: R2, with a prod bucket per app and previews under a per-PR prefix.
 4. **Background work**: Queues and Cron Triggers.
 5. **Realtime**: Durable Objects rooms over WebSockets.
