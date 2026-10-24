@@ -7,6 +7,11 @@ The celsoft-com platform repository.
 - **Source of truth:** read [docs/design.md](docs/design.md) before designing or changing
   anything; update it when a design decision changes.
 
+## Secrets
+
+- **Setup:** `mise run secrets:ensure` creates `.env.secrets` with a blank entry for every
+  name in `secrets.tmpl`, which also says where each value comes from.
+
 ## Code conventions
 
 - **Design:** design and change code following the `codebase-design` skill. If it is not
