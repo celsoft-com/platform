@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 #MISE description="Type-check and compile every package"
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"

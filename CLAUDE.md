@@ -27,6 +27,8 @@ The celsoft-com platform repository.
 - **Tasks:** write automation as mise file tasks under `mise-tasks/`, never as tasks in
   `mise.toml` and never as standalone shell scripts unless a mise task cannot do the job.
   Group related tasks into folders, so `mise-tasks/db/migrate` runs as `mise run db:migrate`.
+- **Task shell:** write tasks in bash (`#!/usr/bin/env bash`), not zsh, so CI runners run
+  them without installing anything; keep them compatible with macOS's bash 3.2.
 - **Running things:** at the start of a session run `mise tasks` to learn every task, and
   use a task over the equivalent raw command whenever one exists. Never run `mise exec`;
   when a command needs the mise environment

@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 #MISE description="Run the unit tests: mise run test -- [vitest args]"
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"

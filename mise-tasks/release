@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 #MISE description="Publish each package whose version is not on npm yet"
 #MISE depends=["build"]
 set -euo pipefail
@@ -8,9 +8,9 @@ for dir in packages/platform packages/create-platform-app; do
   name=$(node -p "require('./$dir/package.json').name")
   version=$(node -p "require('./$dir/package.json').version")
   if npm view "$name@$version" version >/dev/null 2>&1; then
-    print "• $name@$version already published"
+    echo "• $name@$version already published"
   else
     (cd "$dir" && npm publish --access public)
-    print "✓ published $name@$version"
+    echo "✓ published $name@$version"
   fi
 done
