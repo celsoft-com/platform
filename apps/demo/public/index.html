@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notes</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    form { display: flex; gap: .5rem; }
+    textarea { flex: 1; min-height: 3rem; font: inherit; }
+    ul { list-style: none; padding: 0; }
+    li { border-bottom: 1px solid #8884; padding: .75rem 0; white-space: pre-wrap; }
+    time { display: block; font-size: .8rem; opacity: .7; }
+  </style>
+</head>
+<body>
+  <h1>Notes</h1>
+  <form id="new">
+    <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
+    <button>Add</button>
+  </form>
+  <ul id="notes"></ul>
+  <script type="module">
+    const list = document.getElementById("notes");
+    const form = document.getElementById("new");
+
+    function render(notes) {
+      list.replaceChildren(...notes.map((note) => {
+        const li = document.createElement("li");
+        const time = document.createElement("time");
+        time.textContent = new Date(note.created_at).toLocaleString();
+        li.append(note.body, time);
+        return li;
+      }));
+    }
+
+    async function load() {
+      render(await (await fetch("/api/notes")).json());
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = new FormData(form).get("body");
+      const response = await fetch("/api/notes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body }) });
+      if (response.ok) { form.reset(); await load(); }
+    });
+
+    load();
+  </script>
+</body>
+</html>
