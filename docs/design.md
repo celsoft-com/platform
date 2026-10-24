@@ -152,7 +152,10 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **SQL**: `app.sql` is postgres.js itself.
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
-7. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
+7. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely.
+    1. **Permissions**: apps keep roles and grants in their own tables, keyed to `user.id`, and check them in their routes.
+    2. **Later**: an app-owned extension file, merged over the platform's setup, for Better Auth plugins such as organizations and access control.
+8. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
 
 ## 12. Upgrades
 
