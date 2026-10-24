@@ -45,7 +45,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
     3. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
     4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
-3. **Line in app code**: the platform provides connections and their lifecycle; the app owns its queries, schema and migration files.
+3. **Line in app code**: see App Code.
 
 ## 6. Bootstrap
 
@@ -126,13 +126,33 @@ A published CLI, runtime library and app template that create and reuse each app
     8. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
     9. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major or the workflow differs from what `init` writes.
     10. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
-2. **Runtime library**: imported by the app's Worker; `defineApp` hands each request a ready database client, opened lazily and closed after the response, plus typed secrets. Each roadmap stage adds its helper here.
+2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.
 
-## 11. Upgrades
+## 11. App Code
+
+1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
+2. **Platform provides**: through `defineApp` in the runtime library.
+    1. **Database**: `app.sql`, a Postgres client opened on first use and closed after each request.
+    2. **Auth**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset) and `app.session()` for the signed-in user.
+    3. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev.
+    4. **Files**: `app.files`, storing, reading, listing, deleting and serving objects by path, with a preview's folder added out of sight.
+    5. **Auth tables**: Better Auth's tables, created and updated on every deploy.
+3. **App writes**:
+    1. **API**: routes, request handling, validation, and which routes need a signed-in user.
+    2. **Data**: schema, migration files and every query.
+    3. **Pages**: the frontend, including its login and reset screens.
+    4. **Content**: what its own emails say and how its files are organized.
+4. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
+    1. **SQL**: `app.sql` is postgres.js itself.
+    2. **Auth**: `app.auth` is the full Better Auth instance and API.
+    3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
+5. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
+
+## 12. Upgrades
 
 1. **Versioning**: the CLI and runtime library release together under one version.
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
@@ -152,7 +172,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Latest major**: the only version that gets fixes.
 5. **Compatibility date**: set by the project in `platform.jsonc`, never changed by the platform.
 
-## 12. Testing
+## 13. Testing
 
 1. **Dogfood**: the platform repo is itself a project, deploying a demo app with the platform as far as it can.
     1. **Demo app**: a real, usable app (proposed: shared notes) living in the repo with its own `platform.jsonc`, in an account and zone the maintainer owns.
@@ -171,7 +191,7 @@ A published CLI, runtime library and app template that create and reuse each app
 4. **Template test**: scaffolds an app from the template and builds it.
 5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
 
-## 13. Roadmap
+## 14. Roadmap
 
 1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
 2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.
