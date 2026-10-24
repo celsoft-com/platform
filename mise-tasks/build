@@ -1,0 +1,5 @@
+#!/usr/bin/env zsh
+#MISE description="Type-check and compile every package"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+pnpm exec tsc -b

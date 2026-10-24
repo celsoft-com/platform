@@ -1,0 +1,5 @@
+#!/usr/bin/env zsh
+#MISE description="Add dependencies: mise run deps:add -- <pnpm add args>"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+pnpm add "$@"

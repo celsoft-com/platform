@@ -1,0 +1,10 @@
+{
+  "name": "platform-workspace",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
