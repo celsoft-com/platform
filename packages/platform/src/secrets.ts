@@ -23,7 +23,7 @@ export async function loadSecrets(startDir: string, names: string[], env: NodeJS
 }
 
 // Non-secret values platform.jsonc references as ${NAME}: the nearest .env locally,
-// GitHub Actions variables passed by name in CI.
+// GitHub secrets passed by name in CI.
 export async function loadVars(startDir: string, names: string[], env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
   return { ...(await findEnvFile(startDir, VARS_FILE)), ...pick(env, names) };
 }

@@ -54,7 +54,7 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
 
   const missing = configVariables(text).filter((name) => !vars[name]);
   if (missing.length > 0) {
-    throw new ConfigError(`${source} uses ${missing.join(", ")}; set them in .env, or as GitHub Actions variables in CI`);
+    throw new ConfigError(`${source} uses ${missing.join(", ")}; set them in .env, then run \`platform init\` to copy them to GitHub`);
   }
   const raw = substitute(parsed, vars);
 

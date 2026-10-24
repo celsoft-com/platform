@@ -8,10 +8,6 @@ export class GhCli implements GitHub {
     await this.gh(["secret", "set", name], value);
   }
 
-  async setVariable(name: string, value: string): Promise<void> {
-    await this.gh(["variable", "set", name], value);
-  }
-
   async ensureEnvironment(name: string): Promise<void> {
     const repo = (await this.gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
     await this.gh(["api", "--method", "PUT", `repos/${repo}/environments/${name}`, "--silent"]);

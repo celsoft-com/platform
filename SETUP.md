@@ -85,4 +85,4 @@ Needs the [GitHub CLI](https://cli.github.com) logged in with access to this rep
 mise run platform -- init --dir apps/demo
 ```
 
-It checks both tokens can reach your accounts, stores them as GitHub secrets, copies the demo values to GitHub as Actions variables, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`. Commit that file; from then on, pushes to main deploy prod and every PR gets a preview.
+It checks both tokens can reach your accounts, stores them as GitHub secrets, copies the demo values to GitHub as secrets so logs hide them, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`. Commit that file; from then on, pushes to main deploy prod and every PR gets a preview.

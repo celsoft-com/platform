@@ -18,7 +18,8 @@ export function renderWorkflow({ appDir, packageManager, secrets, variables }: W
   const workingDirectory = appDir === "." ? "" : `\n        working-directory: ${appDir}`;
   const env = [
     ...[...new Set(secrets)].sort().map((name) => `${name}: \${{ secrets.${name} }}`),
-    ...[...new Set(variables)].sort().map((name) => `${name}: \${{ vars.${name} }}`),
+    // Config values are stored as secrets too: GitHub prints a step's variables in its public log, but hides secrets.
+    ...[...new Set(variables)].sort().map((name) => `${name}: \${{ secrets.${name} }}`),
     "GITHUB_TOKEN: ${{ github.token }}",
   ];
 

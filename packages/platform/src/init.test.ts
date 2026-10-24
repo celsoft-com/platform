@@ -18,10 +18,6 @@ const config = parseConfig(`{
 class FakeGitHub implements GitHub {
   secrets: Record<string, string> = {};
   environments = new Set<string>();
-  variables: Record<string, string> = {};
-  async setVariable(name: string, value: string) {
-    this.variables[name] = value;
-  }
   async setSecret(name: string, value: string) {
     this.secrets[name] = value;
   }
@@ -57,15 +53,15 @@ describe("init", () => {
 
     await init(input());
 
-    expect(github.secrets).toEqual({ CLOUDFLARE_API_TOKEN: "cf", NEON_API_KEY: "neon" });
+    expect(github.secrets).toEqual({ CLOUDFLARE_API_TOKEN: "cf", NEON_API_KEY: "neon", APP_HOSTNAME: "demo.example.com" });
     expect([...github.environments]).toEqual(["production", "preview"]);
-    expect(github.variables).toEqual({ APP_HOSTNAME: "demo.example.com" });
     expect(await readFile(join(root, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
     const workflow = await readFile(join(root, WORKFLOW_PATH), "utf8");
     expect(workflow).toMatch(/working-directory: apps\/demo/);
     expect(workflow).toMatch(/pnpm exec platform ci/);
     expect(workflow).toMatch(/NEON_API_KEY: \$\{\{ secrets\.NEON_API_KEY \}\}/);
-    expect(workflow).toMatch(/APP_HOSTNAME: \$\{\{ vars\.APP_HOSTNAME \}\}/);
+    expect(workflow).toMatch(/APP_HOSTNAME: \$\{\{ secrets\.APP_HOSTNAME \}\}/);
+    expect(workflow).not.toMatch(/vars\./);
     expect(workflow).not.toMatch(/toJSON/);
     await expect(checkWorkflow(root, join(root, "apps", "demo"), config, ["APP_HOSTNAME"])).resolves.toBeUndefined();
   });

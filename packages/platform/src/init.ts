@@ -53,7 +53,7 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
     await run.mutate(`store ${name} as a GitHub secret`, () => github.setSecret(name, tokens[name]!), undefined);
   }
   for (const [name, value] of Object.entries(variables)) {
-    await run.mutate(`store ${name} as a GitHub variable`, () => github.setVariable(name, value), undefined);
+    await run.mutate(`store ${name} as a GitHub secret, so logs hide it`, () => github.setSecret(name, value), undefined);
   }
   for (const environment of ["production", "preview"]) {
     await run.mutate(`ensure GitHub Environment ${environment}`, () => github.ensureEnvironment(environment), undefined);

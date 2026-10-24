@@ -76,7 +76,6 @@ export interface Migrator {
 
 export interface GitHub {
   setSecret(name: string, value: string): Promise<void>;
-  setVariable(name: string, value: string): Promise<void>;
   ensureEnvironment(name: string): Promise<void>;
 }
 
