@@ -4,7 +4,7 @@ import type { Config } from "./config.js";
 import { PreflightError } from "./lifecycle.js";
 import type { Cloudflare, GitHub, Neon } from "./ports.js";
 import type { Run } from "./run.js";
-import { parseDotenv, SECRETS_FILE } from "./secrets.js";
+import { parseDotenv, SECRETS_FILE, VARS_FILE } from "./secrets.js";
 import { renderWorkflow, WORKFLOW_PATH, type PackageManager } from "./workflow.js";
 
 export const TOKEN_HELP: Record<string, string> = {
@@ -16,14 +16,16 @@ export interface InitInput {
   repoRoot: string;
   appDir: string;
   config: Config;
+  variables: Record<string, string>;
   run: Run;
   connect: (tokens: Record<string, string>) => { cloudflare: Cloudflare; neon: Neon; github: GitHub };
 }
 
-export async function init({ repoRoot, appDir, config, run, connect }: InitInput): Promise<void> {
+export async function init({ repoRoot, appDir, config, variables, run, connect }: InitInput): Promise<void> {
   const names = config.database ? ["CLOUDFLARE_API_TOKEN", "NEON_API_KEY"] : ["CLOUDFLARE_API_TOKEN"];
 
   const tokens = await prepareSecretsFile(repoRoot, names, run);
+  if (Object.keys(variables).length > 0) await ensureIgnored(repoRoot, VARS_FILE, run);
   const { cloudflare, neon, github } = connect(tokens);
 
   await cloudflare.accountId();
@@ -37,6 +39,9 @@ export async function init({ repoRoot, appDir, config, run, connect }: InitInput
 
   for (const name of names) {
     await run.mutate(`store ${name} as a GitHub secret`, () => github.setSecret(name, tokens[name]!), undefined);
+  }
+  for (const [name, value] of Object.entries(variables)) {
+    await run.mutate(`store ${name} as a GitHub variable`, () => github.setVariable(name, value), undefined);
   }
   for (const environment of ["production", "preview"]) {
     await run.mutate(`ensure GitHub Environment ${environment}`, () => github.ensureEnvironment(environment), undefined);
@@ -61,10 +66,14 @@ export async function checkWorkflow(repoRoot: string, appDir: string): Promise<v
   }
 }
 
-async function prepareSecretsFile(repoRoot: string, names: string[], run: Run): Promise<Record<string, string>> {
+async function ensureIgnored(repoRoot: string, file: string, run: Run): Promise<void> {
   const gitignore = join(repoRoot, ".gitignore");
-  const ignored = (await readOptional(gitignore))?.split(/\r?\n/).some((line) => line.trim() === SECRETS_FILE || line.trim() === `/${SECRETS_FILE}`);
-  if (!ignored) await run.mutate(`add ${SECRETS_FILE} to .gitignore`, () => appendFile(gitignore, `\n${SECRETS_FILE}\n`), undefined);
+  const ignored = (await readOptional(gitignore))?.split(/\r?\n/).some((line) => line.trim() === file || line.trim() === `/${file}`);
+  if (!ignored) await run.mutate(`add ${file} to .gitignore`, () => appendFile(gitignore, `\n${file}\n`), undefined);
+}
+
+async function prepareSecretsFile(repoRoot: string, names: string[], run: Run): Promise<Record<string, string>> {
+  await ensureIgnored(repoRoot, SECRETS_FILE, run);
 
   const path = join(repoRoot, SECRETS_FILE);
   const text = (await readOptional(path)) ?? "";

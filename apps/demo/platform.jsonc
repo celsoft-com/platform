@@ -2,12 +2,12 @@
   "$schema": "./node_modules/@celsoft/platform/schema.json",
   "version": 1,
   "name": "demo",
-  "hostname": "demo.example.com",
+  "hostname": "${DEMO_HOSTNAME}",
   "worker": "src/worker.ts",
   "frontend": "public",
   "compatibilityDate": "2026-10-01",
   "database": {
-    "neonProject": "quiet-meadow-12345678",
+    "neonProject": "${DEMO_NEON_PROJECT}",
     "migrate": "node scripts/migrate.js"
   }
 }

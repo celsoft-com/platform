@@ -18,6 +18,10 @@ const config = parseConfig(`{
 class FakeGitHub implements GitHub {
   secrets: Record<string, string> = {};
   environments = new Set<string>();
+  variables: Record<string, string> = {};
+  async setVariable(name: string, value: string) {
+    this.variables[name] = value;
+  }
   async setSecret(name: string, value: string) {
     this.secrets[name] = value;
   }
@@ -31,7 +35,7 @@ let github: FakeGitHub;
 
 function input(): InitInput {
   const ports = fakePorts();
-  return { repoRoot: root, appDir: join(root, "apps", "demo"), config, run: new Run(false, () => {}), connect: () => ({ ...ports, github }) };
+  return { repoRoot: root, appDir: join(root, "apps", "demo"), config, variables: { APP_HOSTNAME: "demo.example.com" }, run: new Run(false, () => {}), connect: () => ({ ...ports, github }) };
 }
 
 beforeEach(async () => {
@@ -55,6 +59,8 @@ describe("init", () => {
 
     expect(github.secrets).toEqual({ CLOUDFLARE_API_TOKEN: "cf", NEON_API_KEY: "neon" });
     expect([...github.environments]).toEqual(["production", "preview"]);
+    expect(github.variables).toEqual({ APP_HOSTNAME: "demo.example.com" });
+    expect(await readFile(join(root, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
     const workflow = await readFile(join(root, WORKFLOW_PATH), "utf8");
     expect(workflow).toMatch(/working-directory: apps\/demo/);
     expect(workflow).toMatch(/pnpm exec platform ci/);

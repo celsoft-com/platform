@@ -71,7 +71,8 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
     7. **Compatibility date**: the Workers runtime date the app runs against.
     8. **Config version**: the platform major version the file's shape matches.
-2. **Derived**: everything else comes from that file and the environment, never written by the project.
+2. **Variables**: any value may be `${NAME}`, filled from a gitignored `.env` locally and from GitHub Actions variables in CI, so values the project would rather not publish stay out of the repo; `init` copies them to GitHub.
+3. **Derived**: everything else comes from that file and the environment, never written by the project.
     1. **Resource names**: Worker, Neon branch and Hyperdrive config, for prod and each PR.
     2. **Preview hostnames**: one per PR, under the zone.
     3. **Wrangler config**: generated at deploy with the real ids and bindings.

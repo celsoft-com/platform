@@ -4,4 +4,4 @@ An open-source platform for deploying apps to Cloudflare Workers with a Neon Pos
 
 - **Design:** [docs/design.md](docs/design.md)
 - **Setup:** [SETUP.md](SETUP.md)
-- **Demo:** [apps/demo](apps/demo), live at https://demo.example.com
+- **Demo:** [apps/demo](apps/demo), deployed by this repo's own workflow

@@ -103,7 +103,7 @@ async function ensureHyperdrive({ ports, run }: Context, name: string, uri: stri
     return (await run.mutate(`create Hyperdrive config ${name}`, () => ports.cloudflare.createHyperdrive(name, uri), { id: "(new)", name, origin: "", cached: false })).id;
   }
   if (existing.origin !== originOf(uri) || existing.cached) {
-    await run.mutate(`update Hyperdrive config ${name}: ${originOf(uri)}, query caching off`, () => ports.cloudflare.updateHyperdrive(existing.id, uri), existing);
+    await run.mutate(`update Hyperdrive config ${name} (new origin or caching on)`, () => ports.cloudflare.updateHyperdrive(existing.id, uri), existing);
   } else {
     run.note(`✓ Hyperdrive config ${name}`);
   }

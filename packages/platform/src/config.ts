@@ -35,13 +35,25 @@ export type Config = z.output<typeof configSchema>;
 
 export class ConfigError extends Error {}
 
-export function parseConfig(text: string, source = CONFIG_FILE): Config {
+const VARIABLE = /\$\{([A-Z][A-Z0-9_]*)\}/g;
+
+export function configVariables(text: string): string[] {
+  return [...new Set([...text.matchAll(VARIABLE)].map((m) => m[1]!))];
+}
+
+export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<string, string> = {}): Config {
   const errors: ParseError[] = [];
-  const raw: unknown = parse(text, errors, { allowTrailingComma: true });
+  const parsed: unknown = parse(text, errors, { allowTrailingComma: true });
   if (errors.length > 0) {
     const first = errors[0]!;
     throw new ConfigError(`${source}: ${printParseErrorCode(first.error)} at offset ${first.offset}`);
   }
+
+  const missing = configVariables(text).filter((name) => !vars[name]);
+  if (missing.length > 0) {
+    throw new ConfigError(`${source} uses ${missing.join(", ")}; set them in .env, or as GitHub Actions variables in CI`);
+  }
+  const raw = substitute(parsed, vars);
 
   if (isObject(raw) && typeof raw.version === "number" && raw.version < CONFIG_VERSION) {
     throw new ConfigError(`${source}: version ${raw.version} is older than this platform's ${CONFIG_VERSION}; run \`platform upgrade\``);
@@ -55,19 +67,40 @@ export function parseConfig(text: string, source = CONFIG_FILE): Config {
   return result.data;
 }
 
-export async function loadConfig(dir: string): Promise<Config> {
+export async function readConfigText(dir: string): Promise<string> {
   const path = join(dir, CONFIG_FILE);
-  let text: string;
   try {
-    text = await readFile(path, "utf8");
+    return await readFile(path, "utf8");
   } catch {
     throw new ConfigError(`${path} not found; run \`platform init\``);
   }
-  return parseConfig(text, path);
+}
+
+export async function loadConfig(dir: string, vars: Record<string, string> = {}): Promise<Config> {
+  return parseConfig(await readConfigText(dir), join(dir, CONFIG_FILE), vars);
 }
 
 export function configJsonSchema(): object {
-  return z.toJSONSchema(configSchema, { io: "input" });
+  return allowVariables(z.toJSONSchema(configSchema, { io: "input" }));
+}
+
+function substitute(value: unknown, vars: Record<string, string>): unknown {
+  if (typeof value === "string") return value.replace(VARIABLE, (_, name: string) => vars[name]!);
+  if (Array.isArray(value)) return value.map((item) => substitute(item, vars));
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, substitute(v, vars)]));
+  return value;
+}
+
+// Editors validate the file before substitution, so a patterned string may also be a ${NAME} reference.
+function allowVariables(schema: unknown): object {
+  if (Array.isArray(schema)) return schema.map(allowVariables);
+  if (!isObject(schema)) return schema as object;
+  const out = Object.fromEntries(Object.entries(schema).map(([k, v]) => [k, allowVariables(v)]));
+  if (typeof out.pattern === "string") {
+    const { pattern, ...rest } = out;
+    return { ...rest, anyOf: [{ pattern }, { pattern: "^\\$\\{[A-Z][A-Z0-9_]*\\}$" }] };
+  }
+  return out;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

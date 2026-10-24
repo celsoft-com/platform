@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, configJsonSchema, parseConfig } from "./config.js";
+import { ConfigError, configJsonSchema, configVariables, parseConfig } from "./config.js";
 
 const valid = `{
   // comments and trailing commas are allowed
@@ -46,6 +46,28 @@ describe("parseConfig", () => {
     expect(error?.message).toMatch(/name:/);
     expect(error?.message).toMatch(/hostname:/);
     expect(error?.message).toMatch(/worker:/);
+  });
+});
+
+describe("variables", () => {
+  const withVars = valid.replace(`"demo.example.com"`, `"\${APP_HOSTNAME}"`).replace(`"quiet-meadow-12345678"`, `"\${APP_NEON}"`);
+
+  it("lists the variables a config uses", () => {
+    expect(configVariables(withVars)).toEqual(["APP_HOSTNAME", "APP_NEON"]);
+  });
+
+  it("fills them in before validating", () => {
+    const config = parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com", APP_NEON: "quiet-meadow-12345678" });
+    expect(config.hostname).toBe("app.example.com");
+    expect(config.database?.neonProject).toBe("quiet-meadow-12345678");
+  });
+
+  it("names every missing variable", () => {
+    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com" })).toThrow(/uses APP_NEON;/);
+  });
+
+  it("validates the filled-in value", () => {
+    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "Bad", APP_NEON: "quiet-meadow-12345678" })).toThrow(/hostname:/);
   });
 });
 

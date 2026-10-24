@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
-import { ConfigError, loadConfig } from "./config.js";
+import { CONFIG_FILE, ConfigError, configVariables, loadConfig, parseConfig, readConfigText } from "./config.js";
 import { checkWorkflow, init } from "./init.js";
 import { cleanup, deploy, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
-import { loadSecrets } from "./secrets.js";
+import { loadSecrets, loadVars } from "./secrets.js";
 
 const usage = `usage: platform <command> [--dry-run] [--dir <app dir>]
 
@@ -45,11 +45,14 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command.name === "init") {
-    const config = await loadConfig(appDir);
+    const text = await readConfigText(appDir);
+    const vars = await loadVars(appDir);
+    const config = parseConfig(text, join(appDir, CONFIG_FILE), vars);
     await init({
       repoRoot: repoRoot(appDir),
       appDir,
       config,
+      variables: Object.fromEntries(configVariables(text).map((name) => [name, vars[name]!])),
       run: new Run(dryRun, (line) => console.log(line)),
       connect: (tokens) => ({
         cloudflare: new CloudflareApi(tokens.CLOUDFLARE_API_TOKEN!),
@@ -96,7 +99,9 @@ async function commandForGitHubEvent(): Promise<Command | undefined> {
 }
 
 async function context(appDir: string, dryRun: boolean): Promise<Context> {
-  const config = await loadConfig(appDir);
+  const vars = await loadVars(appDir);
+  maskInCi(Object.values(vars));
+  const config = await loadConfig(appDir, vars);
   const secrets = await loadSecrets(appDir);
   const cloudflareToken = requireToken(secrets, "CLOUDFLARE_API_TOKEN");
   const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : "";
@@ -131,6 +136,17 @@ function prNumber(value: string | undefined): number {
   const pr = Number(value);
   if (!Number.isInteger(pr) || pr <= 0) throw new UsageError(`expected a pull request number, got ${value ?? "nothing"}`);
   return pr;
+}
+
+// GitHub only hides secrets in logs; variables keep values out of the repo, so keep them out of
+// public logs too, along with each parent domain of a hostname so preview hostnames are hidden.
+function maskInCi(values: string[]): void {
+  if (process.env.GITHUB_ACTIONS !== "true") return;
+  for (const value of values) {
+    const labels = value.split(".");
+    const parents = labels.slice(1, -1).map((_, i) => labels.slice(i + 1).join("."));
+    for (const masked of [value, ...parents]) console.log(`::add-mask::${masked}`);
+  }
 }
 
 class UsageError extends Error {}
