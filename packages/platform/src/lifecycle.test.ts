@@ -52,6 +52,20 @@ describe("deploy prod", () => {
     expect(d?.secrets).toEqual({ SESSION_SECRET: "s3cret" });
   });
 
+  it("keeps only the newest backups", async () => {
+    for (const day of ["01", "02", "03", "04", "05"]) {
+      const c = ctx();
+      c.now = () => new Date(`2026-10-${day}T00:00:00Z`);
+      await deploy(c, { kind: "prod" });
+    }
+    expect(ports.neon.branches.map((b) => b.name)).toEqual([
+      "production",
+      "backup-20261003T000000",
+      "backup-20261004T000000",
+      "backup-20261005T000000",
+    ]);
+  });
+
   it("stops before deploying when migrations fail", async () => {
     ports.migrator.failWith = new Error("migration failed");
     await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow("migration failed");

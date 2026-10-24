@@ -21,10 +21,15 @@ export class NeonApi implements Neon {
     return branch && { id: branch.id, name: branch.name };
   }
 
-  async createBranch(project: string, name: string, parentId: string): Promise<Branch> {
+  async listBranches(project: string, namePrefix: string): Promise<Branch[]> {
+    const { data } = await this.api.listProjectBranches({ projectId: project, search: namePrefix });
+    return data.branches.filter((b) => b.name.startsWith(namePrefix)).map((b) => ({ id: b.id, name: b.name }));
+  }
+
+  async createBranch(project: string, name: string, parentId: string, compute: boolean): Promise<Branch> {
     const { data } = await this.api.createProjectBranch(project, {
       branch: { name, parent_id: parentId },
-      endpoints: [{ type: EndpointType.ReadWrite }],
+      endpoints: compute ? [{ type: EndpointType.ReadWrite }] : [],
     });
     return { id: data.branch.id, name: data.branch.name };
   }

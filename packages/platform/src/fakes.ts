@@ -11,6 +11,9 @@ export class FakeNeon implements Neon {
   async findBranch(_project: string, name: string) {
     return this.branches.find((b) => b.name === name);
   }
+  async listBranches(_project: string, namePrefix: string) {
+    return this.branches.filter((b) => b.name.startsWith(namePrefix));
+  }
   async createBranch(_project: string, name: string) {
     const branch = { id: `br-${this.next++}`, name };
     this.branches.push(branch);

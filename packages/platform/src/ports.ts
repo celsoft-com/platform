@@ -6,7 +6,8 @@ export interface Branch {
 export interface Neon {
   defaultBranch(project: string): Promise<Branch>;
   findBranch(project: string, name: string): Promise<Branch | undefined>;
-  createBranch(project: string, name: string, parentId: string): Promise<Branch>;
+  listBranches(project: string, namePrefix: string): Promise<Branch[]>;
+  createBranch(project: string, name: string, parentId: string, compute: boolean): Promise<Branch>;
   deleteBranch(project: string, branchId: string): Promise<void>;
   connectionUri(project: string, branchId: string): Promise<string>;
 }

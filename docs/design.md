@@ -88,7 +88,7 @@ A published CLI, runtime library and app template that create and reuse each app
 ## 9. Lifecycle
 
 1. **Push to main**: deploys prod.
-    1. **Backup**: takes a Neon backup branch of prod.
+    1. **Backup**: takes a Neon backup branch of prod, with no compute, keeping only the newest 3.
     2. **Migrate**: runs migrations against prod.
     3. **Connect**: ensures the prod Hyperdrive config.
     4. **Secrets**: loads `production` Environment secrets onto the Worker.

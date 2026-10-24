@@ -35,14 +35,11 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
         : await run.ensure<Branch>(
             `Neon branch ${n.neonBranch}`,
             () => ports.neon.findBranch(project, n.neonBranch!),
-            () => ports.neon.createBranch(project, n.neonBranch!, prod.id),
+            () => ports.neon.createBranch(project, n.neonBranch!, prod.id, true),
             { id: "(new)", name: n.neonBranch! },
           );
 
-    if (target.kind === "prod") {
-      const stamp = (ctx.now?.() ?? new Date()).toISOString().replace(/[-:]/g, "").slice(0, 15);
-      await run.mutate(`create Neon backup branch backup-${stamp}`, () => ports.neon.createBranch(project, `backup-${stamp}`, prod.id), undefined);
-    }
+    if (target.kind === "prod") await backup(ctx, project, prod);
 
     const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
 
@@ -79,6 +76,20 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
     if (branch) {
       await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);
     }
+  }
+}
+
+export const BACKUP_PREFIX = "backup-";
+export const BACKUPS_KEPT = 3;
+
+// Neon includes 10 branches per project, so only the newest few backups are kept.
+async function backup({ ports, run, now }: Context, project: string, prod: Branch): Promise<void> {
+  const name = `${BACKUP_PREFIX}${(now?.() ?? new Date()).toISOString().replace(/[-:]/g, "").slice(0, 15)}`;
+  await run.mutate(`create Neon backup branch ${name}`, () => ports.neon.createBranch(project, name, prod.id, false), undefined);
+
+  const backups = (await ports.neon.listBranches(project, BACKUP_PREFIX)).sort((a, b) => b.name.localeCompare(a.name));
+  for (const old of backups.slice(BACKUPS_KEPT)) {
+    await run.mutate(`delete old Neon backup branch ${old.name}`, () => ports.neon.deleteBranch(project, old.id), undefined);
   }
 }
 
