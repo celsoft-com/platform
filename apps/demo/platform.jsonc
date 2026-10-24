@@ -11,5 +11,6 @@
     "migrate": "node scripts/migrate.js"
   },
   "email": true,
-  "auth": true
+  "auth": true,
+  "files": true
 }

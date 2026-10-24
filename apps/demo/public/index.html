@@ -52,6 +52,7 @@
   <section id="signed-in" hidden>
     <form id="new">
       <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
+      <label>Attach a file (up to 10 MB) <input name="file" type="file"></label>
       <button>Add</button>
     </form>
     <ul id="notes"></ul>
@@ -110,8 +111,12 @@
       show("signed-out");
     });
 
-    handle($("new"), async ({ body }) => {
-      await call("/api/notes", { body });
+    $("new").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const response = await fetch("/api/notes", { method: "POST", body: new FormData($("new")) });
+      if (!response.ok) return say((await response.json().catch(() => null))?.error ?? "could not save the note");
+      $("new").reset();
+      say("");
       await loadNotes();
     });
 
@@ -121,7 +126,15 @@
         const li = document.createElement("li");
         const time = document.createElement("time");
         time.textContent = new Date(note.created_at).toLocaleString();
-        li.append(note.body, time);
+        li.append(note.body);
+        if (note.attachment_name) {
+          const link = document.createElement("a");
+          link.href = `/api/notes/${note.id}/attachment`;
+          link.textContent = `Attachment: ${note.attachment_name}`;
+          link.style.display = "block";
+          li.append(link);
+        }
+        li.append(time);
         return li;
       }));
     }
