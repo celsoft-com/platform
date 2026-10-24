@@ -135,22 +135,24 @@ A published CLI, runtime library and app template that create and reuse each app
 ## 11. App Code
 
 1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
-2. **Platform provides**: through `defineApp` in the runtime library.
+2. **No app deploys**: the app's API is the Worker entry named by `worker` in `platform.jsonc`, exporting a `defineApp` handler; every platform deploy bundles it with its imports and ships it with the pages, bindings and secrets, so apps never deploy anything themselves.
+3. **No app migration runs**: the app writes migration files and names the command that applies them (`database.migrate`); every deploy runs that command against the right database (prod after its backup, each PR's own branch, the `dev` branch locally), with the auth tables first, so apps never run migrations by hand.
+4. **Platform provides**: through `defineApp` in the runtime library.
     1. **Database**: `app.sql`, a Postgres client opened on first use and closed after each request.
     2. **Auth**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset) and `app.session()` for the signed-in user.
     3. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev.
     4. **Files**: `app.files`, storing, reading, listing, deleting and serving objects by path, with a preview's folder added out of sight.
     5. **Auth tables**: Better Auth's tables, created and updated on every deploy.
-3. **App writes**:
+5. **App writes**:
     1. **API**: routes, request handling, validation, and which routes need a signed-in user.
     2. **Data**: schema, migration files and every query.
     3. **Pages**: the frontend, including its login and reset screens.
     4. **Content**: what its own emails say and how its files are organized.
-4. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
+6. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
     1. **SQL**: `app.sql` is postgres.js itself.
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
-5. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
+7. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
 
 ## 12. Upgrades
 
