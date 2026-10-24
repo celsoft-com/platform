@@ -10,6 +10,7 @@ import { renderWorkflow, WORKFLOW_PATH, type PackageManager } from "./workflow.j
 export const TOKEN_HELP: Record<string, string> = {
   CLOUDFLARE_API_TOKEN: "Cloudflare API token; see SETUP.md or the platform README for its permissions",
   NEON_API_KEY: "Neon API key scoped to the app's Neon project",
+  RESEND_API_KEY: "Resend API key with full access, so the platform can add sending domains",
 };
 
 export interface InitInput {
@@ -22,7 +23,7 @@ export interface InitInput {
 }
 
 export function tokenNames(config: Config): string[] {
-  return config.database ? ["CLOUDFLARE_API_TOKEN", "NEON_API_KEY"] : ["CLOUDFLARE_API_TOKEN"];
+  return ["CLOUDFLARE_API_TOKEN", ...(config.database ? ["NEON_API_KEY"] : []), ...(config.email ? ["RESEND_API_KEY"] : [])];
 }
 
 export async function init({ repoRoot, appDir, config, variables, run, connect }: InitInput): Promise<void> {

@@ -24,6 +24,17 @@ export interface Hyperdrive {
   cached: boolean;
 }
 
+export interface DnsRecord {
+  type: string;
+  name: string;
+  content: string;
+  priority?: number;
+}
+
+export interface ZoneRecord extends DnsRecord {
+  managed: boolean;
+}
+
 export interface Cloudflare {
   accountId(): Promise<string>;
   findZone(hostname: string): Promise<Zone | undefined>;
@@ -33,6 +44,25 @@ export interface Cloudflare {
   deleteHyperdrive(id: string): Promise<void>;
   findWorker(name: string): Promise<boolean>;
   deleteWorker(name: string): Promise<void>;
+  workerSecretNames(worker: string): Promise<string[]>;
+  dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
+  createDnsRecord(zoneId: string, record: DnsRecord): Promise<void>;
+}
+
+export interface MailDomain {
+  id: string;
+  name: string;
+  verified: boolean;
+  records: DnsRecord[];
+}
+
+export interface Mail {
+  findDomain(name: string): Promise<MailDomain | undefined>;
+  createDomain(name: string): Promise<MailDomain>;
+  verifyDomain(id: string): Promise<void>;
+  findApiKey(name: string): Promise<string | undefined>;
+  createSendKey(name: string, domainId: string): Promise<string>;
+  deleteApiKey(id: string): Promise<void>;
 }
 
 export interface Wrangler {
@@ -41,6 +71,7 @@ export interface Wrangler {
 
 export interface Migrator {
   migrate(command: string, databaseUrl: string): Promise<void>;
+  migrateAuth(databaseUrl: string): Promise<void>;
 }
 
 export interface GitHub {
@@ -52,6 +83,7 @@ export interface GitHub {
 export interface Ports {
   neon: Neon;
   cloudflare: Cloudflare;
+  mail: Mail;
   wrangler: Wrangler;
   migrator: Migrator;
 }

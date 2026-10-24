@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
-import type { Branch, Ports } from "./ports.js";
+import type { Branch, MailDomain, Ports, Zone } from "./ports.js";
 import type { Run } from "./run.js";
 import { names, originOf, previewHostname, type Target } from "./target.js";
 import { wranglerConfig } from "./wrangler-config.js";
@@ -44,6 +45,8 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
 
     if (uri) {
+      // Auth tables first, so the app's own migrations can reference them.
+      if (config.auth) await run.mutate(`update auth tables on ${branch.name}`, () => ports.migrator.migrateAuth(uri), undefined);
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(config.database!.migrate, uri), undefined);
     } else {
       run.note(`would run migrations on ${branch.name}`);
@@ -52,9 +55,73 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     hyperdriveId = await ensureHyperdrive(ctx, n.hyperdrive, uri);
   }
 
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId });
-  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, secrets), undefined);
+  const existingSecrets = await ports.cloudflare.workerSecretNames(n.worker);
+  const generated: Record<string, string> = {};
+  if (config.auth && !existingSecrets.includes("BETTER_AUTH_SECRET")) {
+    generated.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url");
+    run.note(`generate BETTER_AUTH_SECRET for ${n.worker}`);
+  }
+
+  const sending = config.email && target.kind === "prod";
+  if (sending) {
+    const domain = await ensureMailDomain(ctx, hostname, zone);
+    if (!existingSecrets.includes("EMAIL_API_KEY")) {
+      const key = await sendKey(ctx, hostname, domain.id);
+      if (key) generated.EMAIL_API_KEY = key;
+    }
+  }
+
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
+  if (config.email) {
+    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${hostname}`, EMAIL_REPLY_TO: config.email.replyTo });
+  }
+
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars });
+  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
   return { hostname };
+}
+
+export const MANAGED_COMMENT = "managed by @celsoft/platform";
+
+// The app sends from its own hostname: Resend's DKIM and bounce records sit on names below it,
+// so the zone's existing mail records are never touched.
+async function ensureMailDomain({ ports, run }: Context, hostname: string, zone: Zone): Promise<MailDomain> {
+  const domain = await run.ensure(
+    `Resend sending domain ${hostname}`,
+    () => ports.mail.findDomain(hostname),
+    () => ports.mail.createDomain(hostname),
+    { id: "(new)", name: hostname, verified: false, records: [] },
+  );
+
+  for (const record of domain.records) {
+    const name = `${record.name}.${hostname}`;
+    const existing = await ports.cloudflare.dnsRecords(zone.id, name);
+    if (existing.some((e) => e.type === record.type && unquote(e.content) === unquote(record.content))) {
+      run.note(`✓ ${record.type} record ${name}`);
+      continue;
+    }
+    if (existing.some((e) => e.type === record.type && !e.managed)) {
+      throw new PreflightError(`${name} already has a ${record.type} record the platform did not create; remove it or send email from another hostname`);
+    }
+    await run.mutate(`create ${record.type} record ${name}`, () => ports.cloudflare.createDnsRecord(zone.id, { ...record, name }), undefined);
+  }
+
+  if (!domain.verified) {
+    await run.mutate(`ask Resend to verify ${hostname}; email sends once it does, usually within minutes`, () => ports.mail.verifyDomain(domain.id), undefined);
+  }
+  return domain;
+}
+
+// A Resend key is only readable when created, so a Worker missing its key gets a fresh one.
+async function sendKey({ ports, run }: Context, hostname: string, domainId: string): Promise<string | undefined> {
+  const name = `platform ${hostname}`;
+  const old = await ports.mail.findApiKey(name);
+  if (old) await run.mutate(`replace Resend sending key for ${hostname}`, () => ports.mail.deleteApiKey(old), undefined);
+  return run.mutate(`create Resend sending key for ${hostname}`, () => ports.mail.createSendKey(name, domainId), undefined);
+}
+
+function unquote(value: string): string {
+  return value.replace(/^"|"$/g, "");
 }
 
 export async function cleanup(ctx: Context, pr: number): Promise<void> {

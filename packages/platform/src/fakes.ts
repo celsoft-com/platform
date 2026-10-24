@@ -1,4 +1,4 @@
-import type { Branch, Cloudflare, Hyperdrive, Migrator, Neon, Ports, Wrangler, Zone } from "./ports.js";
+import type { Branch, Cloudflare, DnsRecord, Hyperdrive, Mail, MailDomain, Migrator, Neon, Ports, Wrangler, Zone, ZoneRecord } from "./ports.js";
 import { originOf } from "./target.js";
 
 export class FakeNeon implements Neon {
@@ -31,6 +31,8 @@ export class FakeCloudflare implements Cloudflare {
   zones: Zone[] = [{ id: "zone-1", name: "example.com" }];
   hyperdrives: Hyperdrive[] = [];
   workers = new Set<string>();
+  workerSecrets = new Map<string, Set<string>>();
+  records: ZoneRecord[] = [];
   private next = 1;
 
   async accountId() {
@@ -61,6 +63,53 @@ export class FakeCloudflare implements Cloudflare {
   }
   async deleteWorker(name: string) {
     this.workers.delete(name);
+    this.workerSecrets.delete(name);
+  }
+  async workerSecretNames(worker: string) {
+    return [...(this.workerSecrets.get(worker) ?? [])];
+  }
+  async dnsRecords(_zoneId: string, name: string) {
+    return this.records.filter((r) => r.name === name);
+  }
+  async createDnsRecord(_zoneId: string, record: DnsRecord) {
+    this.records.push({ ...record, managed: true });
+  }
+}
+
+export class FakeMail implements Mail {
+  domains: MailDomain[] = [];
+  keys: { id: string; name: string; domainId: string }[] = [];
+  private next = 1;
+
+  async findDomain(name: string) {
+    return this.domains.find((d) => d.name === name);
+  }
+  async createDomain(name: string) {
+    const domain = {
+      id: `dom-${this.next++}`,
+      name,
+      verified: false,
+      records: [
+        { type: "TXT", name: "resend._domainkey", content: "p=KEY" },
+        { type: "MX", name: "send", content: "feedback-smtp.example.net", priority: 10 },
+      ],
+    };
+    this.domains.push(domain);
+    return domain;
+  }
+  async verifyDomain(id: string) {
+    this.domains.find((d) => d.id === id)!.verified = true;
+  }
+  async findApiKey(name: string) {
+    return this.keys.find((k) => k.name === name)?.id;
+  }
+  async createSendKey(name: string, domainId: string) {
+    const id = `key-${this.next++}`;
+    this.keys.push({ id, name, domainId });
+    return `re_${id}`;
+  }
+  async deleteApiKey(id: string) {
+    this.keys = this.keys.filter((k) => k.id !== id);
   }
 }
 
@@ -71,25 +120,34 @@ export class FakeWrangler implements Wrangler {
 
   async deploy(config: object, secrets: Record<string, string>) {
     const c = config as Record<string, unknown>;
+    const name = c.name as string;
     this.deploys.push({ config: c, secrets });
-    this.cloudflare.workers.add(c.name as string);
+    this.cloudflare.workers.add(name);
+    const stored = this.cloudflare.workerSecrets.get(name) ?? new Set<string>();
+    for (const key of Object.keys(secrets)) stored.add(key);
+    this.cloudflare.workerSecrets.set(name, stored);
   }
 }
 
 export class FakeMigrator implements Migrator {
   runs: string[] = [];
+  authRuns: string[] = [];
   failWith: Error | undefined;
 
   async migrate(_command: string, databaseUrl: string) {
     if (this.failWith) throw this.failWith;
     this.runs.push(databaseUrl);
   }
+  async migrateAuth(databaseUrl: string) {
+    this.authRuns.push(databaseUrl);
+  }
 }
 
 export function fakePorts() {
   const neon = new FakeNeon();
   const cloudflare = new FakeCloudflare();
+  const mail = new FakeMail();
   const wrangler = new FakeWrangler(cloudflare);
   const migrator = new FakeMigrator();
-  return { neon, cloudflare, wrangler, migrator } satisfies Ports;
+  return { neon, cloudflare, mail, wrangler, migrator } satisfies Ports;
 }

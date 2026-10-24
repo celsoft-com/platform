@@ -126,3 +126,52 @@ describe("preview", () => {
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production"]);
   });
 });
+
+describe("auth and email", () => {
+  const authConfig: Config = { ...config, auth: true, email: { replyTo: "help@example.com" } };
+  const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
+
+  it("creates auth tables before the app's migrations", async () => {
+    await deploy(authCtx(), { kind: "prod" });
+    expect(ports.migrator.authRuns).toEqual(ports.migrator.runs);
+    expect(log.findIndex((l) => l.includes("update auth tables"))).toBeLessThan(log.findIndex((l) => l.includes("run migrations")));
+  });
+
+  it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
+    await deploy(authCtx(), { kind: "prod" });
+
+    expect(ports.mail.domains).toMatchObject([{ name: "demo.example.com", verified: true }]);
+    expect(ports.cloudflare.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT resend._domainkey.demo.example.com", "MX send.demo.example.com"]);
+    const first = ports.wrangler.deploys[0]!;
+    expect(Object.keys(first.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
+    expect(first.config.vars).toEqual({
+      APP_URL: "https://demo.example.com",
+      EMAIL_MODE: "send",
+      EMAIL_FROM: "noreply@demo.example.com",
+      EMAIL_REPLY_TO: "help@example.com",
+    });
+
+    await deploy(authCtx(), { kind: "prod" });
+    expect(Object.keys(ports.wrangler.deploys[1]!.secrets)).toEqual(["SESSION_SECRET"]);
+    expect(ports.mail.keys).toHaveLength(1);
+    expect(ports.cloudflare.records).toHaveLength(2);
+  });
+
+  it("refuses to overwrite a record the platform did not create", async () => {
+    ports.cloudflare.records.push({ type: "MX", name: "send.demo.example.com", content: "someone.else", priority: 5, managed: false });
+    await expect(deploy(authCtx(), { kind: "prod" })).rejects.toThrow(/did not create/);
+  });
+
+  it("captures email in previews and never touches Resend", async () => {
+    await deploy(authCtx(), { kind: "preview", pr: 7 });
+    expect(ports.mail.domains).toEqual([]);
+    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ EMAIL_MODE: "capture", APP_URL: "https://demo-pr-7.example.com" });
+    expect(ports.wrangler.deploys[0]!.secrets).not.toHaveProperty("EMAIL_API_KEY");
+  });
+
+  it("logs no secret values", async () => {
+    await deploy(authCtx(), { kind: "prod" });
+    const values = Object.values(ports.wrangler.deploys[0]!.secrets);
+    for (const value of values) expect(log.join("\n")).not.toContain(value);
+  });
+});

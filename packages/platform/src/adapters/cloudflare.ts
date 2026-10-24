@@ -1,5 +1,6 @@
 import CloudflareClient from "cloudflare";
-import type { Cloudflare, Hyperdrive, Zone } from "../ports.js";
+import { MANAGED_COMMENT } from "../lifecycle.js";
+import type { Cloudflare, DnsRecord, Hyperdrive, Zone, ZoneRecord } from "../ports.js";
 import { originOf } from "../target.js";
 
 export class CloudflareApi implements Cloudflare {
@@ -69,6 +70,36 @@ export class CloudflareApi implements Cloudflare {
 
   async deleteWorker(name: string): Promise<void> {
     await this.client.workers.scripts.delete(name, { account_id: await this.accountId(), force: true });
+  }
+
+  async workerSecretNames(worker: string): Promise<string[]> {
+    if (!(await this.findWorker(worker))) return [];
+    const names: string[] = [];
+    for await (const secret of this.client.workers.scripts.secrets.list(worker, { account_id: await this.accountId() })) {
+      if (secret.name) names.push(secret.name);
+    }
+    return names;
+  }
+
+  async dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]> {
+    const records: ZoneRecord[] = [];
+    for await (const r of this.client.dns.records.list({ zone_id: zoneId, name: { exact: name } })) {
+      const priority = "priority" in r ? r.priority : undefined;
+      records.push({ type: r.type, name: r.name, content: String(r.content ?? ""), ...(priority !== undefined && { priority }), managed: r.comment === MANAGED_COMMENT });
+    }
+    return records;
+  }
+
+  async createDnsRecord(zoneId: string, record: DnsRecord): Promise<void> {
+    await this.client.dns.records.create({
+      zone_id: zoneId,
+      type: record.type,
+      name: record.name,
+      content: record.content,
+      ttl: 1,
+      comment: MANAGED_COMMENT,
+      ...(record.priority !== undefined && { priority: record.priority }),
+    } as Parameters<typeof this.client.dns.records.create>[0]);
   }
 }
 

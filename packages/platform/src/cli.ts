@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
+import { ResendApi } from "./adapters/resend.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
@@ -110,6 +111,7 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
   const secrets = await loadSecrets(appDir, [...tokenNames(config), ...config.secrets]);
   const cloudflareToken = requireToken(secrets, "CLOUDFLARE_API_TOKEN");
   const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : "";
+  const resendKey = config.email ? requireToken(secrets, "RESEND_API_KEY") : "";
   return {
     config,
     secrets,
@@ -117,6 +119,7 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
     ports: {
       cloudflare: new CloudflareApi(cloudflareToken),
       neon: new NeonApi(neonKey),
+      mail: new ResendApi(resendKey),
       wrangler: new WranglerCli(appDir, { CLOUDFLARE_API_TOKEN: cloudflareToken }),
       migrator: new ShellMigrator(appDir),
     },

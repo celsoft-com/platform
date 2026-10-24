@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { getMigrations } from "better-auth/db/migration";
+import postgres from "postgres";
 import type { Migrator, Wrangler } from "../ports.js";
+import { authOptions } from "../runtime/auth.js";
 
 export class WranglerCli implements Wrangler {
   constructor(
@@ -33,6 +36,17 @@ export class ShellMigrator implements Migrator {
 
   async migrate(command: string, databaseUrl: string): Promise<void> {
     await run(`migrations (${command})`, command, [], { cwd: this.appDir, env: { ...process.env, DATABASE_URL: databaseUrl }, shell: true });
+  }
+
+  async migrateAuth(databaseUrl: string): Promise<void> {
+    const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    try {
+      const options = authOptions({ sql, secret: "migrations-only", baseURL: "http://localhost", email: { send: async () => {} }, requireVerification: false });
+      const { runMigrations } = await getMigrations(options);
+      await runMigrations();
+    } finally {
+      await sql.end();
+    }
   }
 }
 
