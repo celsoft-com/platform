@@ -32,6 +32,7 @@ export interface DnsRecord {
 }
 
 export interface ZoneRecord extends DnsRecord {
+  id: string;
   managed: boolean;
 }
 
@@ -47,6 +48,8 @@ export interface Cloudflare {
   workerSecretNames(worker: string): Promise<string[]>;
   dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
   createDnsRecord(zoneId: string, record: DnsRecord): Promise<void>;
+  managedDnsRecords(zoneId: string): Promise<ZoneRecord[]>;
+  deleteDnsRecord(zoneId: string, id: string): Promise<void>;
 }
 
 export interface MailDomain {

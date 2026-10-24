@@ -71,8 +71,14 @@ export class FakeCloudflare implements Cloudflare {
   async dnsRecords(_zoneId: string, name: string) {
     return this.records.filter((r) => r.name === name);
   }
+  async managedDnsRecords() {
+    return this.records.filter((r) => r.managed);
+  }
+  async deleteDnsRecord(_zoneId: string, id: string) {
+    this.records = this.records.filter((r) => r.id !== id);
+  }
   async createDnsRecord(_zoneId: string, record: DnsRecord) {
-    this.records.push({ ...record, managed: true });
+    this.records.push({ ...record, id: `rec-${this.next++}`, managed: true });
   }
 }
 
@@ -90,8 +96,8 @@ export class FakeMail implements Mail {
       name,
       verified: false,
       records: [
-        { type: "TXT", name: "resend._domainkey", content: "p=KEY" },
-        { type: "MX", name: "send", content: "feedback-smtp.example.net", priority: 10 },
+        { type: "TXT", name: `resend._domainkey.${name.split(".")[0]}`, content: "p=KEY" },
+        { type: "MX", name: `send.${name.split(".")[0]}`, content: "feedback-smtp.example.net", priority: 10 },
       ],
     };
     this.domains.push(domain);

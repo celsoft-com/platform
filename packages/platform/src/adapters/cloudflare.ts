@@ -82,10 +82,22 @@ export class CloudflareApi implements Cloudflare {
   }
 
   async dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]> {
+    return this.listRecords({ zone_id: zoneId, name: { exact: name } });
+  }
+
+  async managedDnsRecords(zoneId: string): Promise<ZoneRecord[]> {
+    return this.listRecords({ zone_id: zoneId, comment: { exact: MANAGED_COMMENT } });
+  }
+
+  async deleteDnsRecord(zoneId: string, id: string): Promise<void> {
+    await this.client.dns.records.delete(id, { zone_id: zoneId });
+  }
+
+  private async listRecords(params: Parameters<typeof this.client.dns.records.list>[0]): Promise<ZoneRecord[]> {
     const records: ZoneRecord[] = [];
-    for await (const r of this.client.dns.records.list({ zone_id: zoneId, name: { exact: name } })) {
+    for await (const r of this.client.dns.records.list(params)) {
       const priority = "priority" in r ? r.priority : undefined;
-      records.push({ type: r.type, name: r.name, content: String(r.content ?? ""), ...(priority !== undefined && { priority }), managed: r.comment === MANAGED_COMMENT });
+      records.push({ id: r.id, type: r.type, name: r.name, content: String(r.content ?? ""), ...(priority !== undefined && { priority }), managed: r.comment === MANAGED_COMMENT });
     }
     return records;
   }

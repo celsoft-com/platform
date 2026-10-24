@@ -93,17 +93,27 @@ async function ensureMailDomain({ ports, run }: Context, hostname: string, zone:
     { id: "(new)", name: hostname, verified: false, records: [] },
   );
 
-  for (const record of domain.records) {
-    const name = `${record.name}.${hostname}`;
-    const existing = await ports.cloudflare.dnsRecords(zone.id, name);
+  // Resend names records relative to the zone, not to the sending hostname.
+  const wanted = domain.records.map((record) => ({ ...record, name: `${record.name}.${zone.name}` }));
+  const label = (name: string) => name.slice(0, -(hostname.length + 1)) || name;
+
+  for (const record of wanted) {
+    const existing = await ports.cloudflare.dnsRecords(zone.id, record.name);
     if (existing.some((e) => e.type === record.type && unquote(e.content) === unquote(record.content))) {
-      run.note(`✓ ${record.type} record ${record.name}`);
+      run.note(`✓ ${record.type} record ${label(record.name)}`);
       continue;
     }
     if (existing.some((e) => e.type === record.type && !e.managed)) {
-      throw new PreflightError(`${record.name} below the app hostname already has a ${record.type} record the platform did not create; remove it or send email from another hostname`);
+      throw new PreflightError(`${label(record.name)} below the app hostname already has a ${record.type} record the platform did not create; remove it or send email from another hostname`);
     }
-    await run.mutate(`create ${record.type} record ${record.name}`, () => ports.cloudflare.createDnsRecord(zone.id, { ...record, name }), undefined);
+    await run.mutate(`create ${record.type} record ${label(record.name)}`, () => ports.cloudflare.createDnsRecord(zone.id, record), undefined);
+  }
+
+  const stale = (await ports.cloudflare.managedDnsRecords(zone.id)).filter(
+    (e) => e.name.endsWith(`.${hostname}`) && !wanted.some((w) => w.type === e.type && w.name === e.name),
+  );
+  for (const record of stale) {
+    await run.mutate(`delete stale ${record.type} record ${label(record.name)}`, () => ports.cloudflare.deleteDnsRecord(zone.id, record.id), undefined);
   }
 
   if (!domain.verified) {

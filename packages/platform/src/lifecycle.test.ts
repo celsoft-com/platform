@@ -156,8 +156,18 @@ describe("auth and email", () => {
     expect(ports.cloudflare.records).toHaveLength(2);
   });
 
+  it("deletes its own records Resend no longer asks for, and leaves others alone", async () => {
+    ports.cloudflare.records.push(
+      { id: "stale", type: "TXT", name: "resend._domainkey.demo.demo.example.com", content: "old", managed: true },
+      { id: "theirs", type: "TXT", name: "other.demo.example.com", content: "keep", managed: false },
+    );
+    await deploy(authCtx(), { kind: "prod" });
+    expect(ports.cloudflare.records.map((r) => r.id)).not.toContain("stale");
+    expect(ports.cloudflare.records.map((r) => r.id)).toContain("theirs");
+  });
+
   it("refuses to overwrite a record the platform did not create", async () => {
-    ports.cloudflare.records.push({ type: "MX", name: "send.demo.example.com", content: "someone.else", priority: 5, managed: false });
+    ports.cloudflare.records.push({ id: "theirs", type: "MX", name: "send.demo.example.com", content: "someone.else", priority: 5, managed: false });
     await expect(deploy(authCtx(), { kind: "prod" })).rejects.toThrow(/did not create/);
   });
 
