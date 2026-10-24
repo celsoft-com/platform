@@ -7,26 +7,117 @@
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-    form { display: flex; gap: .5rem; }
-    textarea { flex: 1; min-height: 3rem; font: inherit; }
+    form { display: grid; gap: .5rem; margin-bottom: 1rem; }
+    input, textarea, button { font: inherit; padding: .4rem; }
+    textarea { min-height: 3rem; }
+    nav { display: flex; gap: 1rem; margin-bottom: 1rem; }
+    header { display: flex; justify-content: space-between; align-items: baseline; }
     ul { list-style: none; padding: 0; }
     li { border-bottom: 1px solid #8884; padding: .75rem 0; white-space: pre-wrap; }
     time { display: block; font-size: .8rem; opacity: .7; }
+    #message { min-height: 1.5rem; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <h1>Notes</h1>
-  <form id="new">
-    <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
-    <button>Add</button>
-  </form>
-  <ul id="notes"></ul>
-  <script type="module">
-    const list = document.getElementById("notes");
-    const form = document.getElementById("new");
+  <header><h1>Notes</h1><span id="who"></span></header>
+  <p id="message" role="status"></p>
 
-    function render(notes) {
-      list.replaceChildren(...notes.map((note) => {
+  <section id="signed-out" hidden>
+    <nav><a href="#" data-show="sign-in">Sign in</a><a href="#" data-show="sign-up">Create account</a><a href="#" data-show="forgot">Forgot password</a></nav>
+    <form id="sign-in">
+      <input name="email" type="email" placeholder="Email" required autocomplete="email">
+      <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+      <button>Sign in</button>
+    </form>
+    <form id="sign-up" hidden>
+      <input name="name" placeholder="Name" required autocomplete="name">
+      <input name="email" type="email" placeholder="Email" required autocomplete="email">
+      <input name="password" type="password" placeholder="Password, at least 8 characters" required minlength="8" autocomplete="new-password">
+      <button>Create account</button>
+    </form>
+    <form id="forgot" hidden>
+      <input name="email" type="email" placeholder="Email" required autocomplete="email">
+      <button>Email me a reset link</button>
+    </form>
+  </section>
+
+  <section id="reset" hidden>
+    <form id="reset-form">
+      <input name="password" type="password" placeholder="New password, at least 8 characters" required minlength="8" autocomplete="new-password">
+      <button>Set new password</button>
+    </form>
+  </section>
+
+  <section id="signed-in" hidden>
+    <form id="new">
+      <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
+      <button>Add</button>
+    </form>
+    <ul id="notes"></ul>
+  </section>
+
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const say = (text) => ($("message").textContent = text);
+    const show = (id) => ["signed-out", "reset", "signed-in"].forEach((s) => ($(s).hidden = s !== id));
+
+    async function call(path, body) {
+      const response = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(data?.message ?? data?.error ?? `request failed (${response.status})`);
+      return data;
+    }
+
+    function fields(form) {
+      return Object.fromEntries(new FormData(form));
+    }
+
+    function handle(form, action) {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try { await action(fields(form)); form.reset(); } catch (error) { say(error.message); }
+      });
+    }
+
+    document.querySelectorAll("[data-show]").forEach((link) => link.addEventListener("click", (event) => {
+      event.preventDefault();
+      ["sign-in", "sign-up", "forgot"].forEach((id) => ($(id).hidden = id !== link.dataset.show));
+      say("");
+    }));
+
+    handle($("sign-in"), async ({ email, password }) => {
+      await call("/api/auth/sign-in/email", { email, password });
+      await start();
+    });
+
+    handle($("sign-up"), async ({ name, email, password }) => {
+      const result = await call("/api/auth/sign-up/email", { name, email, password, callbackURL: "/" });
+      if (result?.token) return start();
+      say(`Check ${email} for a link to confirm your address.`);
+    });
+
+    handle($("forgot"), async ({ email }) => {
+      await call("/api/auth/request-password-reset", { email, redirectTo: "/reset" });
+      say(`If ${email} has an account, a reset link is on its way.`);
+    });
+
+    handle($("reset-form"), async ({ password }) => {
+      const token = new URLSearchParams(location.search).get("token");
+      await call("/api/auth/reset-password", { newPassword: password, token });
+      history.replaceState(null, "", "/");
+      say("Password updated. Sign in with the new one.");
+      show("signed-out");
+    });
+
+    handle($("new"), async ({ body }) => {
+      await call("/api/notes", { body });
+      await loadNotes();
+    });
+
+    async function loadNotes() {
+      const notes = await call("/api/notes");
+      $("notes").replaceChildren(...notes.map((note) => {
         const li = document.createElement("li");
         const time = document.createElement("time");
         time.textContent = new Date(note.created_at).toLocaleString();
@@ -35,18 +126,22 @@
       }));
     }
 
-    async function load() {
-      render(await (await fetch("/api/notes")).json());
+    async function start() {
+      if (location.pathname === "/reset") return show("reset");
+      const session = await call("/api/auth/get-session");
+      if (!session) {
+        $("who").replaceChildren();
+        return show("signed-out");
+      }
+      const out = document.createElement("button");
+      out.textContent = "Sign out";
+      out.onclick = async () => { await call("/api/auth/sign-out", {}); say(""); start(); };
+      $("who").replaceChildren(`${session.user.email} `, out);
+      show("signed-in");
+      await loadNotes();
     }
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const body = new FormData(form).get("body");
-      const response = await fetch("/api/notes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body }) });
-      if (response.ok) { form.reset(); await load(); }
-    });
-
-    load();
+    start().catch((error) => say(error.message));
   </script>
 </body>
 </html>
