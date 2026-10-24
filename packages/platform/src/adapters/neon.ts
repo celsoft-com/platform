@@ -47,6 +47,8 @@ export class NeonApi implements Neon {
       branch_id: branchId,
       database_name: database.name,
       role_name: database.owner_name,
+      // Hyperdrive does its own pooling, so it needs Neon's direct endpoint.
+      pooled: false,
     });
     return uri.uri;
   }
