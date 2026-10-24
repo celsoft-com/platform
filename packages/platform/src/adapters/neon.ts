@@ -8,6 +8,11 @@ export class NeonApi implements Neon {
     this.api = createApiClient({ apiKey });
   }
 
+  async postgresVersion(project: string): Promise<number> {
+    const { data } = await this.api.getProject(project);
+    return Number(data.project.pg_version);
+  }
+
   async defaultBranch(project: string): Promise<Branch> {
     const { data } = await this.api.listProjectBranches({ projectId: project });
     const branch = data.branches.find((b) => b.default);

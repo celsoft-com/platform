@@ -23,6 +23,17 @@ describe("parseConfig", () => {
     expect(() => parseConfig(valid.replace("quiet-meadow-12345678", "br-quiet-meadow-abcdefgh"))).toThrow(/not a branch id/);
   });
 
+  it("reads auth as on or off, with organizations off unless asked for", () => {
+    const withAuth = (auth: string) => parseConfig(valid.replace(`"version": 1,`, `"version": 1, "email": true, "auth": ${auth},`)).auth;
+    expect(parseConfig(valid).auth).toBe(false);
+    expect(withAuth("true")).toEqual({ organizations: false });
+    expect(withAuth(`{ "organizations": true }`)).toEqual({ organizations: true });
+  });
+
+  it("no longer takes a migrate command", () => {
+    expect(() => parseConfig(valid.replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`))).toThrow(/migrate/);
+  });
+
   it("rejects unknown keys", () => {
     expect(() => parseConfig(valid.replace(`"version": 1,`, `"version": 1, "extra": true,`))).toThrow(/extra/);
   });

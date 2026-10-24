@@ -262,3 +262,11 @@ describe("destroy", () => {
     expect(log).toContain("~ would delete Worker demo-pr-7");
   });
 });
+
+describe("postgres version", () => {
+  it("stops before touching anything on a project older than Postgres 18", async () => {
+    ports.neon.pgVersion = 17;
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Postgres 17/);
+    expect(ports.neon.branches).toHaveLength(1);
+  });
+});

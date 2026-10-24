@@ -4,6 +4,7 @@ export interface Branch {
 }
 
 export interface Neon {
+  postgresVersion(project: string): Promise<number>;
   defaultBranch(project: string): Promise<Branch>;
   findBranch(project: string, name: string): Promise<Branch | undefined>;
   listBranches(project: string, namePrefix: string): Promise<Branch[]>;

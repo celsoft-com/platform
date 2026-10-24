@@ -15,6 +15,16 @@ export interface Context {
 
 export class PreflightError extends Error {}
 
+export const MIN_POSTGRES = 18;
+
+// uuidv7(), the default for every id, arrived in Postgres 18.
+export async function requirePostgres(neon: Ports["neon"], project: string): Promise<void> {
+  const version = await neon.postgresVersion(project);
+  if (version < MIN_POSTGRES) {
+    throw new PreflightError(`Neon project ${project} runs Postgres ${version}; the platform needs ${MIN_POSTGRES} or later, so create the project again on Postgres ${MIN_POSTGRES}`);
+  }
+}
+
 export const UNGENERATED = "the schema has changes with no migration; run `npx @celsoft/platform db generate`, review the SQL in drizzle/, and commit it";
 
 export async function deploy(ctx: Context, target: Target): Promise<{ hostname: string }> {
@@ -31,6 +41,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   let hyperdriveId: string | undefined;
   if (config.database) {
     const project = config.database.neonProject;
+    await requirePostgres(ports.neon, project);
     const prod = await ports.neon.defaultBranch(project);
 
     const branch =
@@ -109,6 +120,7 @@ export async function dev(ctx: Context): Promise<void> {
   let uri: string | undefined;
   if (config.database) {
     const project = config.database.neonProject;
+    await requirePostgres(ports.neon, project);
     const prod = await ports.neon.defaultBranch(project);
     const branch = await run.ensure<Branch>(
       `Neon branch ${DEV_BRANCH}`,

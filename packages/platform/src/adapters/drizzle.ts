@@ -8,13 +8,11 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
 import type { Config } from "../config.js";
-import { PreflightError } from "../lifecycle.js";
 import type { Migrator } from "../ports.js";
 
 export const APP_SCHEMA = "src/schema.ts";
 export const MIGRATIONS_DIR = "drizzle";
 const PLATFORM_SCHEMA = fileURLToPath(new URL("../schema.js", import.meta.url));
-const MIN_POSTGRES = 180000;
 
 // One flow for the platform's tables and the app's: drizzle-kit reads both and writes one
 // migration history into the app's drizzle/ folder, which every deploy applies.
@@ -56,10 +54,6 @@ export class DrizzleMigrator implements Migrator {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
     try {
-      const { rows } = await client.query<{ server_version_num: string }>("show server_version_num");
-      if (Number(rows[0]!.server_version_num) < MIN_POSTGRES) {
-        throw new PreflightError("the Neon project runs a Postgres older than 18; create the project again on Postgres 18");
-      }
       // Two runs against one database wait their turn instead of applying the same file twice.
       await client.query("select pg_advisory_lock(hashtext('@celsoft/platform migrate'))");
       await migrate(drizzle(client), { migrationsFolder: folder });
@@ -95,7 +89,7 @@ export class DrizzleMigrator implements Migrator {
 }
 
 function drizzleKitBin(): string {
-  return join(dirname(createRequire(import.meta.url).resolve("drizzle-kit/package.json")), "bin.cjs");
+  return join(dirname(createRequire(import.meta.url).resolve("drizzle-kit")), "bin.cjs");
 }
 
 async function exists(path: string): Promise<boolean> {
