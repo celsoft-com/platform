@@ -23,6 +23,8 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Static assets**: Workers feature that serves the built frontend from the same deploy, free.
     3. **Neon Postgres**: serverless Postgres whose instant branches give each PR its own database copy.
     4. **Hyperdrive**: Cloudflare's pool of Postgres connections between Workers and Neon, free on Workers Paid.
+    5. **Drizzle**: the data layer; apps define tables in TypeScript, and the platform generates and applies the migrations.
+    6. **Better Auth**: accounts and sessions as rows in the app's own Postgres, run inside the runtime library.
 2. **Delivery**: what deploys it.
     1. **GitHub Actions**: runs the platform on pushes and PR events.
     2. **GitHub Environments**: hold the `production` and `preview` secrets.
@@ -37,7 +39,7 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **Project**: owns its accounts, zone, Neon project and secrets.
     1. **Accounts**: Cloudflare (Workers Paid), Neon and GitHub, and their billing.
     2. **Zone**: the apex domain's Cloudflare zone and every record the platform did not create.
-    3. **Neon project**: one per app, with its region and Postgres version; the platform manages only branches inside it.
+    3. **Neon project**: one per app, on Postgres 18, in a region of its choosing; the platform manages only branches inside it.
     4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
@@ -51,7 +53,7 @@ A published CLI, runtime library and app template that create and reuse each app
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
-    2. **Neon project**: create the app's Neon project.
+    2. **Neon project**: create the app's Neon project, on Postgres 18.
     3. **Tokens**: create the scoped Cloudflare and Neon tokens and paste them into `.env.secrets`.
 2. **Platform steps**: `init`, run from the project's machine; safe to rerun until it completes.
     1. **Prepare**: ensures a gitignored `.env.secrets` exists with a blank entry for every token, each documented with where to create it, and stops until all are filled.
@@ -67,10 +69,11 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Worker**: the path to the Worker's entry module.
     4. **Frontend**: the directory holding the built static files, if any.
-    5. **Database**: the app's Neon project id, and the command that runs its migrations.
-    6. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
-    7. **Compatibility date**: the Workers runtime date the app runs against.
-    8. **Config version**: the platform major version the file's shape matches.
+    5. **Database**: the app's Neon project id; its tables are found in `src/schema.ts` by convention.
+    6. **Auth**: on or off, and whether organizations are on; either can change at any time.
+    7. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
+    8. **Compatibility date**: the Workers runtime date the app runs against.
+    9. **Config version**: the platform major version the file's shape matches.
 2. **Variables**: any value may be `${NAME}`, filled from a gitignored `.env` locally and from GitHub secrets in CI, so values the project would rather not publish stay out of the repo and its logs; `init` copies them to GitHub as secrets, because GitHub prints Actions variables in public logs.
 3. **Derived**: everything else comes from that file and the environment, never written by the project.
     1. **Resource names**: Worker, Neon branch and Hyperdrive config, for prod and each PR.
@@ -118,14 +121,16 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
     2. **`deploy`**: deploys prod.
-    3. **`dev`**: runs the app locally against its own `dev` Neon branch, with email captured to the terminal.
+    3. **`dev`**: runs the app locally against its own `dev` Neon branch, with email captured to the terminal; regenerates migrations on start.
     4. **`preview`**: creates or updates a PR's preview.
     5. **`cleanup`**: deletes a PR's preview.
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
-    7. **`upgrade`**: rewrites `platform.jsonc` to the next major's shape.
-    8. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
-    9. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major or the workflow differs from what `init` writes.
-    10. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
+    7. **`db generate`**: writes new migrations from the platform's tables and the app's schema.
+    8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
+    9. **`upgrade`**: rewrites `platform.jsonc` to the next major's shape.
+    10. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
+    11. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
+    12. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
@@ -135,27 +140,41 @@ A published CLI, runtime library and app template that create and reuse each app
 ## 11. App Code
 
 1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
-2. **No app deploys**: the app's API is the Worker entry named by `worker` in `platform.jsonc`, exporting a `defineApp` handler; every platform deploy bundles it with its imports and ships it with the pages, bindings and secrets, so apps never deploy anything themselves.
-3. **No app migration runs**: the app writes migration files and names the command that applies them (`database.migrate`); every deploy runs that command against the right database (prod after its backup, each PR's own branch, the `dev` branch locally), with the auth tables first, so apps never run migrations by hand.
-4. **Platform provides**: through `defineApp` in the runtime library.
-    1. **Database**: `app.sql`, a Postgres client opened on first use and closed after each request.
-    2. **Auth**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset) and `app.session()` for the signed-in user.
-    3. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev.
-    4. **Files**: `app.files`, storing, reading, listing, deleting and serving objects by path, with a preview's folder added out of sight.
-    5. **Auth tables**: Better Auth's tables, created and updated on every deploy.
-5. **App writes**:
-    1. **API**: routes, request handling, validation, and which routes need a signed-in user.
-    2. **Data**: schema, migration files and every query.
-    3. **Pages**: the frontend, including its login and reset screens.
+2. **Conventions over settings**: where a fixed name or path does the job, the platform uses it instead of a setting.
+3. **No app deploys**: the app's API is the Worker entry named by `worker` in `platform.jsonc`, exporting a `defineApp` handler; every platform deploy bundles it with its imports and ships it with the pages, bindings and secrets, so apps never deploy anything themselves.
+4. **Schema and migrations**: one flow for the platform's tables and the app's.
+    1. **Tables**: the app defines its tables with Drizzle in `src/schema.ts` and references users through `user` from `@celsoft/platform/schema`.
+    2. **Generate**: `platform db generate` (and `platform dev` on start) runs `drizzle-kit` over the platform's tables, auth when on, and the app's file, writing timestamped SQL files to `drizzle/` for the app to review and commit.
+    3. **Apply**: every deploy applies new files with Drizzle's migrator, against prod after its backup, each PR's own branch, or the `dev` branch locally; the app has no migration script or setting.
+    4. **Check**: `platform ci` stops a run whose schema has changes with no generated migration; CI never generates, because rename prompts need a person.
+    5. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
+    6. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
+5. **Platform provides**: through `defineApp` in the runtime library.
+    1. **Database**: `app.db`, a Drizzle client typed with the app's schema, over one `pg` pool shared with auth.
+    2. **Auth routes**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset, organizations when on).
+    3. **Session**: `app.session()`, looked up once per request, and `app.requireUser()`, which returns the user or answers 401.
+    4. **Screens**: login, sign-up, forgot-password and reset pages with a default stylesheet and documented class names; `defineApp({ screens: { stylesheet } })` adds the app's own stylesheet after it.
+    5. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev.
+    6. **Files**: `app.files`, storing, reading, listing, deleting and serving objects by path, with a preview's folder added out of sight.
+6. **Auth behavior**: set by the platform for every app with auth on.
+    1. **Private by default**: every `/api/*` route needs a signed-in user except those under `/api/public/`.
+    2. **Cross-site forms**: POST, PUT, PATCH and DELETE requests sent as forms are refused unless their Origin is the app's own.
+    3. **Cookie cache**: the session cookie carries a signed copy for 5 minutes, so most requests skip the session query; a revoked session lasts until it expires.
+    4. **Rate limits**: the Workers rate limiting binding guards sign-in and reset by email address and sign-up by client IP, with no database involved; counts are approximate per Cloudflare location.
+    5. **First owner**: the first account an app creates gets the owner role and a one-time recovery code, through Better Auth's admin plugin.
+    6. **Signup**: open to anyone.
+    7. **Organizations**: Better Auth's organization plugin, with members, roles, invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
+7. **App writes**:
+    1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
+    2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
+    3. **Pages**: the frontend, and any styling of the auth screens.
     4. **Content**: what its own emails say and how its files are organized.
-6. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
-    1. **SQL**: `app.sql` is postgres.js itself.
+8. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
+    1. **SQL**: `app.db` is Drizzle itself, with raw SQL through its `sql` tag.
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
-7. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely.
-    1. **Permissions**: apps keep roles and grants in their own tables, keyed to `user.id`, and check them in their routes.
-    2. **Later**: an app-owned extension file, merged over the platform's setup, for Better Auth plugins such as organizations and access control.
-8. **Open gap**: login and reset screens are hand-written per app; the platform could ship them as a browser client or ready-made pages.
+9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
+10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
 
 ## 12. Upgrades
 
