@@ -44,6 +44,9 @@ export class FakeCloudflare implements Cloudflare {
   async findHyperdrive(name: string) {
     return this.hyperdrives.find((h) => h.name === name);
   }
+  async listHyperdrives(namePrefix: string) {
+    return this.hyperdrives.filter((h) => h.name.startsWith(namePrefix));
+  }
   async createHyperdrive(name: string, uri: string) {
     const hyperdrive = { id: `hd-${this.next++}`, name, origin: originOf(uri), cached: false };
     this.hyperdrives.push(hyperdrive);
@@ -61,6 +64,9 @@ export class FakeCloudflare implements Cloudflare {
   async findWorker(name: string) {
     return this.workers.has(name);
   }
+  async listWorkers(namePrefix: string) {
+    return [...this.workers].filter((w) => w.startsWith(namePrefix));
+  }
   async deleteWorker(name: string) {
     this.workers.delete(name);
     this.workerSecrets.delete(name);
@@ -77,6 +83,10 @@ export class FakeCloudflare implements Cloudflare {
   }
   async createBucket(name: string) {
     this.buckets.set(name, { keys: [] });
+  }
+  async deleteBucket(name: string) {
+    if (this.buckets.get(name)?.keys.length) throw new Error(`bucket ${name} is not empty`);
+    this.buckets.delete(name);
   }
   async bucketExpiryDays(name: string) {
     return this.buckets.get(name)?.expiryDays;
@@ -125,6 +135,9 @@ export class FakeMail implements Mail {
   async verifyDomain(id: string) {
     this.domains.find((d) => d.id === id)!.verified = true;
   }
+  async deleteDomain(id: string) {
+    this.domains = this.domains.filter((d) => d.id !== id);
+  }
   async findApiKey(name: string) {
     return this.keys.find((k) => k.name === name)?.id;
   }
@@ -171,6 +184,10 @@ export class FakeMigrator implements Migrator {
   }
   async migrateAuth(databaseUrl: string) {
     this.authRuns.push(databaseUrl);
+  }
+  dropped: string[] = [];
+  async dropAll(databaseUrl: string) {
+    this.dropped.push(databaseUrl);
   }
 }
 

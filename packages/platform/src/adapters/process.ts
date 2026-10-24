@@ -3,6 +3,7 @@ import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { getMigrations } from "better-auth/db/migration";
+import { Client } from "pg";
 import type { Migrator, Wrangler } from "../ports.js";
 import { authOptions, authPool } from "../runtime/auth.js";
 
@@ -66,6 +67,16 @@ export class ShellMigrator implements Migrator {
       await runMigrations();
     } finally {
       await pool.end();
+    }
+  }
+
+  async dropAll(databaseUrl: string): Promise<void> {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query("drop schema if exists drizzle cascade; drop schema public cascade; create schema public;");
+    } finally {
+      await client.end();
     }
   }
 }

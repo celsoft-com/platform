@@ -46,6 +46,15 @@ export class CloudflareApi implements Cloudflare {
     return undefined;
   }
 
+  async listHyperdrives(namePrefix: string): Promise<Hyperdrive[]> {
+    const account_id = await this.accountId();
+    const found: Hyperdrive[] = [];
+    for await (const config of this.client.hyperdrive.configs.list({ account_id })) {
+      if (config.name.startsWith(namePrefix)) found.push((await this.findHyperdrive(config.name))!);
+    }
+    return found;
+  }
+
   async createHyperdrive(name: string, connectionUri: string): Promise<Hyperdrive> {
     const account_id = await this.accountId();
     const created = await this.client.hyperdrive.configs.create({ account_id, name, origin: originParams(connectionUri), caching: { disabled: true } });
@@ -68,6 +77,15 @@ export class CloudflareApi implements Cloudflare {
       if (script.id === name) return true;
     }
     return false;
+  }
+
+  async listWorkers(namePrefix: string): Promise<string[]> {
+    const account_id = await this.accountId();
+    const names: string[] = [];
+    for await (const script of this.client.workers.scripts.list({ account_id })) {
+      if (script.id?.startsWith(namePrefix)) names.push(script.id);
+    }
+    return names;
   }
 
   async deleteWorker(name: string): Promise<void> {
@@ -98,6 +116,10 @@ export class CloudflareApi implements Cloudflare {
 
   async createBucket(name: string): Promise<void> {
     await this.client.r2.buckets.create({ account_id: await this.accountId(), name });
+  }
+
+  async deleteBucket(name: string): Promise<void> {
+    await this.client.r2.buckets.delete(name, { account_id: await this.accountId() });
   }
 
   async bucketExpiryDays(name: string): Promise<number | undefined> {

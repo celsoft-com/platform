@@ -27,6 +27,10 @@ export class ResendApi implements Mail {
     await this.call("POST", `/domains/${id}/verify`);
   }
 
+  async deleteDomain(id: string): Promise<void> {
+    await this.call("DELETE", `/domains/${id}`);
+  }
+
   async findApiKey(name: string): Promise<string | undefined> {
     const { data } = await this.call<{ data: { id: string; name: string }[] }>("GET", "/api-keys");
     return data.find((k) => k.name === name)?.id;

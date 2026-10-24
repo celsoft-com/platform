@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
@@ -10,11 +11,11 @@ import { ResendApi } from "./adapters/resend.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, dev, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dev, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
 
-const usage = `usage: platform <command> [--dry-run] [--dir <app dir>]
+const usage = `usage: npx @celsoft/platform <command> [--dry-run] [--dir <app dir>]
 
 commands:
   init             set up GitHub secrets, Environments and the deploy workflow
@@ -22,15 +23,16 @@ commands:
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
+  destroy [--data] delete everything the platform made for the app; --data also deletes its data
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, data: { type: "boolean", default: false }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -76,6 +78,10 @@ async function main(argv: string[]): Promise<void> {
     await dev(ctx);
     return;
   }
+  if (command.name === "destroy") {
+    await confirmDestroy(ctx, app.config.name, values.data);
+    return;
+  }
 
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
@@ -89,7 +95,7 @@ async function main(argv: string[]): Promise<void> {
 }
 
 function parseCommand([name, pr]: string[]): Command {
-  if (name === "init" || name === "dev" || name === "deploy") return { name };
+  if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
 }
@@ -130,6 +136,32 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
       migrator: new ShellMigrator(appDir),
     },
   };
+}
+
+// Destroy lists what it will delete, then needs the app's name typed and a final yes, so a
+// slip of the keyboard can never start it.
+async function confirmDestroy(ctx: Context, appName: string, data: boolean): Promise<void> {
+  if (!process.stdin.isTTY || process.env.CI) throw new UsageError("destroy asks for confirmation, so it runs only in a terminal");
+  console.log(`destroy ${appName}${data ? ", including its data" : ""}:\n`);
+  await destroy({ ...ctx, run: new Run(true, (line) => console.log(line)) }, { data });
+  if (ctx.run.dryRun) return;
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log(`\n${data ? "This deletes the app's database tables, backups and files. They cannot be recovered." : "The app goes offline until its next deploy."}`);
+    if ((await rl.question(`Type the app's name (${appName}) to continue: `)).trim() !== appName) {
+      console.log("Name did not match; nothing was deleted.");
+      return;
+    }
+    if (!/^y(es)?$/i.test((await rl.question("Last chance. Delete all of the above? [y/N] ")).trim())) {
+      console.log("Nothing was deleted.");
+      return;
+    }
+  } finally {
+    rl.close();
+  }
+  await destroy(ctx, { data });
+  console.log(`\n${appName} destroyed; the next deploy sets it up from scratch.`);
 }
 
 function repoRoot(dir: string): string {

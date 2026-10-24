@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -209,5 +209,51 @@ describe("files", () => {
     ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-7/b/c.json", "pr-8/a.txt"];
     await cleanup(filesCtx(), 7);
     expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+  });
+});
+
+describe("destroy", () => {
+  const full: Config = { ...config, auth: true, email: true, files: true };
+
+  async function deployEverything() {
+    const c = { ...ctx(), config: full };
+    await deploy(c, { kind: "prod" });
+    await deploy(c, { kind: "preview", pr: 7 });
+    await ports.neon.createBranch("p", "dev", "br-prod", true);
+    ports.cloudflare.buckets.get("demo-previews")!.keys.push("pr-7/a.txt");
+    ports.cloudflare.buckets.get("demo-files")!.keys.push("notes/a.txt");
+    return c;
+  }
+
+  it("deletes what serves the app and keeps what holds its data", async () => {
+    const c = await deployEverything();
+    await destroy(c, { data: false });
+
+    expect(ports.cloudflare.workers.size).toBe(0);
+    expect(ports.cloudflare.hyperdrives).toEqual([]);
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "backup-20261024T123456", "dev"]);
+    expect(ports.migrator.dropped).toEqual([]);
+    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo-files"]);
+    expect(ports.mail.domains).toEqual([]);
+    expect(ports.mail.keys).toEqual([]);
+    expect(ports.cloudflare.records).toEqual([]);
+  });
+
+  it("with data, also drops prod tables, backups, the dev branch and prod files", async () => {
+    const c = await deployEverything();
+    await destroy(c, { data: true });
+
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production"]);
+    expect(ports.migrator.dropped).toEqual(["postgresql://owner:secret@br-prod.neon.test/app"]);
+    expect(ports.cloudflare.buckets.size).toBe(0);
+  });
+
+  it("changes nothing on a dry run", async () => {
+    const c = await deployEverything();
+    await destroy({ ...c, run: new Run(true, (line) => log.push(line)) }, { data: true });
+
+    expect(ports.cloudflare.workers.size).toBe(2);
+    expect(ports.migrator.dropped).toEqual([]);
+    expect(log).toContain("~ would delete Worker demo-pr-7");
   });
 });

@@ -178,8 +178,10 @@ async function ensureMailDomain({ ports, run }: Context, hostname: string, zone:
 }
 
 // A Resend key is only readable when created, so a Worker missing its key gets a fresh one.
+const sendKeyName = (hostname: string) => `platform ${hostname}`;
+
 async function sendKey({ ports, run }: Context, hostname: string, domainId: string): Promise<string | undefined> {
-  const name = `platform ${hostname}`;
+  const name = sendKeyName(hostname);
   const old = await ports.mail.findApiKey(name);
   if (old) await run.mutate(`replace Resend sending key for ${hostname}`, () => ports.mail.deleteApiKey(old), undefined);
   return run.mutate(`create Resend sending key for ${hostname}`, () => ports.mail.createSendKey(name, domainId), undefined);
@@ -212,6 +214,56 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
 
   if (config.files && (await ports.cloudflare.findBucket(n.bucket))) {
     await run.mutate(`delete files under ${n.filesPrefix} in ${n.bucket}`, () => ports.cloudflare.deleteObjects(n.bucket, n.filesPrefix), 0);
+  }
+}
+
+// Deletes everything the platform made for the app. Without `data` it keeps what holds the app's
+// data: prod tables, backups, the dev branch and the prod file bucket.
+export async function destroy(ctx: Context, { data }: { data: boolean }): Promise<void> {
+  const { config, ports, run } = ctx;
+  const prod = names(config, { kind: "prod" });
+  const previews = `${config.name}-pr-`;
+
+  const workers = [...((await ports.cloudflare.findWorker(prod.worker)) ? [prod.worker] : []), ...(await ports.cloudflare.listWorkers(previews))];
+  for (const worker of workers) await run.mutate(`delete Worker ${worker}`, () => ports.cloudflare.deleteWorker(worker), undefined);
+
+  const prodHyperdrive = await ports.cloudflare.findHyperdrive(prod.hyperdrive);
+  for (const h of [...(prodHyperdrive ? [prodHyperdrive] : []), ...(await ports.cloudflare.listHyperdrives(previews))]) {
+    await run.mutate(`delete Hyperdrive config ${h.name}`, () => ports.cloudflare.deleteHyperdrive(h.id), undefined);
+  }
+
+  if (config.database) {
+    const project = config.database.neonProject;
+    const doomed = [...(await ports.neon.listBranches(project, "pr-"))];
+    if (data) doomed.push(...(await ports.neon.listBranches(project, BACKUP_PREFIX)), ...[await ports.neon.findBranch(project, DEV_BRANCH)].filter((b) => b !== undefined));
+    for (const branch of doomed) await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);
+    if (data) {
+      const main = await ports.neon.defaultBranch(project);
+      const uri = await ports.neon.connectionUri(project, main.id);
+      await run.mutate(`drop every table on ${main.name}`, () => ports.migrator.dropAll(uri), undefined);
+    }
+  }
+
+  if (config.files) {
+    for (const bucket of [names(config, { kind: "preview", pr: 0 }).bucket, ...(data ? [prod.bucket] : [])]) {
+      if (!(await ports.cloudflare.findBucket(bucket))) continue;
+      await run.mutate(`empty and delete R2 bucket ${bucket}`, async () => {
+        await ports.cloudflare.deleteObjects(bucket, "");
+        await ports.cloudflare.deleteBucket(bucket);
+      }, undefined);
+    }
+  }
+
+  if (config.email) {
+    const domain = await ports.mail.findDomain(config.hostname);
+    if (domain) await run.mutate(`delete Resend sending domain ${config.hostname}`, () => ports.mail.deleteDomain(domain.id), undefined);
+    const key = await ports.mail.findApiKey(sendKeyName(config.hostname));
+    if (key) await run.mutate(`delete Resend sending key for ${config.hostname}`, () => ports.mail.deleteApiKey(key), undefined);
+    const zone = await ports.cloudflare.findZone(config.hostname);
+    const records = zone ? (await ports.cloudflare.managedDnsRecords(zone.id)).filter((r) => r.name.endsWith(`.${config.hostname}`)) : [];
+    for (const record of records) {
+      await run.mutate(`delete ${record.type} record ${record.name}`, () => ports.cloudflare.deleteDnsRecord(zone!.id, record.id), undefined);
+    }
   }
 }
 

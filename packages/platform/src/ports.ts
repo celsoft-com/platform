@@ -40,10 +40,12 @@ export interface Cloudflare {
   accountId(): Promise<string>;
   findZone(hostname: string): Promise<Zone | undefined>;
   findHyperdrive(name: string): Promise<Hyperdrive | undefined>;
+  listHyperdrives(namePrefix: string): Promise<Hyperdrive[]>;
   createHyperdrive(name: string, connectionUri: string): Promise<Hyperdrive>;
   updateHyperdrive(id: string, connectionUri: string): Promise<Hyperdrive>;
   deleteHyperdrive(id: string): Promise<void>;
   findWorker(name: string): Promise<boolean>;
+  listWorkers(namePrefix: string): Promise<string[]>;
   deleteWorker(name: string): Promise<void>;
   workerSecretNames(worker: string): Promise<string[]>;
   dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
@@ -51,6 +53,7 @@ export interface Cloudflare {
   managedDnsRecords(zoneId: string): Promise<ZoneRecord[]>;
   findBucket(name: string): Promise<boolean>;
   createBucket(name: string): Promise<void>;
+  deleteBucket(name: string): Promise<void>;
   bucketExpiryDays(name: string): Promise<number | undefined>;
   setBucketExpiry(name: string, days: number): Promise<void>;
   deleteObjects(bucket: string, prefix: string): Promise<number>;
@@ -68,6 +71,7 @@ export interface Mail {
   findDomain(name: string): Promise<MailDomain | undefined>;
   createDomain(name: string): Promise<MailDomain>;
   verifyDomain(id: string): Promise<void>;
+  deleteDomain(id: string): Promise<void>;
   findApiKey(name: string): Promise<string | undefined>;
   createSendKey(name: string, domainId: string): Promise<string>;
   deleteApiKey(id: string): Promise<void>;
@@ -81,6 +85,7 @@ export interface Wrangler {
 export interface Migrator {
   migrate(command: string, databaseUrl: string): Promise<void>;
   migrateAuth(databaseUrl: string): Promise<void>;
+  dropAll(databaseUrl: string): Promise<void>;
 }
 
 export interface GitHub {
