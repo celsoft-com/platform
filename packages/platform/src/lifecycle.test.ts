@@ -253,6 +253,21 @@ describe("destroy", () => {
     expect(ports.cloudflare.buckets.size).toBe(0);
   });
 
+  it("leaves nothing that stops the next deploy from setting everything up again", async () => {
+    const c = await deployEverything();
+    await destroy(c, { data: true });
+    ports.wrangler.deploys = [];
+    await deploy(c, { kind: "prod" });
+
+    expect(ports.mail.domains).toMatchObject([{ name: "demo.example.com", verified: true }]);
+    expect(ports.mail.keys).toHaveLength(1);
+    expect(ports.cloudflare.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT resend._domainkey.demo.example.com", "MX send.demo.example.com"]);
+    expect(Object.keys(ports.wrangler.deploys[0]!.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
+    expect(ports.cloudflare.hyperdrives).toMatchObject([{ name: "demo" }]);
+    expect(ports.cloudflare.buckets.has("demo-files")).toBe(true);
+    expect(ports.migrator.runs.at(-1)).toBe("postgresql://owner:secret@br-prod.neon.test/app");
+  });
+
   it("changes nothing on a dry run", async () => {
     const c = await deployEverything();
     await destroy({ ...c, run: new Run(true, (line) => log.push(line)) }, { data: true });
