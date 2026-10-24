@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Migrator, Wrangler } from "../ports.js";
 
 export class WranglerCli implements Wrangler {
@@ -16,7 +16,7 @@ export class WranglerCli implements Wrangler {
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
     try {
-      const wrangler = createRequire(import.meta.url).resolve("wrangler/bin/wrangler.js");
+      const wrangler = join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
       await run("wrangler deploy", process.execPath, [wrangler, "deploy", "--config", configFile, "--secrets-file", secretsFile], {
         cwd: this.appDir,
         env: { ...process.env, ...this.env },
