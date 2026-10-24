@@ -36,12 +36,24 @@ It creates `.env.secrets` (gitignored) with a blank entry for each token below, 
 4. **Zone Resources:** Include, Specific zone, your apex domain.
 5. **Save:** create the token and paste it after `CLOUDFLARE_API_TOKEN=` in `.env.secrets`.
 
-## 4. Neon API key
+## 4. Neon project
 
-1. **Open:** [API keys](https://console.neon.tech/app/settings/api-keys) in the Neon console.
-2. **Type:** a personal key, or an organization key if the app lives in a Neon organization; a project-scoped key cannot create the app's Neon project.
-3. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`.
+One Neon project per app. Its default branch is prod; the platform adds a branch per PR.
 
-## 5. Check
+1. **Open:** the [Neon console](https://console.neon.tech), then **New project**.
+2. **Name:** the app's name, such as `demo`.
+3. **Region:** the one closest to most of your users.
+4. **Postgres version:** the default.
+5. **Create:** the console then shows the project's dashboard.
+6. **Project ID:** copy it from **Settings**, then **General**; it is not a secret and goes in the app's `platform.jsonc`.
+
+## 5. Neon API key
+
+1. **Open:** your organization's **Settings**, then **API keys**, then **Create new API key**.
+2. **Scope:** **Project-scoped**, and pick the project from step 4. It can manage everything inside that project and nothing else.
+3. **No organization?** If the project is in a personal account, create a personal key at [API keys](https://console.neon.tech/app/settings/api-keys) instead.
+4. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`.
+
+## 6. Check
 
 Run `mise run secrets:ensure` again. It exits cleanly once every entry is filled.

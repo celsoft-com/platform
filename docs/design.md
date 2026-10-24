@@ -34,11 +34,12 @@ A published CLI, runtime library and app template that create and reuse each app
 
 ## 5. Responsibilities
 
-1. **Project**: owns its accounts, zone and secrets.
+1. **Project**: owns its accounts, zone, Neon project and secrets.
     1. **Accounts**: Cloudflare (Workers Paid), Neon and GitHub, and their billing.
     2. **Zone**: the apex domain's Cloudflare zone and every record the platform did not create.
-    3. **Tokens**: creates the scoped Cloudflare and Neon API tokens the platform uses.
-    4. **Secret values**: sets each app's secrets in its GitHub Environments.
+    3. **Neon project**: one per app, with its region and Postgres version; the platform manages only branches inside it.
+    4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
+    5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
     1. **Named resources**: everything it creates, found by names derived from the app, and nothing else.
     2. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
@@ -48,7 +49,8 @@ A published CLI, runtime library and app template that create and reuse each app
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
-    2. **Tokens**: create the scoped Cloudflare and Neon API tokens and paste them into `.env.secrets`.
+    2. **Neon project**: create the app's Neon project.
+    3. **Tokens**: create the scoped Cloudflare and Neon tokens and paste them into `.env.secrets`.
 2. **Platform steps**: `init`, run from the project's machine; safe to rerun until it completes.
     1. **Prepare**: ensures a gitignored `.env.secrets` exists with a blank entry for every token, each documented with where to create it, and stops until all are filled.
     2. **Verify**: confirms each token reaches the zone, Workers and Neon.
@@ -62,7 +64,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **App name**: unique within the Cloudflare account; every resource name derives from it.
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Frontend**: the directory holding the built static files.
-    4. **Database**: whether the app uses Neon, and the command that runs its migrations.
+    4. **Database**: the app's Neon project id, and the command that runs its migrations.
     5. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
     6. **Compatibility date**: the Workers runtime date the app runs against.
     7. **Config version**: the platform major version the file's shape matches.
