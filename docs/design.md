@@ -161,7 +161,7 @@ A published CLI, runtime library and app template that create and reuse each app
         6. **Observability**: errors and traces from the running demo.
     3. **Platform PRs**: each gets a demo preview deployed by that PR's CLI build.
     4. **Main**: a merge deploys the demo's prod.
-    5. **Release**: publishes to npm only after the main deploy succeeds.
+    5. **Release**: publishes to npm only after the main deploy succeeds, using npm trusted publishing. Deferred until an outside project adopts the platform; the first version is published by hand, since trusted publishing needs the package to exist.
 2. **Fast tests**: resource modules run against in-memory fakes, covering every event's steps with no cloud account.
 3. **Upgrade test**: deploys the demo with the last published version, then the new build, proving the new one converges.
 4. **Template test**: scaffolds an app from the template and builds it.
