@@ -10,7 +10,7 @@ trap 'rm -rf "$work"' EXIT
 (cd packages/platform && pnpm pack --pack-destination "$work" >/dev/null)
 tarball=("$work"/*.tgz)
 
-(cd "$work" && node "$MISE_PROJECT_ROOT/packages/create-app/dist/cli.js" app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null)
+(cd "$work" && node "$MISE_PROJECT_ROOT/packages/create-platform-app/dist/cli.js" app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null)
 
 cd "$work/app"
 npm install --no-audit --no-fund --loglevel=error "$tarball[1]"

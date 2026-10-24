@@ -5,7 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
 
-const usage = `usage: npm create @celsoft/app <name> -- [--hostname <host>] [--neon-project <id>]`;
+const usage = `usage: npm create @celsoft/platform-app <name> -- [--hostname <host>] [--neon-project <id>]`;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({

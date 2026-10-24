@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 
-for dir in packages/platform packages/create-app; do
+for dir in packages/platform packages/create-platform-app; do
   name=$(node -p "require('./$dir/package.json').name")
   version=$(node -p "require('./$dir/package.json').version")
   if npm view "$name@$version" version >/dev/null 2>&1; then

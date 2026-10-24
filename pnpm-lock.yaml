@@ -189,7 +189,7 @@ importers:
         specifier: ^5.20261023.1
         version: 5.20261023.1
 
-  packages/create-app:
+  packages/create-platform-app:
     devDependencies:
       typescript:
         specifier: 7.0.2
