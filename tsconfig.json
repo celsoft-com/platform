@@ -1,4 +1,4 @@
 {
   "files": [],
-  "references": [{ "path": "packages/platform" }]
+  "references": [{ "path": "packages/platform" }, { "path": "packages/create-app" }]
 }

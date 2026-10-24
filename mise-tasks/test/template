@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+#MISE description="Scaffold an app from the template, install the locally packed platform, and type-check it"
+#MISE depends=["build"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+(cd packages/platform && pnpm pack --pack-destination "$work" >/dev/null)
+tarball=("$work"/*.tgz)
+
+(cd "$work" && node "$MISE_PROJECT_ROOT/packages/create-app/dist/cli.js" app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null)
+
+cd "$work/app"
+npm install --no-audit --no-fund --loglevel=error "$tarball[1]"
+npm install --no-audit --no-fund --loglevel=error
+npx --no-install tsc -p .
+npx --no-install platform --help >/dev/null
+print "✓ template app installs, type-checks, and runs the platform CLI"

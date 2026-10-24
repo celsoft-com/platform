@@ -189,6 +189,12 @@ importers:
         specifier: ^5.20261023.1
         version: 5.20261023.1
 
+  packages/create-app:
+    devDependencies:
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/platform:
     dependencies:
       '@neondatabase/api-client':
