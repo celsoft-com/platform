@@ -81,6 +81,43 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   return { hostname };
 }
 
+export const DEV_BRANCH = "dev";
+export const DEV_URL = "http://localhost:8787";
+
+// Runs the app locally against its own Neon branch, copied from prod once and kept between runs.
+export async function dev(ctx: Context): Promise<void> {
+  const { config, ports, run } = ctx;
+  const secrets = requireSecrets(config, ctx.secrets);
+
+  let uri: string | undefined;
+  if (config.database) {
+    const project = config.database.neonProject;
+    const prod = await ports.neon.defaultBranch(project);
+    const branch = await run.ensure<Branch>(
+      `Neon branch ${DEV_BRANCH}`,
+      () => ports.neon.findBranch(project, DEV_BRANCH),
+      () => ports.neon.createBranch(project, DEV_BRANCH, prod.id, true),
+      { id: "(new)", name: DEV_BRANCH },
+    );
+    uri = await ports.neon.connectionUri(project, branch.id);
+    if (config.auth) await run.mutate(`update auth tables on ${DEV_BRANCH}`, () => ports.migrator.migrateAuth(uri!), undefined);
+    await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(config.database!.migrate, uri!), undefined);
+  }
+
+  const vars: Record<string, string> = { APP_URL: DEV_URL, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
+    config,
+    worker: `${config.name}-dev`,
+    hostname: "localhost",
+    accountId: "",
+    hyperdriveId: config.database ? "local" : undefined,
+    vars,
+  }) as Record<string, unknown>;
+  const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
+  run.note(`serving at ${DEV_URL}; email is captured to this terminal`);
+  await ports.wrangler.dev(local, devSecrets, uri);
+}
+
 export const MANAGED_COMMENT = "managed by @celsoft/platform";
 
 // The app sends from its own hostname: Resend's DKIM and bounce records sit on names below it,

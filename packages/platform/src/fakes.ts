@@ -122,7 +122,13 @@ export class FakeMail implements Mail {
 export class FakeWrangler implements Wrangler {
   deploys: { config: Record<string, unknown>; secrets: Record<string, string> }[] = [];
 
+  devRuns: { config: Record<string, unknown>; secrets: Record<string, string>; databaseUrl: string | undefined }[] = [];
+
   constructor(private readonly cloudflare: FakeCloudflare) {}
+
+  async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined) {
+    this.devRuns.push({ config: config as Record<string, unknown>, secrets, databaseUrl });
+  }
 
   async deploy(config: object, secrets: Record<string, string>) {
     const c = config as Record<string, unknown>;

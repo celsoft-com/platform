@@ -70,6 +70,7 @@ export interface Mail {
 
 export interface Wrangler {
   deploy(wranglerConfig: object, secrets: Record<string, string>): Promise<void>;
+  dev(wranglerConfig: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void>;
 }
 
 export interface Migrator {

@@ -118,13 +118,14 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
     2. **`deploy`**: deploys prod.
-    3. **`preview`**: creates or updates a PR's preview.
-    4. **`cleanup`**: deletes a PR's preview.
-    5. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
-    6. **`upgrade`**: rewrites `platform.jsonc` to the next major's shape.
-    7. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
-    8. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major or the workflow differs from what `init` writes.
-    9. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
+    3. **`dev`**: runs the app locally against its own `dev` Neon branch, with email captured to the terminal.
+    4. **`preview`**: creates or updates a PR's preview.
+    5. **`cleanup`**: deletes a PR's preview.
+    6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
+    7. **`upgrade`**: rewrites `platform.jsonc` to the next major's shape.
+    8. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
+    9. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major or the workflow differs from what `init` writes.
+    10. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` hands each request a ready database client, opened lazily and closed after the response, plus typed secrets. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.

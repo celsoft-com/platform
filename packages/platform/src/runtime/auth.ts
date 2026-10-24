@@ -1,25 +1,30 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { PostgresJSDialect } from "kysely-postgres-js";
-import type postgres from "postgres";
+import { Pool } from "pg";
 import type { Email } from "./email.js";
 
 export const AUTH_PATH = "/api/auth";
 
 export interface AuthSettings {
-  sql: postgres.Sql;
+  pool: Pool;
   secret: string;
   baseURL: string;
   email: Email;
   requireVerification: boolean;
 }
 
+// Better Auth gets its own pg pool: sharing the app's postgres.js client through a Kysely
+// dialect stalls on Workers, while pg is the driver Cloudflare documents for Hyperdrive.
+export function authPool(connectionString: string): Pool {
+  return new Pool({ connectionString, max: 1 });
+}
+
 // Shared by the Worker and by `platform deploy`, which creates the auth tables from it.
-export function authOptions({ sql, secret, baseURL, email, requireVerification }: AuthSettings): BetterAuthOptions {
+export function authOptions({ pool, secret, baseURL, email, requireVerification }: AuthSettings): BetterAuthOptions {
   return {
     secret,
     baseURL,
     basePath: AUTH_PATH,
-    database: { dialect: new PostgresJSDialect({ postgres: sql }), type: "postgres" },
+    database: pool,
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: requireVerification,

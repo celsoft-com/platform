@@ -10,7 +10,7 @@ import { ResendApi } from "./adapters/resend.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, dev, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
 
@@ -18,12 +18,13 @@ const usage = `usage: platform <command> [--dry-run] [--dir <app dir>]
 
 commands:
   init             set up GitHub secrets, Environments and the deploy workflow
+  dev              run the app locally against its own Neon branch
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "init" } | { name: "deploy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -71,6 +72,10 @@ async function main(argv: string[]): Promise<void> {
     await cleanup(ctx, command.pr);
     return;
   }
+  if (command.name === "dev") {
+    await dev(ctx);
+    return;
+  }
 
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
@@ -84,7 +89,7 @@ async function main(argv: string[]): Promise<void> {
 }
 
 function parseCommand([name, pr]: string[]): Command {
-  if (name === "init" || name === "deploy") return { name };
+  if (name === "init" || name === "dev" || name === "deploy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
 }

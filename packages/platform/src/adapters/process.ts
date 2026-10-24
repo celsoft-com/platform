@@ -3,9 +3,8 @@ import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { getMigrations } from "better-auth/db/migration";
-import postgres from "postgres";
 import type { Migrator, Wrangler } from "../ports.js";
-import { authOptions } from "../runtime/auth.js";
+import { authOptions, authPool } from "../runtime/auth.js";
 
 export class WranglerCli implements Wrangler {
   constructor(
@@ -19,8 +18,7 @@ export class WranglerCli implements Wrangler {
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
     try {
-      const wrangler = join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
-      await run("wrangler deploy", process.execPath, [wrangler, "deploy", "--config", configFile, "--secrets-file", secretsFile], {
+      await run("wrangler deploy", process.execPath, [wranglerBin(), "deploy", "--config", configFile, "--secrets-file", secretsFile], {
         cwd: this.appDir,
         env: { ...process.env, ...this.env },
       });
@@ -29,6 +27,28 @@ export class WranglerCli implements Wrangler {
       await rm(configFile, { force: true });
     }
   }
+
+  // wrangler dev reads secrets from a .dev.vars file beside its config, and takes the local
+  // database through an environment variable in place of the Hyperdrive binding.
+  async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void> {
+    const configFile = join(this.appDir, ".platform-wrangler.json");
+    const devVars = join(this.appDir, ".dev.vars");
+    await writeFile(configFile, JSON.stringify(config, null, 2));
+    await writeFile(devVars, Object.entries(secrets).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n", { mode: 0o600 });
+    try {
+      await run("wrangler dev", process.execPath, [wranglerBin(), "dev", "--config", configFile], {
+        cwd: this.appDir,
+        env: { ...process.env, ...this.env, ...(databaseUrl && { CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB: databaseUrl }) },
+      });
+    } finally {
+      await rm(devVars, { force: true });
+      await rm(configFile, { force: true });
+    }
+  }
+}
+
+function wranglerBin(): string {
+  return join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
 }
 
 export class ShellMigrator implements Migrator {
@@ -39,13 +59,13 @@ export class ShellMigrator implements Migrator {
   }
 
   async migrateAuth(databaseUrl: string): Promise<void> {
-    const sql = postgres(databaseUrl, { max: 1, onnotice: () => {} });
+    const pool = authPool(databaseUrl);
     try {
-      const options = authOptions({ sql, secret: "migrations-only", baseURL: "http://localhost", email: { send: async () => {} }, requireVerification: false });
+      const options = authOptions({ pool, secret: "migrations-only", baseURL: "http://localhost", email: { send: async () => {} }, requireVerification: false });
       const { runMigrations } = await getMigrations(options);
       await runMigrations();
     } finally {
-      await sql.end();
+      await pool.end();
     }
   }
 }

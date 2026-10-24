@@ -1,5 +1,6 @@
 import postgres from "postgres";
-import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
+import type { Pool } from "pg";
+import { AUTH_PATH, authPool, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 
 export type { Auth } from "./auth.js";
@@ -46,6 +47,7 @@ export function defineApp<Secrets extends object = object>(handler: Handler<Secr
       let sql: Sql | undefined;
       let email: Email | undefined;
       let auth: Auth | undefined;
+      let pool: Pool | undefined;
 
       const app: AppContext<Secrets & PlatformBindings> = {
         env,
@@ -58,8 +60,9 @@ export function defineApp<Secrets extends object = object>(handler: Handler<Secr
         },
         get auth() {
           if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
+          if (!env.DB) throw new Error("auth needs a database; add `database` to platform.jsonc");
           return (auth ??= createAuth({
-            sql: app.sql,
+            pool: (pool ??= authPool(env.DB.connectionString)),
             secret: env.BETTER_AUTH_SECRET,
             baseURL: env.APP_URL ?? new URL(request.url).origin,
             email: app.email,
@@ -79,6 +82,7 @@ export function defineApp<Secrets extends object = object>(handler: Handler<Secr
         return await handler(request, app);
       } finally {
         if (sql) ctx.waitUntil(sql.end({ timeout: 5 }));
+        if (pool) ctx.waitUntil(pool.end());
       }
     },
   };

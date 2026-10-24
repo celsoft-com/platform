@@ -5,3 +5,5 @@ dist
 *.tsbuildinfo
 packages/platform/schema.json
 .platform-*.json
+.dev.vars
+.wrangler
