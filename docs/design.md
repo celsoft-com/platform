@@ -44,6 +44,8 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Named resources**: everything it creates, found by names derived from the app, and nothing else.
     2. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
     3. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
+    4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
+3. **Line in app code**: the platform provides connections and their lifecycle; the app owns its queries, schema and migration files.
 
 ## 6. Bootstrap
 
@@ -122,7 +124,7 @@ A published CLI, runtime library and app template that create and reuse each app
     7. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
     8. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major or the workflow differs from what `init` writes.
     9. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
-2. **Runtime library**: imported by the app's Worker; first release only gives typed access to the database and secrets.
+2. **Runtime library**: imported by the app's Worker; `defineApp` hands each request a ready database client, opened lazily and closed after the response, plus typed secrets. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.

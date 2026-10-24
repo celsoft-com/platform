@@ -1,24 +1,8 @@
-import postgres from "postgres";
+import { defineApp } from "@celsoft/platform";
 
-interface Env {
-  DB: Hyperdrive;
-}
+export default defineApp(async (request, { sql }) => {
+  const url = new URL(request.url);
 
-export default {
-  async fetch(request, env, ctx): Promise<Response> {
-    const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/")) return new Response("not found", { status: 404 });
-
-    const sql = postgres(env.DB.connectionString, { max: 5, fetch_types: false });
-    try {
-      return await api(request, url, sql);
-    } finally {
-      ctx.waitUntil(sql.end());
-    }
-  },
-} satisfies ExportedHandler<Env>;
-
-async function api(request: Request, url: URL, sql: postgres.Sql): Promise<Response> {
   if (url.pathname === "/api/notes" && request.method === "GET") {
     const notes = await sql`select id, body, created_at from notes order by created_at desc limit 100`;
     return Response.json(notes);
@@ -34,4 +18,4 @@ async function api(request: Request, url: URL, sql: postgres.Sql): Promise<Respo
   }
 
   return new Response("not found", { status: 404 });
-}
+});

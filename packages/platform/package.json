@@ -19,6 +19,7 @@
     "@neondatabase/api-client": "^2.7.3",
     "cloudflare": "^7.3.0",
     "jsonc-parser": "^3.3.1",
+    "postgres": "^3.4.9",
     "wrangler": "^4.152.0",
     "zod": "^4.6.7"
   },
