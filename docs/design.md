@@ -182,13 +182,14 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
     2. **Stable workflow**: the workflow holds no logic, so it rarely changes, and rerunning `init` updates it when it does.
     3. **Template**: used only to create an app, never upgraded.
+    4. **One Drizzle**: `drizzle-orm` is a peer dependency, so the app and the platform share one installed copy.
 2. **Tested**: any PR that changes the platform version gets a preview with the new version and a prod `--dry-run` of the prod-only steps.
 3. **Detection**: the platform acts on what exists, not on version numbers.
     1. **Converge**: every run compares the cloud to what the version wants and fixes the difference.
     2. **Structural changes**: a resource module also finds a resource's old form and converts it.
     3. **Config shape**: `platform.jsonc` records its major version; the CLI stops if it is older, and `upgrade` rewrites it one major at a time.
 4. **Release rules**: what each kind of release may do.
-    1. **Minor and patch**: never require project changes.
+    1. **Minor and patch**: never require project changes beyond committing the migration `db generate` writes when the platform's tables change.
     2. **Compatible within a major**: resource changes only add, so mixed versions and rollbacks keep working.
     3. **Majors only**: breaking runtime changes, new token permissions and new secrets.
     4. **Preflight**: every run checks tokens and secrets first and stops with exact fix instructions.
