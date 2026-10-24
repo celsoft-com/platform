@@ -43,13 +43,14 @@ export class FakeCloudflare implements Cloudflare {
     return this.hyperdrives.find((h) => h.name === name);
   }
   async createHyperdrive(name: string, uri: string) {
-    const hyperdrive = { id: `hd-${this.next++}`, name, origin: originOf(uri) };
+    const hyperdrive = { id: `hd-${this.next++}`, name, origin: originOf(uri), cached: false };
     this.hyperdrives.push(hyperdrive);
     return hyperdrive;
   }
   async updateHyperdrive(id: string, uri: string) {
     const hyperdrive = this.hyperdrives.find((h) => h.id === id)!;
     hyperdrive.origin = originOf(uri);
+    hyperdrive.cached = false;
     return hyperdrive;
   }
   async deleteHyperdrive(id: string) {

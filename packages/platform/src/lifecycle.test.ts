@@ -52,6 +52,13 @@ describe("deploy prod", () => {
     expect(d?.secrets).toEqual({ SESSION_SECRET: "s3cret" });
   });
 
+  it("turns off query caching on an existing Hyperdrive config", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    ports.cloudflare.hyperdrives[0]!.cached = true;
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.cloudflare.hyperdrives[0]!.cached).toBe(false);
+  });
+
   it("keeps only the newest backups", async () => {
     for (const day of ["01", "02", "03", "04", "05"]) {
       const c = ctx();

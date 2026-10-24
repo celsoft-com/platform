@@ -37,7 +37,7 @@ export class CloudflareApi implements Cloudflare {
     for await (const config of this.client.hyperdrive.configs.list({ account_id })) {
       if (config.name === name) {
         const origin = config.origin as { user: string; host: string; database: string; port?: number };
-        return { id: config.id, name, origin: `${origin.user}@${origin.host}/${origin.database}` };
+        return { id: config.id, name, origin: `${origin.user}@${origin.host}/${origin.database}`, cached: !config.caching?.disabled };
       }
     }
     return undefined;
@@ -45,14 +45,14 @@ export class CloudflareApi implements Cloudflare {
 
   async createHyperdrive(name: string, connectionUri: string): Promise<Hyperdrive> {
     const account_id = await this.accountId();
-    const created = await this.client.hyperdrive.configs.create({ account_id, name, origin: originParams(connectionUri) });
-    return { id: created.id, name, origin: originOf(connectionUri) };
+    const created = await this.client.hyperdrive.configs.create({ account_id, name, origin: originParams(connectionUri), caching: { disabled: true } });
+    return { id: created.id, name, origin: originOf(connectionUri), cached: false };
   }
 
   async updateHyperdrive(id: string, connectionUri: string): Promise<Hyperdrive> {
     const account_id = await this.accountId();
-    const updated = await this.client.hyperdrive.configs.edit(id, { account_id, origin: originParams(connectionUri) });
-    return { id, name: updated.name, origin: originOf(connectionUri) };
+    const updated = await this.client.hyperdrive.configs.edit(id, { account_id, origin: originParams(connectionUri), caching: { disabled: true } });
+    return { id, name: updated.name, origin: originOf(connectionUri), cached: false };
   }
 
   async deleteHyperdrive(id: string): Promise<void> {

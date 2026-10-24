@@ -21,6 +21,7 @@ export interface Hyperdrive {
   id: string;
   name: string;
   origin: string;
+  cached: boolean;
 }
 
 export interface Cloudflare {
