@@ -7,10 +7,13 @@ The celsoft-com platform repository.
 - **Source of truth:** read [docs/design.md](docs/design.md) before designing or changing
   anything; update it when a design decision changes.
 
-## Secrets
+## Setup
 
-- **Setup:** `mise run secrets:ensure` creates `.env.secrets` with a blank entry for every
-  name in `secrets.tmpl`, which also says where each value comes from.
+- **Guide:** [SETUP.md](SETUP.md) is the one-time setup for accounts and tokens. When a
+  user needs help setting up, walk them through it step by step, and keep it current when
+  setup changes.
+- **Secrets:** `mise run secrets:ensure` creates `.env.secrets` with a blank entry for every
+  name in `secrets.tmpl`. Never read `.env.secrets`; rerun the task to check it.
 
 ## Code conventions
 
