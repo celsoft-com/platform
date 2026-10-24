@@ -7,10 +7,9 @@
   "frontend": "public",
   "compatibilityDate": "2026-10-01",
   "database": {
-    "neonProject": "${DEMO_NEON_PROJECT}",
-    "migrate": "node scripts/migrate.js"
+    "neonProject": "${DEMO_NEON_PROJECT}"
   },
   "email": true,
-  "auth": true,
+  "auth": { "organizations": true },
   "files": true
 }

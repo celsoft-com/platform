@@ -1,11 +1,18 @@
 import { defineApp } from "@celsoft/platform";
+import { desc } from "drizzle-orm";
+import * as schema from "./schema";
 
-export default defineApp(async (request, { sql }) => {
-  const url = new URL(request.url);
+const { items } = schema;
 
-  if (url.pathname === "/api/items" && request.method === "GET") {
-    return Response.json(await sql`select id, name, created_at from items order by created_at desc limit 100`);
-  }
+export default defineApp(
+  async (request, { db }) => {
+    const url = new URL(request.url);
 
-  return new Response("not found", { status: 404 });
-});
+    if (url.pathname === "/api/items" && request.method === "GET") {
+      return Response.json(await db.select().from(items).orderBy(desc(items.createdAt)).limit(100));
+    }
+
+    return new Response("not found", { status: 404 });
+  },
+  { schema },
+);

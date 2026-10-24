@@ -7,7 +7,6 @@
   "frontend": "public",
   "compatibilityDate": "{{compatibilityDate}}",
   "database": {
-    "neonProject": "{{neonProject}}",
-    "migrate": "node scripts/migrate.js"
+    "neonProject": "{{neonProject}}"
   }
 }
