@@ -5,14 +5,22 @@ export type PackageManager = "pnpm" | "npm";
 export interface WorkflowInput {
   appDir: string;
   packageManager: PackageManager;
+  secrets: string[];
+  variables: string[];
 }
 
 // Written by `platform init` and compared by `platform ci`, so it must stay deterministic.
-export function renderWorkflow({ appDir, packageManager }: WorkflowInput): string {
+// Each secret and variable is passed by name, so the step only ever sees what the app uses.
+export function renderWorkflow({ appDir, packageManager, secrets, variables }: WorkflowInput): string {
   const install = packageManager === "pnpm" ? "pnpm install --frozen-lockfile" : "npm ci";
   const exec = packageManager === "pnpm" ? "pnpm exec platform ci" : "npx --no-install platform ci";
   const setupPnpm = packageManager === "pnpm" ? "\n      - uses: pnpm/action-setup@v4" : "";
   const workingDirectory = appDir === "." ? "" : `\n        working-directory: ${appDir}`;
+  const env = [
+    ...[...new Set(secrets)].sort().map((name) => `${name}: \${{ secrets.${name} }}`),
+    ...[...new Set(variables)].sort().map((name) => `${name}: \${{ vars.${name} }}`),
+    "GITHUB_TOKEN: ${{ github.token }}",
+  ];
 
   return `# Written by \`platform init\`; rerun it to update this file.
 name: platform
@@ -45,10 +53,6 @@ jobs:
       - run: ${install}
       - run: ${exec}${workingDirectory}
         env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          NEON_API_KEY: \${{ secrets.NEON_API_KEY }}
-          PLATFORM_SECRETS: \${{ toJSON(secrets) }}
-          PLATFORM_VARS: \${{ toJSON(vars) }}
-          GITHUB_TOKEN: \${{ github.token }}
+${env.map((line) => `          ${line}`).join("\n")}
 `;
 }

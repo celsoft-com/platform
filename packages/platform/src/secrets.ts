@@ -16,20 +16,20 @@ export function parseDotenv(text: string): Record<string, string> {
   return values;
 }
 
-// Locally secrets come from the nearest .env.secrets; in CI the workflow passes the
-// Environment's secrets as PLATFORM_SECRETS JSON. Later sources win.
-export async function loadSecrets(startDir: string, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
-  return { ...(await findEnvFile(startDir, SECRETS_FILE)), ...json(env.PLATFORM_SECRETS) };
+// Locally secrets come from the nearest .env.secrets; in CI the workflow passes each named
+// secret as an environment variable. The environment wins.
+export async function loadSecrets(startDir: string, names: string[], env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
+  return { ...(await findEnvFile(startDir, SECRETS_FILE)), ...pick(env, names) };
 }
 
-// Non-secret values that platform.jsonc references as ${NAME}: the nearest .env locally,
-// GitHub Actions variables (PLATFORM_VARS) in CI.
-export async function loadVars(startDir: string, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
-  return { ...(await findEnvFile(startDir, VARS_FILE)), ...json(env.PLATFORM_VARS) };
+// Non-secret values platform.jsonc references as ${NAME}: the nearest .env locally,
+// GitHub Actions variables passed by name in CI.
+export async function loadVars(startDir: string, names: string[], env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
+  return { ...(await findEnvFile(startDir, VARS_FILE)), ...pick(env, names) };
 }
 
-function json(text: string | undefined): Record<string, string> {
-  return text ? (JSON.parse(text) as Record<string, string>) : {};
+function pick(env: NodeJS.ProcessEnv, names: string[]): Record<string, string> {
+  return Object.fromEntries(names.filter((name) => env[name]).map((name) => [name, env[name]!]));
 }
 
 async function findEnvFile(dir: string, name: string): Promise<Record<string, string>> {

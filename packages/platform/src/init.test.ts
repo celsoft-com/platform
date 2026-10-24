@@ -64,10 +64,13 @@ describe("init", () => {
     const workflow = await readFile(join(root, WORKFLOW_PATH), "utf8");
     expect(workflow).toMatch(/working-directory: apps\/demo/);
     expect(workflow).toMatch(/pnpm exec platform ci/);
-    await expect(checkWorkflow(root, join(root, "apps", "demo"))).resolves.toBeUndefined();
+    expect(workflow).toMatch(/NEON_API_KEY: \$\{\{ secrets\.NEON_API_KEY \}\}/);
+    expect(workflow).toMatch(/APP_HOSTNAME: \$\{\{ vars\.APP_HOSTNAME \}\}/);
+    expect(workflow).not.toMatch(/toJSON/);
+    await expect(checkWorkflow(root, join(root, "apps", "demo"), config, ["APP_HOSTNAME"])).resolves.toBeUndefined();
   });
 
   it("makes ci stop when the workflow drifts", async () => {
-    await expect(checkWorkflow(root, join(root, "apps", "demo"))).rejects.toThrow(PreflightError);
+    await expect(checkWorkflow(root, join(root, "apps", "demo"), config, [])).rejects.toThrow(PreflightError);
   });
 });

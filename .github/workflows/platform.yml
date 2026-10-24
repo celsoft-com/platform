@@ -33,6 +33,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-          PLATFORM_SECRETS: ${{ toJSON(secrets) }}
-          PLATFORM_VARS: ${{ toJSON(vars) }}
+          DEMO_HOSTNAME: ${{ vars.DEMO_HOSTNAME }}
+          DEMO_NEON_PROJECT: ${{ vars.DEMO_NEON_PROJECT }}
           GITHUB_TOKEN: ${{ github.token }}

@@ -11,12 +11,12 @@ describe("parseDotenv", () => {
 });
 
 describe("loadSecrets", () => {
-  it("finds the nearest .env.secrets above the app and lets PLATFORM_SECRETS win", async () => {
+  it("finds the nearest .env.secrets above the app and lets named environment variables win", async () => {
     const root = await mkdtemp(join(tmpdir(), "secrets-"));
     const app = join(root, "apps", "demo");
     await mkdir(app, { recursive: true });
     await writeFile(join(root, ".env.secrets"), "A=file\nB=file\n");
 
-    expect(await loadSecrets(app, { PLATFORM_SECRETS: JSON.stringify({ B: "ci" }) })).toEqual({ A: "file", B: "ci" });
+    expect(await loadSecrets(app, ["B"], { B: "ci", C: "not named" })).toEqual({ A: "file", B: "ci" });
   });
 });

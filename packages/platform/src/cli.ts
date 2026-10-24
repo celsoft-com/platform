@@ -7,8 +7,8 @@ import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { ShellMigrator, WranglerCli } from "./adapters/process.js";
-import { CONFIG_FILE, ConfigError, configVariables, loadConfig, parseConfig, readConfigText } from "./config.js";
-import { checkWorkflow, init } from "./init.js";
+import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
+import { checkWorkflow, init, tokenNames } from "./init.js";
 import { cleanup, deploy, PreflightError, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
@@ -45,14 +45,12 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command.name === "init") {
-    const text = await readConfigText(appDir);
-    const vars = await loadVars(appDir);
-    const config = parseConfig(text, join(appDir, CONFIG_FILE), vars);
+    const { config, variables } = await loadApp(appDir);
     await init({
       repoRoot: repoRoot(appDir),
       appDir,
       config,
-      variables: Object.fromEntries(configVariables(text).map((name) => [name, vars[name]!])),
+      variables,
       run: new Run(dryRun, (line) => console.log(line)),
       connect: (tokens) => ({
         cloudflare: new CloudflareApi(tokens.CLOUDFLARE_API_TOKEN!),
@@ -63,8 +61,9 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  if (inCi) await checkWorkflow(repoRoot(appDir), appDir);
-  const ctx = await context(appDir, dryRun);
+  const app = await loadApp(appDir);
+  if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
+  const ctx = await context(appDir, app.config, dryRun);
 
   if (command.name === "cleanup") {
     await cleanup(ctx, command.pr);
@@ -98,11 +97,17 @@ async function commandForGitHubEvent(): Promise<Command | undefined> {
   return undefined;
 }
 
-async function context(appDir: string, dryRun: boolean): Promise<Context> {
-  const vars = await loadVars(appDir);
-  maskInCi(Object.values(vars));
-  const config = await loadConfig(appDir, vars);
-  const secrets = await loadSecrets(appDir);
+async function loadApp(appDir: string): Promise<{ config: Config; variables: Record<string, string> }> {
+  const text = await readConfigText(appDir);
+  const names = configVariables(text);
+  const vars = await loadVars(appDir, names);
+  const variables = Object.fromEntries(names.filter((name) => vars[name]).map((name) => [name, vars[name]!]));
+  maskInCi(Object.values(variables));
+  return { config: parseConfig(text, join(appDir, CONFIG_FILE), variables), variables };
+}
+
+async function context(appDir: string, config: Config, dryRun: boolean): Promise<Context> {
+  const secrets = await loadSecrets(appDir, [...tokenNames(config), ...config.secrets]);
   const cloudflareToken = requireToken(secrets, "CLOUDFLARE_API_TOKEN");
   const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : "";
   return {
