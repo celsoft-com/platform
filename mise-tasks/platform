@@ -1,0 +1,6 @@
+#!/usr/bin/env zsh
+#MISE description="Run this repo's platform CLI build: mise run platform -- <command> [--dry-run] [--dir apps/demo]"
+#MISE depends=["build"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+node packages/platform/dist/cli.js "$@"
