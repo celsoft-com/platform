@@ -39,7 +39,7 @@ It asks for the prod hostname (in your Cloudflare zone) and the Neon project id 
 Run this from the app's directory:
 
 ```sh
-npx platform init
+npx @celsoft/platform init
 ```
 
 The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each token the app needs, and stops. Steps 5 to 7 fill them in.
@@ -97,7 +97,7 @@ APP_NEON_PROJECT=quiet-meadow-12345678
 ## 9. Init
 
 ```sh
-npx platform init
+npx @celsoft/platform init
 ```
 
 It checks each token reaches your accounts, stores the tokens as GitHub secrets, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`. Commit that file and push; from then on, pushes to main deploy prod and every PR gets a preview.

@@ -16,5 +16,5 @@ cd "$work/app"
 npm install --no-audit --no-fund --loglevel=error "$tarball"
 npm install --no-audit --no-fund --loglevel=error
 npx --no-install tsc -p .
-npx --no-install platform --help >/dev/null
+npx --no-install @celsoft/platform --help >/dev/null
 echo "✓ template app installs, type-checks, and runs the platform CLI"

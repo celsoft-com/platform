@@ -74,7 +74,7 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
 export async function checkWorkflow(repoRoot: string, appDir: string, config: Config, variables: string[]): Promise<void> {
   const expected = await expectedWorkflow(repoRoot, appDir, config, variables);
   if ((await readOptional(join(repoRoot, WORKFLOW_PATH))) !== expected) {
-    throw new PreflightError(`${WORKFLOW_PATH} differs from what this platform version writes; run \`platform init\` and commit the result`);
+    throw new PreflightError(`${WORKFLOW_PATH} differs from what this platform version writes; run \`npx @celsoft/platform init\` and commit the result`);
   }
 }
 
@@ -98,7 +98,7 @@ async function prepareSecretsFile(repoRoot: string, names: string[], run: Run): 
   const values = parseDotenv(text);
   const empty = names.filter((name) => !values[name]);
   if (empty.length > 0) {
-    throw new PreflightError(`fill ${empty.join(" and ")} in ${path}, then rerun \`platform init\``);
+    throw new PreflightError(`fill ${empty.join(" and ")} in ${path}, then rerun \`npx @celsoft/platform init\``);
   }
   return values;
 }

@@ -55,12 +55,12 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
 
   const missing = configVariables(text).filter((name) => !vars[name]);
   if (missing.length > 0) {
-    throw new ConfigError(`${source} uses ${missing.join(", ")}; set them in .env, then run \`platform init\` to copy them to GitHub`);
+    throw new ConfigError(`${source} uses ${missing.join(", ")}; set them in .env, then run \`npx @celsoft/platform init\` to copy them to GitHub`);
   }
   const raw = substitute(parsed, vars);
 
   if (isObject(raw) && typeof raw.version === "number" && raw.version < CONFIG_VERSION) {
-    throw new ConfigError(`${source}: version ${raw.version} is older than this platform's ${CONFIG_VERSION}; run \`platform upgrade\``);
+    throw new ConfigError(`${source}: version ${raw.version} is older than this platform's ${CONFIG_VERSION}; run \`npx @celsoft/platform upgrade\``);
   }
 
   const result = configSchema.safeParse(raw);
@@ -76,7 +76,7 @@ export async function readConfigText(dir: string): Promise<string> {
   try {
     return await readFile(path, "utf8");
   } catch {
-    throw new ConfigError(`${path} not found; run \`platform init\``);
+    throw new ConfigError(`${path} not found; run \`npx @celsoft/platform init\``);
   }
 }
 
