@@ -63,11 +63,12 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **One file**: `platform.jsonc` at the repo root, validated by a published JSON schema, is everything a project tells the platform.
     1. **App name**: unique within the Cloudflare account; every resource name derives from it.
     2. **Hostname**: the prod hostname in the zone, apex allowed.
-    3. **Frontend**: the directory holding the built static files.
-    4. **Database**: the app's Neon project id, and the command that runs its migrations.
-    5. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
-    6. **Compatibility date**: the Workers runtime date the app runs against.
-    7. **Config version**: the platform major version the file's shape matches.
+    3. **Worker**: the path to the Worker's entry module.
+    4. **Frontend**: the directory holding the built static files, if any.
+    5. **Database**: the app's Neon project id, and the command that runs its migrations.
+    6. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
+    7. **Compatibility date**: the Workers runtime date the app runs against.
+    8. **Config version**: the platform major version the file's shape matches.
 2. **Derived**: everything else comes from that file and the environment, never written by the project.
     1. **Resource names**: Worker, Neon branch and Hyperdrive config, for prod and each PR.
     2. **Preview hostnames**: one per PR, under the zone.

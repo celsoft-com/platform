@@ -2,3 +2,5 @@
 .env.secrets
 node_modules
 dist
+*.tsbuildinfo
+packages/platform/schema.json
