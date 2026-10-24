@@ -2,13 +2,15 @@ import postgres from "postgres";
 import type { Pool } from "pg";
 import { AUTH_PATH, authPool, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
+import { createFiles, type Files, type FilesBindings } from "./files.js";
 
 export type { Auth } from "./auth.js";
 export type { Email, EmailMessage } from "./email.js";
+export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
 
 export type Sql = postgres.Sql;
 
-export interface PlatformBindings extends EmailBindings {
+export interface PlatformBindings extends EmailBindings, FilesBindings {
   DB?: { connectionString: string };
   APP_URL?: string;
   BETTER_AUTH_SECRET?: string;
@@ -24,6 +26,7 @@ export interface AppContext<Env> {
   env: Env;
   readonly sql: Sql;
   readonly email: Email;
+  readonly files: Files;
   readonly auth: Auth;
   session(): Promise<Session | null>;
   waitUntil(promise: Promise<unknown>): void;
@@ -46,6 +49,7 @@ export function defineApp<Secrets extends object = object>(handler: Handler<Secr
     async fetch(request: Request, env: Secrets & PlatformBindings, ctx: ExecutionContext): Promise<Response> {
       let sql: Sql | undefined;
       let email: Email | undefined;
+      let files: Files | undefined;
       let auth: Auth | undefined;
       let pool: Pool | undefined;
 
@@ -57,6 +61,9 @@ export function defineApp<Secrets extends object = object>(handler: Handler<Secr
         },
         get email() {
           return (email ??= createEmail(env));
+        },
+        get files() {
+          return (files ??= createFiles(env));
         },
         get auth() {
           if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");

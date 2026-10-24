@@ -178,6 +178,8 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Sender**: each app sends from its own hostname, so the project's existing email setup is never touched; the platform registers the hostname in Resend and writes its DKIM and bounce records in the zone, tagged as its own.
     2. **Send only**: mail comes from `noreply@` the app's hostname, with no receiving and no reply-to.
 3. **Files**: R2, with a prod bucket per app and previews under a per-PR prefix.
+    1. **Helper**: `app.files` stores objects by path, `/` making folders, with JSON helpers and folder listing; a preview's prefix is added for it.
+    2. **Cleanup**: closing a PR deletes its folder; the preview bucket also expires files after 14 days as a backstop.
 4. **Background work**: Queues and Cron Triggers.
 5. **Realtime**: Durable Objects rooms over WebSockets.
 6. **MCP**: an MCP server in the runtime library, behind auth.

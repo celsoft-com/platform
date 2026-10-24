@@ -3,6 +3,8 @@ import { MANAGED_COMMENT } from "../lifecycle.js";
 import type { Cloudflare, DnsRecord, Hyperdrive, Zone, ZoneRecord } from "../ports.js";
 import { originOf } from "../target.js";
 
+const EXPIRY_RULE = "platform-expiry";
+
 export class CloudflareApi implements Cloudflare {
   private readonly client: CloudflareClient;
   private account: string | undefined;
@@ -87,6 +89,38 @@ export class CloudflareApi implements Cloudflare {
 
   async managedDnsRecords(zoneId: string): Promise<ZoneRecord[]> {
     return this.listRecords({ zone_id: zoneId, comment: { exact: MANAGED_COMMENT } });
+  }
+
+  async findBucket(name: string): Promise<boolean> {
+    const { buckets = [] } = await this.client.r2.buckets.list({ account_id: await this.accountId(), name_contains: name });
+    return buckets.some((b) => b.name === name);
+  }
+
+  async createBucket(name: string): Promise<void> {
+    await this.client.r2.buckets.create({ account_id: await this.accountId(), name });
+  }
+
+  async bucketExpiryDays(name: string): Promise<number | undefined> {
+    const { rules = [] } = await this.client.r2.buckets.lifecycle.get(name, { account_id: await this.accountId() });
+    const condition = rules.find((r) => r.id === EXPIRY_RULE && r.enabled)?.deleteObjectsTransition?.condition;
+    return condition?.type === "Age" ? condition.maxAge / 86400 : undefined;
+  }
+
+  async setBucketExpiry(name: string, days: number): Promise<void> {
+    await this.client.r2.buckets.lifecycle.update(name, {
+      account_id: await this.accountId(),
+      rules: [{ id: EXPIRY_RULE, enabled: true, conditions: { prefix: "" }, deleteObjectsTransition: { condition: { type: "Age", maxAge: days * 86400 } } }],
+    });
+  }
+
+  async deleteObjects(bucket: string, prefix: string): Promise<number> {
+    const account_id = await this.accountId();
+    const keys: string[] = [];
+    for await (const object of this.client.r2.buckets.objects.list(bucket, { account_id, prefix })) {
+      if (object.key) keys.push(object.key);
+    }
+    for (const key of keys) await this.client.r2.buckets.objects.delete(key, { account_id, bucket_name: bucket });
+    return keys.length;
   }
 
   async deleteDnsRecord(zoneId: string, id: string): Promise<void> {

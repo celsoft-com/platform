@@ -71,6 +71,25 @@ export class FakeCloudflare implements Cloudflare {
   async dnsRecords(_zoneId: string, name: string) {
     return this.records.filter((r) => r.name === name);
   }
+  buckets = new Map<string, { expiryDays?: number; keys: string[] }>();
+  async findBucket(name: string) {
+    return this.buckets.has(name);
+  }
+  async createBucket(name: string) {
+    this.buckets.set(name, { keys: [] });
+  }
+  async bucketExpiryDays(name: string) {
+    return this.buckets.get(name)?.expiryDays;
+  }
+  async setBucketExpiry(name: string, days: number) {
+    this.buckets.get(name)!.expiryDays = days;
+  }
+  async deleteObjects(bucket: string, prefix: string) {
+    const b = this.buckets.get(bucket)!;
+    const before = b.keys.length;
+    b.keys = b.keys.filter((k) => !k.startsWith(prefix));
+    return before - b.keys.length;
+  }
   async managedDnsRecords() {
     return this.records.filter((r) => r.managed);
   }

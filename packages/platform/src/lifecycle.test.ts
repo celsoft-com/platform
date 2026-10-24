@@ -184,3 +184,30 @@ describe("auth and email", () => {
     for (const value of values) expect(log.join("\n")).not.toContain(value);
   });
 });
+
+describe("files", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+
+  it("gives prod its own bucket with no prefix", async () => {
+    await deploy(filesCtx(), { kind: "prod" });
+    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo-files"]);
+    const d = ports.wrangler.deploys[0]!.config;
+    expect(d.r2_buckets).toEqual([{ binding: "FILES", bucket_name: "demo-files" }]);
+    expect(d.vars).not.toHaveProperty("FILES_PREFIX");
+  });
+
+  it("puts previews in a shared, expiring bucket under the PR's folder", async () => {
+    await deploy(filesCtx(), { kind: "preview", pr: 7 });
+    await deploy(filesCtx(), { kind: "preview", pr: 8 });
+    expect(ports.cloudflare.buckets.get("demo-previews")).toMatchObject({ expiryDays: 14 });
+    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ FILES_PREFIX: "pr-7/" });
+    expect(log.filter((l) => l.includes("expire files"))).toHaveLength(1);
+  });
+
+  it("cleanup deletes only that PR's files", async () => {
+    await deploy(filesCtx(), { kind: "preview", pr: 7 });
+    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-7/b/c.json", "pr-8/a.txt"];
+    await cleanup(filesCtx(), 7);
+    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+  });
+});

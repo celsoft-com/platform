@@ -29,6 +29,7 @@ export const configSchema = z
       .optional(),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
     auth: z.boolean().default(false).describe("Sign-up and login with email and password; needs database and email"),
+    files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
     secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE name")).default([]),
   })
   .strict()

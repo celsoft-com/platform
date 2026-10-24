@@ -7,9 +7,10 @@ export interface WranglerInput {
   accountId: string;
   hyperdriveId: string | undefined;
   vars: Record<string, string>;
+  bucket?: string | undefined;
 }
 
-export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars }: WranglerInput): object {
+export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket }: WranglerInput): object {
   return {
     name: worker,
     account_id: accountId,
@@ -24,5 +25,6 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
       assets: { directory: config.frontend, not_found_handling: "single-page-application", run_worker_first: ["/api/*"] },
     }),
     ...(hyperdriveId && { hyperdrive: [{ binding: "DB", id: hyperdriveId }] }),
+    ...(bucket && { r2_buckets: [{ binding: "FILES", bucket_name: bucket }] }),
   };
 }

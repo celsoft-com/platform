@@ -29,6 +29,7 @@ It creates `.env.secrets` (gitignored) with a blank entry for each token below, 
     | Account > Workers Scripts > Edit | Deploy and delete Workers, and set their secrets |
     | Account > Hyperdrive > Edit | Create and delete database connection configs |
     | Account > Account Settings > Read | Find the account id |
+    | Account > Workers R2 Storage > Edit | Create file buckets, and delete a preview's files when its PR closes |
     | Zone > Workers Routes > Edit | Attach app and preview hostnames |
     | Zone > Zone > Read | Find the zone by its domain |
     | Zone > DNS > Edit | Write the email-sending records for each app hostname |

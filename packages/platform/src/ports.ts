@@ -49,6 +49,11 @@ export interface Cloudflare {
   dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
   createDnsRecord(zoneId: string, record: DnsRecord): Promise<void>;
   managedDnsRecords(zoneId: string): Promise<ZoneRecord[]>;
+  findBucket(name: string): Promise<boolean>;
+  createBucket(name: string): Promise<void>;
+  bucketExpiryDays(name: string): Promise<number | undefined>;
+  setBucketExpiry(name: string, days: number): Promise<void>;
+  deleteObjects(bucket: string, prefix: string): Promise<number>;
   deleteDnsRecord(zoneId: string, id: string): Promise<void>;
 }
 

@@ -71,14 +71,30 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     }
   }
 
+  if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
+
   const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
   if (config.email) {
     Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${hostname}` });
   }
+  if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars });
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined });
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
   return { hostname };
+}
+
+export const PREVIEW_FILES_DAYS = 14;
+
+// The shared preview bucket expires files after two weeks, a backstop for cleanups that never ran.
+async function ensureBucket({ ports, run }: Context, bucket: string, preview: boolean): Promise<void> {
+  await run.ensure(`R2 bucket ${bucket}`, async () => ((await ports.cloudflare.findBucket(bucket)) ? true : undefined), async () => {
+    await ports.cloudflare.createBucket(bucket);
+    return true;
+  }, true);
+  if (preview && (run.dryRun || (await ports.cloudflare.bucketExpiryDays(bucket)) !== PREVIEW_FILES_DAYS)) {
+    await run.mutate(`expire files in ${bucket} after ${PREVIEW_FILES_DAYS} days`, () => ports.cloudflare.setBucketExpiry(bucket, PREVIEW_FILES_DAYS), undefined);
+  }
 }
 
 export const DEV_BRANCH = "dev";
@@ -112,6 +128,8 @@ export async function dev(ctx: Context): Promise<void> {
     accountId: "",
     hyperdriveId: config.database ? "local" : undefined,
     vars,
+    // wrangler dev keeps this bucket on disk locally; nothing is created in Cloudflare.
+    bucket: config.files ? `${config.name}-dev` : undefined,
   }) as Record<string, unknown>;
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${DEV_URL}; email is captured to this terminal`);
@@ -190,6 +208,10 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
     if (branch) {
       await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);
     }
+  }
+
+  if (config.files && (await ports.cloudflare.findBucket(n.bucket))) {
+    await run.mutate(`delete files under ${n.filesPrefix} in ${n.bucket}`, () => ports.cloudflare.deleteObjects(n.bucket, n.filesPrefix), 0);
   }
 }
 
