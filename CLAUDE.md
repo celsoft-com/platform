@@ -11,7 +11,7 @@ The celsoft-com platform repository.
 
 - **Design:** design and change code following the `codebase-design` skill. If it is not
   available, install it with `npx -y skills add mattpocock/skills --skill codebase-design -g -y`.
-- **Commits:** auto-commit, no push
+- **Commits:** auto-commit and push every change, so any step can be rolled back
 - **Tools:** pin every tool version in this project's `mise.toml` and run tools through
   mise, following the `seanodell-mise-usage` skill. Install nothing globally (`brew`,
   `npm -g`, `pip --user`, `uv tool`, `go install`) unless mise cannot provide the tool, and
