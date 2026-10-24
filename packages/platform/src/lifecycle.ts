@@ -97,13 +97,13 @@ async function ensureMailDomain({ ports, run }: Context, hostname: string, zone:
     const name = `${record.name}.${hostname}`;
     const existing = await ports.cloudflare.dnsRecords(zone.id, name);
     if (existing.some((e) => e.type === record.type && unquote(e.content) === unquote(record.content))) {
-      run.note(`✓ ${record.type} record ${name}`);
+      run.note(`✓ ${record.type} record ${record.name}`);
       continue;
     }
     if (existing.some((e) => e.type === record.type && !e.managed)) {
-      throw new PreflightError(`${name} already has a ${record.type} record the platform did not create; remove it or send email from another hostname`);
+      throw new PreflightError(`${record.name} below the app hostname already has a ${record.type} record the platform did not create; remove it or send email from another hostname`);
     }
-    await run.mutate(`create ${record.type} record ${name}`, () => ports.cloudflare.createDnsRecord(zone.id, { ...record, name }), undefined);
+    await run.mutate(`create ${record.type} record ${record.name}`, () => ports.cloudflare.createDnsRecord(zone.id, { ...record, name }), undefined);
   }
 
   if (!domain.verified) {
