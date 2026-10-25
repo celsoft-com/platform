@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Config } from "./config.js";
-import { PreflightError, requirePostgres } from "./lifecycle.js";
+import { PreflightError, requirePostgres, requireProjectKey } from "./lifecycle.js";
 import type { Cloudflare, GitHub, Mail, Neon } from "./ports.js";
 import type { Run } from "./run.js";
 import { parseDotenv, SECRETS_FILE, VARS_FILE } from "./secrets.js";
@@ -38,6 +38,7 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
   if (!zone) throw new PreflightError(`the Cloudflare token cannot see a zone for ${config.hostname}; check its Zone Resources`);
   run.note(`✓ Cloudflare account and zone ${zone.name}`);
   if (config.database) {
+    await requireProjectKey(neon);
     await requirePostgres(neon, config.database.neonProject);
     run.note(`✓ Neon project ${config.database.neonProject}, on Postgres 18 or later`);
   }

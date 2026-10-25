@@ -105,7 +105,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>App claim</strong></td><td>(none)</td><td><code>apps/&lt;app&gt;.json</code> in <code>celsoft-platform</code></td><td>Exact name</td><td>Destroy, last</td></tr>
 <tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
 <tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Resend chooses the names, so each record's comment field reads <code>managed by @celsoft/platform for &lt;app&gt;</code></td><td>Destroy</td></tr>
-<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
+<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches, checked on every run because only a broader key can list projects; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
 <tr><td><strong>Preview branch</strong></td><td><code>pr-&lt;n&gt;</code></td><td>(none)</td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>Backup branch</strong></td><td>(none)</td><td><code>backup-&lt;time&gt;</code></td><td>Name starting <code>backup-</code></td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
 <tr><td><strong>Dev branch</strong></td><td>(none)</td><td><code>dev</code></td><td>Exact name</td><td><code>destroy --data</code></td></tr>
@@ -223,6 +223,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Check**: `platform ci` stops a run whose schema has changes with no generated migration; CI never generates, because rename prompts need a person.
     5. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
     6. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
+    7. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
 5. **Platform provides**: through `defineApp` in the runtime library.
     1. **Database**: `app.db`, a Drizzle client typed with the app's schema, over one `pg` pool shared with auth.
     2. **Auth routes**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset, organizations when on).

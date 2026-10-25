@@ -15,7 +15,7 @@ import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, destroy, dev, findPreviews, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dev, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
@@ -93,6 +93,7 @@ async function main(argv: string[]): Promise<void> {
   }
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
   const ctx = await context(appDir, app.config, dryRun);
+  if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
 
   if (command.name === "cleanup") {
     await cleanup(ctx, command.pr);

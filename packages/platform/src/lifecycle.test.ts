@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, dnsComment, findPreviews, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dnsComment, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -331,6 +331,14 @@ describe("destroy", () => {
     expect(ports.cloudflare.workers.size).toBe(2);
     expect(ports.migrator.dropped).toEqual([]);
     expect(log).toContain("~ would delete Worker demo--pr-7");
+  });
+});
+
+describe("neon key scope", () => {
+  it("accepts a project-scoped key and refuses one that can list projects", async () => {
+    await expect(requireProjectKey(ports.neon)).resolves.toBeUndefined();
+    ports.neon.projectScoped = false;
+    await expect(requireProjectKey(ports.neon)).rejects.toThrow(/project-scoped/);
   });
 });
 
