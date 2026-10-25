@@ -35,7 +35,13 @@ export interface DnsRecord {
 
 export interface ZoneRecord extends DnsRecord {
   id: string;
-  managed: boolean;
+  comment: string | undefined;
+}
+
+// What versions before the `--` names wrote on a Worker, read only to remove their old previews.
+export interface LegacyWorker {
+  app: string | null;
+  hyperdriveIds: string[];
 }
 
 export interface Cloudflare {
@@ -47,21 +53,23 @@ export interface Cloudflare {
   updateHyperdrive(id: string, connectionUri: string): Promise<Hyperdrive>;
   deleteHyperdrive(id: string): Promise<void>;
   findWorker(name: string): Promise<boolean>;
-  workerOwner(name: string): Promise<{ app: string | null; hyperdriveIds: string[] } | undefined>;
-  tagWorker(name: string, app: string, pr: number | undefined): Promise<void>;
+  legacyWorker(name: string): Promise<LegacyWorker | undefined>;
   listWorkers(namePrefix: string): Promise<string[]>;
   deleteWorker(name: string): Promise<void>;
   workerSecretNames(worker: string): Promise<string[]>;
   dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
-  createDnsRecord(zoneId: string, record: DnsRecord): Promise<void>;
-  managedDnsRecords(zoneId: string): Promise<ZoneRecord[]>;
+  createDnsRecord(zoneId: string, record: DnsRecord, comment: string): Promise<void>;
+  setDnsRecordComment(zoneId: string, id: string, comment: string): Promise<void>;
+  commentedDnsRecords(zoneId: string, comment: string): Promise<ZoneRecord[]>;
   findBucket(name: string): Promise<boolean>;
-  createBucket(name: string, app: string): Promise<void>;
-  bucketOwner(name: string): Promise<string | null | undefined>;
+  createBucket(name: string): Promise<void>;
+  legacyBucketApp(name: string): Promise<string | null | undefined>;
   deleteBucket(name: string): Promise<void>;
   bucketExpiryDays(name: string): Promise<number | undefined>;
   setBucketExpiry(name: string, days: number): Promise<void>;
   deleteObjects(bucket: string, prefix: string): Promise<number>;
+  listObjects(bucket: string, prefix: string): Promise<string[]>;
+  copyObject(from: string, key: string, to: string): Promise<void>;
   deleteDnsRecord(zoneId: string, id: string): Promise<void>;
 }
 
@@ -82,6 +90,21 @@ export interface Mail {
   deleteApiKey(id: string): Promise<void>;
 }
 
+// The repo that deploys an app, by GitHub's numeric id, which survives renames and transfers.
+export interface Repo {
+  id: number;
+  name: string;
+}
+
+// One claim per app name in the account-wide registry.
+export interface Registry {
+  get(app: string): Promise<Repo | undefined>;
+  // Writes only when the app has no claim yet; false when another write got there first.
+  claim(app: string, repo: Repo): Promise<boolean>;
+  set(app: string, repo: Repo): Promise<void>;
+  release(app: string): Promise<void>;
+}
+
 export interface Wrangler {
   deploy(wranglerConfig: object, secrets: Record<string, string>): Promise<void>;
   dev(wranglerConfig: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void>;
@@ -98,12 +121,14 @@ export interface GitHub {
   setSecret(name: string, value: string): Promise<void>;
   ensureEnvironment(name: string): Promise<void>;
   openPullRequests(): Promise<number[]>;
+  repository(): Promise<Repo>;
 }
 
 export interface Ports {
   neon: Neon;
   cloudflare: Cloudflare;
   mail: Mail;
+  registry: Registry;
   wrangler: Wrangler;
   migrator: Migrator;
 }

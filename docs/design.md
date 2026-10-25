@@ -200,9 +200,10 @@ A published CLI, runtime library and app template that create and reuse each app
     7. **`db generate`**: writes new migrations from the platform's tables and the app's schema.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
     9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape.
-    10. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
-    11. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
-    12. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
+    10. **`apps move`**: gives the app's name to the repo it runs in; only ever suggested by the error that needs it.
+    11. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
+    12. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
+    13. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.

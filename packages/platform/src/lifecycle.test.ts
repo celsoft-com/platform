@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, PreflightError, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dnsComment, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -23,6 +23,7 @@ function ctx(dryRun = false): Context {
     ports,
     run: new Run(dryRun, (line) => log.push(line)),
     secrets: { SESSION_SECRET: "s3cret", UNRELATED: "x" },
+    repo: async () => ({ id: 101, name: "acme/demo" }),
     now: () => new Date("2026-10-24T12:34:56Z"),
   };
 }
@@ -97,10 +98,10 @@ describe("preview", () => {
   it("creates a branch, Hyperdrive and Worker named for the PR", async () => {
     const { hostname } = await deploy(ctx(), { kind: "preview", pr: 7 });
 
-    expect(hostname).toBe("demo-pr-7.example.com");
+    expect(hostname).toBe("pr-7.demo.example.com");
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "pr-7"]);
-    expect(ports.cloudflare.hyperdrives.map((h) => h.name)).toEqual(["demo-pr-7"]);
-    expect(ports.wrangler.deploys[0]?.config).toMatchObject({ name: "demo-pr-7" });
+    expect(ports.cloudflare.hyperdrives.map((h) => h.name)).toEqual(["demo--pr-7"]);
+    expect(ports.wrangler.deploys[0]?.config).toMatchObject({ name: "demo--pr-7", routes: [{ pattern: "pr-7.demo.example.com", custom_domain: true }] });
   });
 
   it("reuses everything on a second push", async () => {
@@ -119,7 +120,7 @@ describe("preview", () => {
     expect(ports.cloudflare.hyperdrives).toEqual([]);
     expect(ports.wrangler.deploys).toEqual([]);
     expect(log.join("\n")).toMatch(/would create Neon branch pr-7/);
-    expect(log.join("\n")).toMatch(/would deploy Worker demo-pr-7/);
+    expect(log.join("\n")).toMatch(/would deploy Worker demo--pr-7/);
   });
 
   it("cleanup deletes the Worker, Hyperdrive and branch, and is safe to repeat", async () => {
@@ -127,7 +128,7 @@ describe("preview", () => {
     await cleanup(ctx(), 7);
     await cleanup(ctx(), 7);
 
-    expect(ports.cloudflare.workers.has("demo-pr-7")).toBe(false);
+    expect(ports.cloudflare.workers.has("demo--pr-7")).toBe(false);
     expect(ports.cloudflare.hyperdrives).toEqual([]);
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production"]);
   });
@@ -164,25 +165,45 @@ describe("auth and email", () => {
     expect(ports.cloudflare.records).toHaveLength(2);
   });
 
+  it("comments each record with the app's name", async () => {
+    await deploy(authCtx(), { kind: "prod" });
+    expect(ports.cloudflare.records.map((r) => r.comment)).toEqual([dnsComment("demo"), dnsComment("demo")]);
+  });
+
   it("deletes its own records Resend no longer asks for, and leaves others alone", async () => {
     ports.cloudflare.records.push(
-      { id: "stale", type: "TXT", name: "resend._domainkey.demo.demo.example.com", content: "old", managed: true },
-      { id: "theirs", type: "TXT", name: "other.demo.example.com", content: "keep", managed: false },
+      { id: "stale", type: "TXT", name: "resend._domainkey.demo.demo.example.com", content: "old", comment: dnsComment("demo") },
+      { id: "theirs", type: "TXT", name: "other.demo.example.com", content: "keep", comment: undefined },
     );
     await deploy(authCtx(), { kind: "prod" });
     expect(ports.cloudflare.records.map((r) => r.id)).not.toContain("stale");
     expect(ports.cloudflare.records.map((r) => r.id)).toContain("theirs");
   });
 
+  it("never touches another app's records below its hostname", async () => {
+    const apex: Config = { ...authConfig, name: "shop", hostname: "example.com" };
+    ports.cloudflare.records.push({ id: "blog", type: "TXT", name: "resend._domainkey.blog.example.com", content: "p=BLOG", comment: dnsComment("blog") });
+    await deploy({ ...authCtx(), config: apex }, { kind: "prod" });
+    await destroy({ ...authCtx(), config: apex }, { data: false });
+    expect(ports.cloudflare.records.map((r) => r.id)).toEqual(["blog"]);
+  });
+
+  it("adopts its records from before the app's name was in the comment", async () => {
+    ports.mail.domains.push({ id: "dom-old", name: "demo.example.com", verified: true, records: [{ type: "TXT", name: "resend._domainkey.demo", content: "p=KEY" }] });
+    ports.cloudflare.records.push({ id: "old", type: "TXT", name: "resend._domainkey.demo.example.com", content: "p=KEY", comment: "managed by @celsoft/platform" });
+    await deploy(authCtx(), { kind: "prod" });
+    expect(ports.cloudflare.records).toMatchObject([{ id: "old", comment: dnsComment("demo") }]);
+  });
+
   it("refuses to overwrite a record the platform did not create", async () => {
-    ports.cloudflare.records.push({ id: "theirs", type: "MX", name: "send.demo.example.com", content: "someone.else", priority: 5, managed: false });
+    ports.cloudflare.records.push({ id: "theirs", type: "MX", name: "send.demo.example.com", content: "someone.else", priority: 5, comment: undefined });
     await expect(deploy(authCtx(), { kind: "prod" })).rejects.toThrow(/did not create/);
   });
 
   it("captures email in previews and never touches Resend", async () => {
     await deploy(authCtx(), { kind: "preview", pr: 7 });
     expect(ports.mail.domains).toEqual([]);
-    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ EMAIL_MODE: "capture", APP_URL: "https://demo-pr-7.example.com" });
+    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ EMAIL_MODE: "capture", APP_URL: "https://pr-7.demo.example.com" });
     expect(ports.wrangler.deploys[0]!.secrets).not.toHaveProperty("EMAIL_API_KEY");
   });
 
@@ -198,25 +219,25 @@ describe("files", () => {
 
   it("gives prod its own bucket with no prefix", async () => {
     await deploy(filesCtx(), { kind: "prod" });
-    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo-files"]);
+    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo--files"]);
     const d = ports.wrangler.deploys[0]!.config;
-    expect(d.r2_buckets).toEqual([{ binding: "FILES", bucket_name: "demo-files" }]);
+    expect(d.r2_buckets).toEqual([{ binding: "FILES", bucket_name: "demo--files" }]);
     expect(d.vars).not.toHaveProperty("FILES_PREFIX");
   });
 
   it("puts previews in a shared, expiring bucket under the PR's folder", async () => {
     await deploy(filesCtx(), { kind: "preview", pr: 7 });
     await deploy(filesCtx(), { kind: "preview", pr: 8 });
-    expect(ports.cloudflare.buckets.get("demo-previews")).toMatchObject({ expiryDays: 14 });
+    expect(ports.cloudflare.buckets.get("demo--previews")).toMatchObject({ expiryDays: 14 });
     expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ FILES_PREFIX: "pr-7/" });
     expect(log.filter((l) => l.includes("expire files"))).toHaveLength(1);
   });
 
   it("cleanup deletes only that PR's files", async () => {
     await deploy(filesCtx(), { kind: "preview", pr: 7 });
-    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-7/b/c.json", "pr-8/a.txt"];
+    ports.cloudflare.buckets.get("demo--previews")!.keys = ["pr-7/a.txt", "pr-7/b/c.json", "pr-8/a.txt"];
     await cleanup(filesCtx(), 7);
-    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+    expect(ports.cloudflare.buckets.get("demo--previews")!.keys).toEqual(["pr-8/a.txt"]);
   });
 });
 
@@ -228,8 +249,8 @@ describe("destroy", () => {
     await deploy(c, { kind: "prod" });
     await deploy(c, { kind: "preview", pr: 7 });
     await ports.neon.createBranch("p", "dev", "br-prod", true);
-    ports.cloudflare.buckets.get("demo-previews")!.keys.push("pr-7/a.txt");
-    ports.cloudflare.buckets.get("demo-files")!.keys.push("notes/a.txt");
+    ports.cloudflare.buckets.get("demo--previews")!.keys.push("pr-7/a.txt");
+    ports.cloudflare.buckets.get("demo--files")!.keys.push("notes/a.txt");
     return c;
   }
 
@@ -241,7 +262,7 @@ describe("destroy", () => {
     expect(ports.cloudflare.hyperdrives).toEqual([]);
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "backup-20261024T123456", "dev"]);
     expect(ports.migrator.dropped).toEqual([]);
-    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo-files"]);
+    expect([...ports.cloudflare.buckets.keys()]).toEqual(["demo--files"]);
     expect(ports.mail.domains).toEqual([]);
     expect(ports.mail.keys).toEqual([]);
     expect(ports.cloudflare.records).toEqual([]);
@@ -267,17 +288,40 @@ describe("destroy", () => {
     expect(ports.cloudflare.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT resend._domainkey.demo.example.com", "MX send.demo.example.com"]);
     expect(Object.keys(ports.wrangler.deploys[0]!.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
     expect(ports.cloudflare.hyperdrives).toMatchObject([{ name: "demo" }]);
-    expect(ports.cloudflare.buckets.has("demo-files")).toBe(true);
+    expect(ports.cloudflare.buckets.has("demo--files")).toBe(true);
     expect(ports.migrator.runs.at(-1)).toBe("postgresql://owner:secret@br-prod.neon.test/app");
   });
 
   it("leaves another app whose name starts with this one's alone", async () => {
     const c = await deployEverything();
-    ports.cloudflare.workers.add("demo-pr-pr-3");
-    ports.cloudflare.hyperdrives.push({ id: "other", name: "demo-pr-pr-3", origin: "", cached: false });
+    ports.cloudflare.workers.add("demo-pr--pr-3");
+    ports.cloudflare.hyperdrives.push({ id: "other", name: "demo-pr--pr-3", origin: "", cached: false });
     await destroy(c, { data: false });
-    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-pr-3"]);
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr--pr-3"]);
     expect(ports.cloudflare.hyperdrives.map((h) => h.id)).toEqual(["other"]);
+  });
+
+  it("finds what an earlier platform.jsonc turned on", async () => {
+    await deployEverything();
+    await destroy(ctx(), { data: true });
+    expect(ports.cloudflare.buckets.size).toBe(0);
+    expect(ports.mail.domains).toEqual([]);
+    expect(ports.cloudflare.records).toEqual([]);
+  });
+
+  it("leaves a provider alone when its key is missing", async () => {
+    const c = await deployEverything();
+    await destroy({ ...c, providers: { neon: false, mail: false } }, { data: true });
+    expect(ports.neon.branches.map((b) => b.name)).toContain("pr-7");
+    expect(ports.mail.domains).toHaveLength(1);
+    expect(log.join("\n")).toMatch(/no Neon key is set/);
+  });
+
+  it("releases the app's name last", async () => {
+    const c = await deployEverything();
+    await destroy(c, { data: false });
+    expect(ports.registry.claims.size).toBe(0);
+    expect(log.at(-1)).toBe("+ release the app name demo");
   });
 
   it("changes nothing on a dry run", async () => {
@@ -286,7 +330,7 @@ describe("destroy", () => {
 
     expect(ports.cloudflare.workers.size).toBe(2);
     expect(ports.migrator.dropped).toEqual([]);
-    expect(log).toContain("~ would delete Worker demo-pr-7");
+    expect(log).toContain("~ would delete Worker demo--pr-7");
   });
 });
 
@@ -298,43 +342,104 @@ describe("postgres version", () => {
   });
 });
 
-describe("ownership", () => {
-  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+describe("app name claims", () => {
+  const other = async () => ({ id: 202, name: "rival/demo" });
 
-  it("tags the Worker it deploys", async () => {
+  it("claims the app's name for the repo on the first deploy", async () => {
     await deploy(ctx(), { kind: "prod" });
-    expect(ports.cloudflare.workerTags.get("demo")).toEqual(["celsoft-platform", "app:demo"]);
+    expect(ports.registry.claims.get("demo")).toEqual({ id: 101, name: "acme/demo" });
   });
 
-  it("stops before any change when a Worker with the app's name has no platform tags", async () => {
-    ports.cloudflare.workers.add("demo");
-    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Worker demo exists, but nothing shows/);
-    expect(ports.neon.branches).toHaveLength(1);
+  it("stops before any change when another repo holds the name", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    ports.wrangler.deploys = [];
+    const c = { ...ctx(), repo: other };
+    await expect(deploy(c, { kind: "prod" })).rejects.toThrow(/belongs to acme\/demo.*apps move/);
+    await expect(cleanup(c, 7)).rejects.toThrow(PreflightError);
+    await expect(destroy(c, { data: true })).rejects.toThrow(PreflightError);
+    expect(ports.wrangler.deploys).toEqual([]);
+    expect(ports.cloudflare.workers.has("demo")).toBe(true);
+  });
+
+  it("follows a renamed repo, which keeps its id", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    await deploy({ ...ctx(), repo: async () => ({ id: 101, name: "acme/renamed" }) }, { kind: "prod" });
+    expect(ports.registry.claims.get("demo")).toEqual({ id: 101, name: "acme/renamed" });
+  });
+
+  it("hands the name to another repo with apps move", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    await moveApp({ ...ctx(), repo: other });
+    await deploy({ ...ctx(), repo: other }, { kind: "prod" });
+    expect(ports.registry.claims.get("demo")).toEqual({ id: 202, name: "rival/demo" });
+  });
+
+  it("loses a race for the name to the first repo's claim", async () => {
+    ports.registry.claim = async () => {
+      ports.registry.claims.set("demo", { id: 202, name: "rival/demo" });
+      return false;
+    };
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/belongs to rival\/demo/);
     expect(ports.wrangler.deploys).toEqual([]);
   });
+});
 
-  it("stops on a bucket whose marker is missing", async () => {
-    ports.cloudflare.buckets.set("demo-files", { keys: [] });
-    await expect(deploy(filesCtx(), { kind: "prod" })).rejects.toThrow(/R2 bucket demo-files/);
-  });
+describe("earlier names", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+  const oldPreview = (pr: number, app = "demo") => {
+    ports.cloudflare.workers.add(`demo-pr-${pr}`);
+    ports.cloudflare.legacyTags.set(`demo-pr-${pr}`, ["celsoft-platform", `app:${app}`, `pr:${pr}`]);
+    ports.cloudflare.hyperdrives.push({ id: `hd-old-${pr}`, name: `demo-pr-${pr}`, origin: "owner@br-prod.neon.test/app", cached: false });
+    ports.cloudflare.workerHyperdrives.set(`demo-pr-${pr}`, [`hd-old-${pr}`]);
+  };
 
-  it("stops on a Hyperdrive config that points outside the app's Neon project", async () => {
-    ports.cloudflare.hyperdrives.push({ id: "hd-x", name: "demo", origin: "owner@elsewhere.example/app", cached: false });
-    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Hyperdrive config demo/);
-  });
-
-  it("accepts a Hyperdrive config left by a deploy that never got as far as its Worker", async () => {
-    await ports.cloudflare.createHyperdrive("demo", "postgresql://owner:secret@br-prod.neon.test/app");
-    await deploy(ctx(), { kind: "prod" });
-    expect(ports.wrangler.deploys).toHaveLength(1);
-  });
-
-  it("destroy deletes nothing when any resource is unproven", async () => {
+  it("copies the old prod bucket into the new one, then deletes it", async () => {
+    ports.cloudflare.buckets.set("demo-files", { keys: [".celsoft-platform", "notes/a.txt", "notes/b.txt"], legacyOwner: "demo" });
     await deploy(filesCtx(), { kind: "prod" });
-    ports.cloudflare.workers.add("demo-pr-4");
-    await expect(destroy(filesCtx(), { data: true })).rejects.toThrow(/Worker demo-pr-4/);
-    expect(ports.cloudflare.workers.has("demo")).toBe(true);
-    expect(ports.migrator.dropped).toEqual([]);
+    expect(ports.cloudflare.buckets.has("demo-files")).toBe(false);
+    expect(ports.cloudflare.buckets.get("demo--files")!.keys).toEqual(["notes/a.txt", "notes/b.txt"]);
+    expect(ports.wrangler.deploys[0]!.config.r2_buckets).toEqual([{ binding: "FILES", bucket_name: "demo--files" }]);
+  });
+
+  it("copies files the old Worker added during the deploy", async () => {
+    ports.cloudflare.buckets.set("demo-files", { keys: ["notes/a.txt"], legacyOwner: "demo" });
+    const deployWorker = ports.wrangler.deploy.bind(ports.wrangler);
+    ports.wrangler.deploy = async (c, secrets) => {
+      ports.cloudflare.buckets.get("demo-files")!.keys.push("notes/late.txt");
+      await deployWorker(c, secrets);
+    };
+    await deploy(filesCtx(), { kind: "prod" });
+    expect(ports.cloudflare.buckets.get("demo--files")!.keys).toEqual(["notes/a.txt", "notes/late.txt"]);
+  });
+
+  it("leaves an old-named bucket alone unless its marker names the app", async () => {
+    ports.cloudflare.buckets.set("demo-files", { keys: ["x"], legacyOwner: "other" });
+    await deploy(filesCtx(), { kind: "prod" });
+    expect(ports.cloudflare.buckets.get("demo-files")!.keys).toEqual(["x"]);
+  });
+
+  it("cleans up an old-named preview whose tags name the app", async () => {
+    oldPreview(5);
+    ports.cloudflare.buckets.set("demo-previews", { keys: [".celsoft-platform", "pr-5/a.txt"], legacyOwner: "demo" });
+    expect(await sweep(ctx(), [])).toEqual([5]);
+    expect(ports.cloudflare.workers.size).toBe(0);
+    expect(ports.cloudflare.hyperdrives).toEqual([]);
+    expect(ports.cloudflare.buckets.has("demo-previews")).toBe(false);
+  });
+
+  it("leaves an old-named Worker alone when its tags name another app", async () => {
+    oldPreview(5, "demo-pr-5");
+    ports.cloudflare.hyperdrives[0]!.origin = "owner@elsewhere.example/app";
+    await cleanup(ctx(), 5);
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-5"]);
+    expect(ports.cloudflare.hyperdrives).toHaveLength(1);
+  });
+
+  it("destroy removes old-named previews too", async () => {
+    oldPreview(5);
+    await destroy(ctx(), { data: false });
+    expect(ports.cloudflare.workers.size).toBe(0);
+    expect(ports.cloudflare.hyperdrives).toEqual([]);
   });
 });
 
@@ -344,12 +449,12 @@ describe("sweep", () => {
   it("cleans up previews whose pull request is closed and keeps open ones", async () => {
     await deploy(filesCtx(), { kind: "preview", pr: 7 });
     await deploy(filesCtx(), { kind: "preview", pr: 8 });
-    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-8/a.txt"];
+    ports.cloudflare.buckets.get("demo--previews")!.keys = ["pr-7/a.txt", "pr-8/a.txt"];
 
     expect(await sweep(filesCtx(), [8])).toEqual([7]);
-    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-8"]);
+    expect([...ports.cloudflare.workers]).toEqual(["demo--pr-8"]);
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "pr-8"]);
-    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+    expect(ports.cloudflare.buckets.get("demo--previews")!.keys).toEqual(["pr-8/a.txt"]);
   });
 
   it("finds a preview from any piece left behind", async () => {
@@ -360,15 +465,10 @@ describe("sweep", () => {
 });
 
 describe("cleanup by what exists", () => {
-  it("tags a preview Worker with its pull request", async () => {
-    await deploy(ctx(), { kind: "preview", pr: 7 });
-    expect(ports.cloudflare.workerTags.get("demo-pr-7")).toEqual(["celsoft-platform", "app:demo", "pr:7"]);
-  });
-
   it("removes a preview's files even after platform.jsonc turned files off", async () => {
     await deploy({ ...ctx(), config: { ...config, files: true } }, { kind: "preview", pr: 7 });
-    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt"];
+    ports.cloudflare.buckets.get("demo--previews")!.keys = ["pr-7/a.txt"];
     await cleanup(ctx(), 7);
-    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual([]);
+    expect(ports.cloudflare.buckets.get("demo--previews")!.keys).toEqual([]);
   });
 });

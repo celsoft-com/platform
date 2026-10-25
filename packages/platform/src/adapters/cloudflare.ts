@@ -1,7 +1,7 @@
 import CloudflareClient from "cloudflare";
-import { MANAGED_COMMENT } from "../lifecycle.js";
-import { appTag, BUCKET_MARKER, PLATFORM_TAG, prTag } from "../ownership.js";
-import type { Cloudflare, DnsRecord, Hyperdrive, Zone, ZoneRecord } from "../ports.js";
+import { LEGACY_BUCKET_MARKER, LEGACY_PLATFORM_TAG } from "../legacy.js";
+import type { Cloudflare, DnsRecord, Hyperdrive, LegacyWorker, Zone, ZoneRecord } from "../ports.js";
+import { R2S3 } from "./r2.js";
 import { originOf } from "../target.js";
 
 const EXPIRY_RULE = "platform-expiry";
@@ -9,9 +9,11 @@ const EXPIRY_RULE = "platform-expiry";
 export class CloudflareApi implements Cloudflare {
   private readonly client: CloudflareClient;
   private account: string | undefined;
+  readonly s3: R2S3;
 
   constructor(apiToken: string) {
     this.client = new CloudflareClient({ apiToken });
+    this.s3 = new R2S3(apiToken, () => this.accountId());
   }
 
   async accountId(): Promise<string> {
@@ -80,19 +82,14 @@ export class CloudflareApi implements Cloudflare {
     return false;
   }
 
-  async workerOwner(name: string): Promise<{ app: string | null; hyperdriveIds: string[] } | undefined> {
+  async legacyWorker(name: string): Promise<LegacyWorker | undefined> {
     if (!(await this.findWorker(name))) return undefined;
     const account_id = await this.accountId();
     const { tags } = await this.client.workers.scripts.settings.get(name, { account_id });
     const { bindings = [] } = await this.client.workers.scripts.scriptAndVersionSettings.get(name, { account_id });
-    const app = tags?.includes(PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
+    const app = tags?.includes(LEGACY_PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
     const hyperdriveIds = (bindings as { type: string; id?: string }[]).filter((b) => b.type === "hyperdrive" && b.id).map((b) => b.id!);
     return { app, hyperdriveIds };
-  }
-
-  async tagWorker(name: string, app: string, pr: number | undefined): Promise<void> {
-    const tags = [PLATFORM_TAG, appTag(app), ...(pr ? [prTag(pr)] : [])];
-    await this.client.workers.scripts.settings.edit(name, { account_id: await this.accountId(), tags });
   }
 
   async listWorkers(namePrefix: string): Promise<string[]> {
@@ -121,8 +118,12 @@ export class CloudflareApi implements Cloudflare {
     return this.listRecords({ zone_id: zoneId, name: { exact: name } });
   }
 
-  async managedDnsRecords(zoneId: string): Promise<ZoneRecord[]> {
-    return this.listRecords({ zone_id: zoneId, comment: { exact: MANAGED_COMMENT } });
+  async commentedDnsRecords(zoneId: string, comment: string): Promise<ZoneRecord[]> {
+    return this.listRecords({ zone_id: zoneId, comment: { exact: comment } });
+  }
+
+  async setDnsRecordComment(zoneId: string, id: string, comment: string): Promise<void> {
+    await this.client.dns.records.edit(id, { zone_id: zoneId, comment } as Parameters<typeof this.client.dns.records.edit>[1]);
   }
 
   async findBucket(name: string): Promise<boolean> {
@@ -130,15 +131,13 @@ export class CloudflareApi implements Cloudflare {
     return buckets.some((b) => b.name === name);
   }
 
-  async createBucket(name: string, app: string): Promise<void> {
-    const account_id = await this.accountId();
-    await this.client.r2.buckets.create({ account_id, name });
-    await this.client.r2.buckets.objects.upload(BUCKET_MARKER, app, { account_id, bucket_name: name });
+  async createBucket(name: string): Promise<void> {
+    await this.client.r2.buckets.create({ account_id: await this.accountId(), name });
   }
 
-  async bucketOwner(name: string): Promise<string | null | undefined> {
+  async legacyBucketApp(name: string): Promise<string | null | undefined> {
     if (!(await this.findBucket(name))) return undefined;
-    const response = await this.client.r2.buckets.objects.get(BUCKET_MARKER, { account_id: await this.accountId(), bucket_name: name }).catch(() => undefined);
+    const response = await this.client.r2.buckets.objects.get(LEGACY_BUCKET_MARKER, { account_id: await this.accountId(), bucket_name: name }).catch(() => undefined);
     return response?.ok ? (await response.text()).trim() : null;
   }
 
@@ -161,12 +160,22 @@ export class CloudflareApi implements Cloudflare {
 
   async deleteObjects(bucket: string, prefix: string): Promise<number> {
     const account_id = await this.accountId();
+    const keys = await this.listObjects(bucket, prefix);
+    for (const key of keys) await this.client.r2.buckets.objects.delete(key, { account_id, bucket_name: bucket });
+    return keys.length;
+  }
+
+  async listObjects(bucket: string, prefix: string): Promise<string[]> {
+    const account_id = await this.accountId();
     const keys: string[] = [];
     for await (const object of this.client.r2.buckets.objects.list(bucket, { account_id, prefix })) {
       if (object.key) keys.push(object.key);
     }
-    for (const key of keys) await this.client.r2.buckets.objects.delete(key, { account_id, bucket_name: bucket });
-    return keys.length;
+    return keys;
+  }
+
+  async copyObject(from: string, key: string, to: string): Promise<void> {
+    await this.s3.copy(from, key, to);
   }
 
   async deleteDnsRecord(zoneId: string, id: string): Promise<void> {
@@ -177,19 +186,19 @@ export class CloudflareApi implements Cloudflare {
     const records: ZoneRecord[] = [];
     for await (const r of this.client.dns.records.list(params)) {
       const priority = "priority" in r ? r.priority : undefined;
-      records.push({ id: r.id, type: r.type, name: r.name, content: String(r.content ?? ""), ...(priority !== undefined && { priority }), managed: r.comment === MANAGED_COMMENT });
+      records.push({ id: r.id, type: r.type, name: r.name, content: String(r.content ?? ""), ...(priority !== undefined && { priority }), comment: r.comment ?? undefined });
     }
     return records;
   }
 
-  async createDnsRecord(zoneId: string, record: DnsRecord): Promise<void> {
+  async createDnsRecord(zoneId: string, record: DnsRecord, comment: string): Promise<void> {
     await this.client.dns.records.create({
       zone_id: zoneId,
       type: record.type,
       name: record.name,
       content: record.content,
       ttl: 1,
-      comment: MANAGED_COMMENT,
+      comment,
       ...(record.priority !== undefined && { priority: record.priority }),
     } as Parameters<typeof this.client.dns.records.create>[0]);
   }

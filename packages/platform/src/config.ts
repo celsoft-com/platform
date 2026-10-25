@@ -12,8 +12,11 @@ const hostname = z
 export const configSchema = z
   .object({
     $schema: z.string().optional(),
-    // Leaves room for "-pr-<number>" within Cloudflare's 63-character Worker name limit.
-    name: z.string().regex(/^[a-z][a-z0-9-]{0,49}$/, "must start with a letter and use only a-z, 0-9 and -, at most 50 characters"),
+    // Never "--", which starts every suffix the platform adds; 50 leaves room for "--pr-<number>"
+    // within Cloudflare's 63-character limit on Worker and bucket names.
+    name: z
+      .string()
+      .regex(/^(?=.{3,50}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$/, "must be 3 to 50 characters of a-z, 0-9 and single hyphens, starting with a letter"),
     hostname,
     worker: z.string().min(1).describe("Path to the Worker's entry module, relative to platform.jsonc"),
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date such as 2026-10-01"),

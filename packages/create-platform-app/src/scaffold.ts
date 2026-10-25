@@ -12,7 +12,7 @@ export interface Answers {
 }
 
 export const rules: Record<keyof Answers, { pattern: RegExp; hint: string }> = {
-  name: { pattern: /^[a-z][a-z0-9-]{0,49}$/, hint: "lowercase letters, digits and -, starting with a letter, at most 50 characters" },
+  name: { pattern: /^(?=.{3,50}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$/, hint: "3 to 50 lowercase letters, digits and single hyphens, starting with a letter" },
   hostname: { pattern: /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, hint: "a lowercase hostname in your Cloudflare zone, such as app.example.com" },
   neonProject: { pattern: /^[a-z]+-[a-z]+-\d+$/, hint: "a Neon project id such as quiet-meadow-12345678, from the project's Settings" },
 };

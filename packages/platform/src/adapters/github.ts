@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { GitHub } from "../ports.js";
+import type { GitHub, Repo } from "../ports.js";
 
 export class GhCli implements GitHub {
   constructor(private readonly repoRoot: string) {}
@@ -16,6 +16,12 @@ export class GhCli implements GitHub {
   async openPullRequests(): Promise<number[]> {
     const out = await this.gh(["pr", "list", "--state", "open", "--limit", "1000", "--json", "number", "--jq", ".[].number"]);
     return out.split("\n").filter(Boolean).map(Number);
+  }
+
+  // `gh repo view` gives a GraphQL node id; the REST API gives the numeric one Actions also uses.
+  async repository(): Promise<Repo> {
+    const name = (await this.gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])).trim();
+    return JSON.parse(await this.gh(["api", `repos/${name}`, "--jq", "{id, name: .full_name}"])) as Repo;
   }
 
   private gh(args: string[], stdin?: string): Promise<string> {

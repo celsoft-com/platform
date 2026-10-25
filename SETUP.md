@@ -54,7 +54,7 @@ The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each
     | Account > Workers Scripts > Edit | Deploy and delete Workers, and set their secrets |
     | Account > Hyperdrive > Edit | Create and delete database connection configs |
     | Account > Account Settings > Read | Find the account id |
-    | Account > Workers R2 Storage > Edit | Create file buckets, and delete a preview's files when its PR closes |
+    | Account > Workers R2 Storage > Edit | Create file buckets, delete a preview's files when its PR closes, and record which repo owns each app name |
     | Zone > Workers Routes > Edit | Attach app and preview hostnames |
     | Zone > Zone > Read | Find the zone by its domain |
     | Zone > DNS > Edit | Write the email-sending records for each app hostname |

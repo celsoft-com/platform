@@ -8,14 +8,15 @@ import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
+import { R2Registry } from "./adapters/registry.js";
 import { ResendApi } from "./adapters/resend.js";
 import { DrizzleMigrator } from "./adapters/drizzle.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, destroy, dev, PreflightError, sweep, type Context } from "./lifecycle.js";
-import { UnprovenError } from "./ownership.js";
+import { cleanup, deploy, destroy, dev, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
+import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
 
@@ -33,9 +34,10 @@ commands:
   owner reset <email> [--pr <n>]
                    make that account the owner and set its password, for an owner locked out
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
+  apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -111,6 +113,10 @@ async function main(argv: string[]): Promise<void> {
     await confirmDestroy(ctx, app.config.name, values.data);
     return;
   }
+  if (command.name === "apps move") {
+    await moveApp(ctx);
+    return;
+  }
 
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
@@ -129,6 +135,7 @@ function parseCommand([name, pr, extra]: string[]): Command {
     return { name: "owner reset", email: extra };
   }
   if (name === "db" && pr === "generate") return { name: "db generate" };
+  if (name === "apps" && pr === "move") return { name: "apps move" };
   if (name === "upgrade" || name === "sweep") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
@@ -157,22 +164,36 @@ async function loadApp(appDir: string): Promise<{ config: Config; variables: Rec
 }
 
 async function context(appDir: string, config: Config, dryRun: boolean): Promise<Context> {
-  const secrets = await loadSecrets(appDir, [...tokenNames(config), ...config.secrets]);
+  // Every provider key is read whatever platform.jsonc turns on, so destroy can find what an
+  // earlier configuration made.
+  const secrets = await loadSecrets(appDir, [...tokenNames({ ...config, email: true }), ...(config.database ? [] : ["NEON_API_KEY"]), ...config.secrets]);
   const cloudflareToken = requireToken(secrets, "CLOUDFLARE_API_TOKEN");
-  const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : "";
-  const resendKey = config.email ? requireToken(secrets, "RESEND_API_KEY") : "";
+  const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : (secrets.NEON_API_KEY ?? "");
+  const resendKey = config.email ? requireToken(secrets, "RESEND_API_KEY") : (secrets.RESEND_API_KEY ?? "");
+  const cloudflare = new CloudflareApi(cloudflareToken);
+  let repo: Promise<Repo> | undefined;
   return {
     config,
     secrets,
     run: new Run(dryRun, (line) => console.log(line)),
+    repo: () => (repo ??= currentRepo(appDir)),
+    providers: { neon: Boolean(neonKey), mail: Boolean(resendKey) },
     ports: {
-      cloudflare: new CloudflareApi(cloudflareToken),
+      cloudflare,
       neon: new NeonApi(neonKey),
       mail: new ResendApi(resendKey),
+      registry: new R2Registry(cloudflare.s3, cloudflare),
       wrangler: new WranglerCli(appDir, { CLOUDFLARE_API_TOKEN: cloudflareToken }, config.worker),
       migrator: new DrizzleMigrator(appDir, config),
     },
   };
+}
+
+// Actions names the repo it runs in; locally the GitHub CLI looks it up from the git remote.
+async function currentRepo(appDir: string): Promise<Repo> {
+  const { GITHUB_REPOSITORY_ID: id, GITHUB_REPOSITORY: name } = process.env;
+  if (id && name) return { id: Number(id), name };
+  return new GhCli(repoRoot(appDir)).repository();
 }
 
 // Recovery for an owner who lost their password or email: whoever holds the project's tokens can
@@ -280,7 +301,7 @@ function maskInCi(values: string[]): void {
 class UsageError extends Error {}
 
 main(process.argv.slice(2)).catch((error: unknown) => {
-  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UnprovenError || error instanceof UsageError;
+  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError;
   console.error(`✗ ${known ? (error as Error).message : error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
   process.exit(1);
 });
