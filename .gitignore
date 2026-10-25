@@ -8,3 +8,4 @@ packages/platform/schema.json
 .dev.vars
 .wrangler
 tmp
+.test-apps

@@ -166,9 +166,10 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Cross-site forms**: POST, PUT, PATCH and DELETE requests sent as forms are refused unless their Origin is the app's own.
     3. **Cookie cache**: the session cookie carries a signed copy for 5 minutes, so most requests skip the session query; a revoked session lasts until it expires.
     4. **Rate limits**: the Workers rate limiting binding guards sign-in and reset by email address and sign-up by client IP, with no database involved; counts are approximate per Cloudflare location.
-    5. **First owner**: the first account an app creates gets the owner role and a one-time recovery code, through Better Auth's admin plugin.
-    6. **Signup**: open to anyone.
-    7. **Organizations**: Better Auth's organization plugin, with members, roles, invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
+    5. **First owner**: the first account an app creates gets the owner role, through Better Auth's admin plugin.
+    6. **Owner recovery**: `npx @celsoft/platform owner reset <email>` makes that account the owner and sets a password typed into the terminal; only people holding the project's tokens can run it, and they already control the app, so no recovery secret ever exists or appears on a screen.
+    7. **Signup**: open to anyone.
+    8. **Organizations**: Better Auth's organization plugin, with members, roles, invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.

@@ -1,7 +1,6 @@
 import { AUTH_PATH } from "./auth.js";
 
 export const PUBLIC_API = "/api/public/";
-export const PLATFORM_API = "/api/platform/";
 
 const FORM_TYPES = ["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"];
 const UNSAFE = ["POST", "PUT", "PATCH", "DELETE"];
@@ -18,7 +17,7 @@ export function isCrossSiteForm(request: Request, url: URL): boolean {
 // Every /api route needs a signed-in user unless its path says otherwise.
 export function needsSession(pathname: string): boolean {
   if (!pathname.startsWith("/api/")) return false;
-  return !(pathname.startsWith(`${AUTH_PATH}/`) || pathname.startsWith(PUBLIC_API) || pathname.startsWith(PLATFORM_API));
+  return !(pathname.startsWith(`${AUTH_PATH}/`) || pathname.startsWith(PUBLIC_API));
 }
 
 export interface RateLimiter {
@@ -31,7 +30,6 @@ const LIMITED: Record<string, "email" | "ip"> = {
   [`${AUTH_PATH}/request-password-reset`]: "email",
   [`${AUTH_PATH}/reset-password`]: "ip",
   [`${AUTH_PATH}/sign-up/email`]: "ip",
-  [`${PLATFORM_API}recover`]: "email",
 };
 
 export async function rateLimited(request: Request, pathname: string, limiter: RateLimiter | undefined): Promise<boolean> {
