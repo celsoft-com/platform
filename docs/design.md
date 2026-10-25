@@ -75,8 +75,14 @@ A published CLI, runtime library and app template that create and reuse each app
 3. **App names**: 3 to 50 characters of `a-z`, `0-9` and single hyphens, starting with a letter; never `--`, so each name splits into app and suffix one way only.
 4. **Length**: 50 leaves room for the longest suffix within the 63-character limit Cloudflare puts on Worker names, bucket names and hostname labels.
 5. **Three or more**: a hostname label with `--` in positions 3 and 4 is reserved for internationalized names, such as `xn--`, so `ab--pr-1` is never made.
-6. **Reserved**: anything in the account named `<app>` or `<app>--…` belongs to the platform; never create one by hand.
-7. **Unique apps**: an app name is used by one repo only within a Cloudflare account, since two repos with the same name share every resource.
+6. **Reserved**: anything in the account named `<app>` or `<app>--…`, and the bucket `celsoft-platform`, belongs to the platform; never create one by hand.
+7. **App claims**: an app name belongs to one repo per Cloudflare account, enforced by a registry.
+    1. **Registry**: the account-wide bucket `celsoft-platform` holds one object per app, `apps/<app>.json`, recording the deploying repo's numeric GitHub ID and its `owner/repo` name.
+    2. **Claim**: the first deploy writes the object through R2's S3 API with `If-None-Match: *`, so of two first deploys only one lands; R2's REST API ignores that condition.
+    3. **Check**: every deploy, cleanup and destroy stops before any change when the claim names a different repo ID; renames and transfers keep the ID, so they pass.
+    4. **Move**: the error names the exact `apps move` command that re-points the claim, for when a different repo is meant to take over.
+    5. **Release**: `destroy` deletes the claim last.
+    6. **Lost registry**: deleting the bucket by hand erases every claim, and each app's next deploy claims its name again.
 8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` is described under Domains.
 9. **Nothing written on resources**: identity is never stored on a resource, so Workers carry no platform tags and buckets no marker object; email DNS records are the one exception, since Resend chooses their names.
 10. **Destroy**: removes every resource the app's names produce that exists, whatever `platform.jsonc` turns on now; a provider whose key is missing is skipped with a warning.
@@ -96,6 +102,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>Hostname</strong></td><td><code>pr-&lt;n&gt;.&lt;hostname&gt;</code></td><td><code>&lt;hostname&gt;</code></td><td>A custom domain of the app's Worker for that PR</td><td>Deleted with its Worker</td></tr>
 <tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;--previews</code></td><td><code>&lt;app&gt;--files</code></td><td>Exact name; one preview bucket is shared by every PR</td><td>Destroy; the prod bucket only with <code>--data</code></td></tr>
+<tr><td><strong>App claim</strong></td><td>(none)</td><td><code>apps/&lt;app&gt;.json</code> in <code>celsoft-platform</code></td><td>Exact name</td><td>Destroy, last</td></tr>
 <tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
 <tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Resend chooses the names, so each record's comment field reads <code>managed by @celsoft/platform for &lt;app&gt;</code></td><td>Destroy</td></tr>
 <tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
