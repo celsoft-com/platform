@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 The celsoft-com platform repository.
 
