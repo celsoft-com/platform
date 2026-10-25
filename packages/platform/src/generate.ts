@@ -2,7 +2,8 @@ import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import type { Config } from "./config.js";
+import { parse } from "jsonc-parser";
+import { readConfigText } from "./config.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 
 // Everything the package writes into an app lives here, gitignored: files the app's code may
@@ -12,12 +13,14 @@ export const GENERATED_DIR = ".platform";
 export const generatedPath = (appDir: string, file: string) => join(appDir, GENERATED_DIR, file);
 
 // Writes the generated files the app's code imports: today the browser client, whose routes come
-// from the endpoints the Worker declares.
-export async function generate(appDir: string, config: Config): Promise<string[]> {
+// from the endpoints the Worker declares. It reads only `worker` from platform.jsonc, so it runs
+// on install before any value platform.jsonc takes from the environment is set.
+export async function generate(appDir: string): Promise<string[]> {
+  const workerFile = workerPath(await readConfigText(appDir));
   await mkdir(join(appDir, GENERATED_DIR), { recursive: true });
   await ensureIgnored(appDir);
-  const routes = apiRoutes(await readEndpoints(appDir, config.worker));
-  const worker = "../" + config.worker.replace(/^\.\//, "").replace(/\.ts$/, ".js");
+  const routes = apiRoutes(await readEndpoints(appDir, workerFile));
+  const worker = "../" + workerFile.replace(/^\.\//, "").replace(/\.ts$/, ".js");
   const table = Object.fromEntries(Object.entries(routes).map(([name, route]) => [name, [route.method, route.path]]));
   const client = [
     "// Written by @celsoft/platform from the Worker's endpoints; never edit or commit it.",
@@ -43,6 +46,12 @@ async function readEndpoints(appDir: string, worker: string): Promise<Record<str
   } finally {
     await rm(outfile, { force: true });
   }
+}
+
+function workerPath(configText: string): string {
+  const worker = (parse(configText, [], { allowTrailingComma: true }) as { worker?: unknown } | undefined)?.worker;
+  if (typeof worker !== "string" || !worker) throw new Error("platform.jsonc has no `worker`, the path to the Worker's entry module");
+  return worker;
 }
 
 async function ensureIgnored(appDir: string): Promise<void> {

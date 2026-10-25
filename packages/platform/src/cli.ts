@@ -70,6 +70,17 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // On install a failure only warns: install must never be blocked by the app's own code.
+  if (command.name === "generate") {
+    try {
+      for (const file of await generate(appDir)) console.log(`✓ ${file}`);
+    } catch (error) {
+      if (process.env.npm_lifecycle_event !== "postinstall") throw error;
+      console.warn(`! could not generate .platform/: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return;
+  }
+
   if (command.name === "init") {
     const { config, variables } = await loadApp(appDir);
     await init({
@@ -93,12 +104,8 @@ async function main(argv: string[]): Promise<void> {
     await new DrizzleMigrator(appDir, app.config).generate();
     return;
   }
-  if (command.name === "generate") {
-    for (const file of await generate(appDir, app.config)) console.log(`✓ ${file}`);
-    return;
-  }
   // The app's code imports these, so they are fresh for every run that builds or serves it.
-  if (command.name === "dev" || command.name === "deploy" || command.name === "preview") await generate(appDir, app.config);
+  if (command.name === "dev" || command.name === "deploy" || command.name === "preview") await generate(appDir);
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
   const ctx = await context(appDir, app.config, dryRun);
   if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
