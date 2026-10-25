@@ -263,7 +263,8 @@ A published CLI, runtime library and app template that create and reuse each app
     9. **Access**: the existing path rule; `/api/public/` needs no user, every other `/api/` path needs one, and MCP calls always carry a signed-in user.
     10. **Hand-written routes**: the `defineApp` handler stays for uploads, downloads, streaming and webhooks; both live in the package's request handling, so the app only writes its functions.
     11. **MCP sign-in**: AI clients connect with OAuth 2.1 served by Better Auth's MCP plugin; a person approves a client once, its calls run as that person, and its registered clients, tokens and consents add auth tables and a consent screen.
-    12. **Frontend calls**: frontends call `call("getNote", { id: 42 })` from the package, which builds the URL from the endpoint's path and input and returns the output typed from its Zod schemas; oRPC's client does the URL building underneath, hidden.
+    12. **Frontend calls**: frontends call `call("getNote", { id: 42 })` from the package, which builds the URL from the endpoint's path and input and returns the output typed from its Zod schemas; oRPC's client does the URL building underneath, hidden; the paths come from a generated file the frontend imports.
+    13. **Generated folder**: the package writes generated files into a gitignored `.platform/` folder in the app, such as the endpoint path list, generated on install, when `dev` starts and at deploy; the deploy's temporary files move there too.
 
 ## 14. Upgrades
 
