@@ -24,7 +24,8 @@ check("client script served", `${client.status} ${(await client.text()).startsWi
 
 const team = await api("/api/auth/organization/create", { name: "Live", slug: `live-${Date.now()}` });
 const room = open(`team:${team.id}`);
-check("join own team room", (await room.until((f) => f.type === "hello")) ? "hello" : "nothing");
+// A preview's first room can take several seconds to start, so the first frame gets longer.
+check("join own team room", (await room.until((f) => f.type === "hello", 30000)) ? "hello" : `nothing; got ${room.frames.map((f) => f.type).join(",")}`);
 check("presence lists me", (await room.until((f) => f.type === "presence" && f.people.length === 1)) ? "yes" : "no");
 
 await api(`/api/teams/${team.id}/notes`, { body: "live note" });
