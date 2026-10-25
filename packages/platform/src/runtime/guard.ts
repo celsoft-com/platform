@@ -17,7 +17,8 @@ export function isCrossSiteForm(request: Request, url: URL): boolean {
 // Every /api route needs a signed-in user unless its path says otherwise.
 export function needsSession(pathname: string): boolean {
   if (!pathname.startsWith("/api/")) return false;
-  return !(pathname.startsWith(`${AUTH_PATH}/`) || pathname.startsWith(PUBLIC_API));
+  // Live rooms ask the app's canJoin instead, which may welcome visitors who are not signed in.
+  return !(pathname.startsWith(`${AUTH_PATH}/`) || pathname.startsWith(PUBLIC_API) || pathname.startsWith("/api/live/"));
 }
 
 export interface RateLimiter {

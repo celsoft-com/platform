@@ -10,5 +10,6 @@
   },
   "email": true,
   "auth": { "organizations": true },
-  "files": true
+  "files": true,
+  "live": true
 }

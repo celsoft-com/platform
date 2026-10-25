@@ -169,7 +169,7 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
       cloudflare: new CloudflareApi(cloudflareToken),
       neon: new NeonApi(neonKey),
       mail: new ResendApi(resendKey),
-      wrangler: new WranglerCli(appDir, { CLOUDFLARE_API_TOKEN: cloudflareToken }),
+      wrangler: new WranglerCli(appDir, { CLOUDFLARE_API_TOKEN: cloudflareToken }, config.worker),
       migrator: new DrizzleMigrator(appDir, config),
     },
   };
