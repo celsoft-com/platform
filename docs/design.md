@@ -256,7 +256,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.
     3. **Where served**: each endpoint says `serve: ["api"]`, `["mcp"]` or both; only an API endpoint has a method and path.
     4. **URL inputs**: API endpoints take inputs from the path, the query and the JSON body, merged into one object matching the input schema; MCP passes that object directly.
-    5. **Library**: oRPC does the API's path, query and body mapping and string conversion behind the package's wrapper, so apps never see it; MCP is the package's own, built from the same Zod schemas.
+    5. **Library**: oRPC does the API's path, query and body mapping and string conversion behind the package's wrapper, so apps never see it; MCP is the package's own: the official MCP SDK handles the protocol, and the package registers each MCP endpoint as a tool with its Zod schemas.
     6. **Types**: input and output are Zod schemas, which give the TypeScript types, the runtime checks and the JSON Schema MCP describes tools with.
     7. **Outputs checked**: every response is validated against its output schema; a mismatch is a 500, logged.
     8. **Errors**: a handler fails by throwing one typed error; over HTTP it is that status with `{ error }`, over MCP a tool result with `isError: true` and the message, input check failures included, as MCP asks so a model can correct itself.
