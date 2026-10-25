@@ -193,7 +193,7 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
     2. **`deploy`**: deploys prod.
-    3. **`dev`**: runs the app locally against its own `dev` Neon branch, with email captured to the terminal; regenerates migrations on start.
+    3. **`dev`**: runs the app locally against its own `dev` Neon branch, with email captured to the terminal; regenerates migrations on start; when `package.json` has a `dev` script it also starts the frontend's dev server, which forwards the Worker's paths to the local Worker, so edits reload instantly; the package's Vite plugin sets that forwarding up.
     4. **`preview`**: creates or updates a PR's preview.
     5. **`cleanup`**: deletes a PR's preview.
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
