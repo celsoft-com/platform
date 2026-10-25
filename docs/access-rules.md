@@ -1,7 +1,7 @@
 # Access Rules
 
 Every case the access system must get right. Each row becomes a test; the design is in
-[design.md](design.md), App Code, Access. Rows marked **Open** need a decision before code.
+[design.md](design.md), App Code, Access. Every row is decided.
 
 ## In short
 
@@ -55,7 +55,8 @@ Every case the access system must get right. Each row becomes a test; the design
 | G10 | The person who shared loses their own access | Grants they gave stay |
 | G11 | Someone with `write` tries to share | Refused: sharing needs `manage` |
 | G12 | Someone with `manage` shares at `manage` | Allowed |
-| G13 | **Open:** can someone with `manage` from a grant revoke the item owner's access, or share above what they were given? | Proposed: owners and organization roles can never be revoked by grants; grants can give up to `manage` |
+| G13 | Someone with `manage` from a grant revokes the owner's or an organization role's access | Refused: grants never remove ownership or roles |
+| G14 | Grant at `manage` | Allowed: grants carry any level up to `manage` |
 
 ## Links
 
@@ -68,7 +69,8 @@ Every case the access system must get right. Each row becomes a test; the design
 | K5 | Token for a folder; request for a page inside it | Allowed: links inherit like everything else |
 | K6 | Signed-in user with `read` from a grant also carries a `write` link | `write`: highest wins |
 | K7 | Token guessed or altered | Refused; tokens are long random secrets, compared in constant time |
-| K8 | **Open:** can a link give more than `read`? | Proposed: yes, up to `write`, never `delete` or `manage` |
+| K8 | Link made at `write` | Allowed: links carry `read`, `create` or `write` |
+| K9 | Link made at `delete` or `manage` | Refused |
 
 ## Inheritance
 
@@ -109,7 +111,8 @@ Every case the access system must get right. Each row becomes a test; the design
 | P4 | Two moves at the same moment that together would make a loop | One succeeds, the other is refused |
 | P5 | App's own update fails after `place` in the same transaction | Neither is saved |
 | P6 | Place an item at the top, under a user or an organization | Recorded |
-| P7 | **Open:** does the platform check the mover's levels, or only the app's endpoint? | Proposed: `place` checks `create` on the new parent and `write` on the item itself, so a move can never put an item where its mover could not create one |
+| P7 | Mover has `write` on the item and `create` on the new parent | Recorded |
+| P8 | Mover lacks `write` on the item, or `create` on the new parent | Refused, as 404 |
 
 ## Highest wins
 
@@ -136,7 +139,7 @@ Every case the access system must get right. Each row becomes a test; the design
 | # | Situation | Expected |
 | --- | --- | --- |
 | D1 | App deletes an item | Its grants, links and place go with it, in the same transaction |
-| D2 | App deletes a folder | **Open:** proposed: the app deletes or moves what is inside first; `place` refuses to remove a folder that still has children |
+| D2 | App deletes a folder that still has children | Refused: the app deletes or moves what is inside first |
 | D3 | User account deleted | Their grants and pending email grants go; what they own goes with Better Auth's own deletion rules |
 | D4 | Organization deleted | Its grants go; the items placed under it lose all access until the app deletes them |
 
