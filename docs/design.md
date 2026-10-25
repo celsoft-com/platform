@@ -78,7 +78,13 @@ A published CLI, runtime library and app template that create and reuse each app
 6. **Reserved**: anything in the account named `<app>` or `<app>--…` belongs to the platform; never create one by hand.
 7. **Unique apps**: an app name is used by one repo only within a Cloudflare account, since two repos with the same name share every resource.
 8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` and `<zone>` are described under Domains.
-9. **Resources**:
+9. **Nothing written on resources**: identity is never stored on a resource, so Workers carry no platform tags and buckets no marker object; email DNS records are the one exception, since Resend chooses their names.
+10. **Destroy**: removes every resource the app's names produce that exists, whatever `platform.jsonc` turns on now; a provider whose key is missing is skipped with a warning.
+11. **Earlier names**: versions before the `--` namespace used `-pr-<n>`, `-files` and `-previews`, with tags and a bucket marker as proof.
+    1. **Prod bucket**: the first deploy on the new version copies `<app>-files` into `<app>--files`, binds the Worker to it, then deletes the old bucket.
+    2. **Old previews**: cleanup and sweep also remove `<app>-pr-<n>` Workers and Hyperdrive configs and the `<app>-previews` bucket, only when they carry the old `app:<app>` tag or marker.
+    3. **Dropped**: that old-name code is removed in the next major.
+12. **Resources**:
 
 <table>
 <thead>
@@ -92,7 +98,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;--previews</code></td><td><code>&lt;app&gt;--files</code></td><td>Exact name; one preview bucket is shared by every PR</td><td>Destroy; the prod bucket only with <code>--data</code></td></tr>
 <tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
 <tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Resend chooses the names, so each record's comment field reads <code>managed by @celsoft/platform for &lt;app&gt;</code></td><td>Destroy</td></tr>
-<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
+<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
 <tr><td><strong>Preview branch</strong></td><td><code>pr-&lt;n&gt;</code></td><td>(none)</td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>Backup branch</strong></td><td>(none)</td><td><code>backup-&lt;time&gt;</code></td><td>Name starting <code>backup-</code></td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
 <tr><td><strong>Dev branch</strong></td><td>(none)</td><td><code>dev</code></td><td>Exact name</td><td><code>destroy --data</code></td></tr>
