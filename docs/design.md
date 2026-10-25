@@ -68,7 +68,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;</code></td><td><code>&lt;app&gt;-pr-&lt;n&gt;</code></td><td>Bound by one of the app's Workers, or its origin is in the app's Neon project</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;-files</code></td><td><code>&lt;app&gt;-previews</code>, shared</td><td>A <code>.celsoft-platform</code> object naming the app</td><td><code>destroy</code>; prod bucket only with <code>--data</code></td></tr>
 <tr><td><strong>Preview files</strong></td><td>None</td><td>Folder <code>pr-&lt;n&gt;/</code> in the preview bucket</td><td>The bucket's proof</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
-<tr><td><strong>Mail DNS records</strong></td><td>Below <code>hostname</code></td><td>None</td><td>Comment <code>managed by @celsoft/platform</code></td><td>Destroy</td></tr>
+<tr><td><strong>Email DNS records</strong></td><td>The records Resend asks for to send from the app hostname, such as <code>resend._domainkey.&lt;hostname&gt;</code> and <code>send.&lt;hostname&gt;</code></td><td>None; previews never send email</td><td>Each record's Cloudflare comment field reads <code>managed by @celsoft/platform</code></td><td>Destroy</td></tr>
 <tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, the only project <code>NEON_API_KEY</code> reaches.</td></tr>
 <tr><td><strong>Neon branch</strong></td><td>The project's default branch</td><td><code>pr-&lt;n&gt;</code></td><td>Inside the app's own Neon project, which the key is scoped to</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>Backup branch</strong></td><td><code>backup-&lt;time&gt;</code></td><td>None</td><td>Inside the app's own Neon project</td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
@@ -77,7 +77,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>Resend domain</strong></td><td><code>hostname</code></td><td>None</td><td>Name only</td><td>Destroy</td></tr>
 <tr><td><strong>Resend key</strong></td><td><code>platform &lt;hostname&gt;</code></td><td>None</td><td>Name only</td><td>Replaced when a Worker lacks it; destroy</td></tr>
 <tr><td colspan="5"><strong>GitHub</strong>. Scope is a repo name, the <code>owner/repo</code> the workflow runs in, from <code>GITHUB_REPOSITORY</code>.</td></tr>
-<tr><td><strong>PR comment</strong></td><td>None</td><td>The PR's comment starting <code>&lt;!-- platform-preview --&gt;</code></td><td>The marker</td><td>Never; updated in place</td></tr>
+<tr><td><strong>Preview link comment</strong></td><td>None</td><td>One comment on each PR, posted by the workflow, giving the preview's URL</td><td>The comment text starts with the hidden HTML comment <code>&lt;!-- platform-preview --&gt;</code></td><td>Never; edited in place on each push</td></tr>
 </tbody>
 </table>
 
