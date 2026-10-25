@@ -10,7 +10,8 @@ Every case the access system must get right. Each row becomes a test; the design
 | **What is checked** | A person's level on one item: `read` < `create` < `write` < `delete` < `manage` |
 | **Where levels come from** | Owning the item, an organization role, a grant to them, their team or their organization, or a link |
 | **Which level counts** | The highest of all of them |
-| **What inherits** | A level on an item applies to everything inside it, at any depth |
+| **What inherits** | A level on an item applies to everything inside it, at any depth, until an item is restricted |
+| **Raising and lowering** | A grant raises access on an item; restricting an item is the only way to lower it |
 | **What happens otherwise** | No level means no access, shown as 404 |
 | **When changes apply** | On the very next request |
 
@@ -29,12 +30,12 @@ Every case the access system must get right. Each row becomes a test; the design
 | # | Situation | Expected |
 | --- | --- | --- |
 | O1 | User owns an item, placed directly under them | `manage` |
-| O2 | Item placed under an organization; user is `member` | `create` |
+| O2 | Item placed under an organization; user is `member` | `read` |
 | O3 | Same; user is `admin` | `delete` |
 | O4 | Same; user is `owner` | `manage` |
 | O5 | User is not in the organization | Refused |
 | O6 | Member removed from the organization | Refused on the next request |
-| O7 | Member's role changed from `admin` to `member` | `create` from the next request |
+| O7 | Member's role changed from `admin` to `member` | `read` from the next request |
 | O8 | Item placed under one organization; user is owner of a different one | Refused |
 | O9 | User owns item personally, then leaves an organization they were in | Still `manage` on their own item |
 
@@ -81,6 +82,22 @@ Every case the access system must get right. Each row becomes a test; the design
 | I6 | Page moved into a shared folder | The folder's grants apply on the next request |
 | I7 | Item never placed | Nobody has access, not even its creator: fail closed |
 | I8 | Chain deeper than the depth limit | Refused, and logged as a bug |
+
+## Restricted items
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| R1 | Folder restricted; user has `read` from the organization | Refused on the folder and everything inside it |
+| R2 | Same; folder shared with the user at `read` | `read` |
+| R3 | Read-only folder: restricted, shared with the organization at `read`; member asks for `create` | Refused |
+| R4 | Page restricted inside a folder the user can `write` | Refused on that page, `write` on its siblings |
+| R5 | Restricted folder; organization `admin` | `delete`: admins always reach restricted items |
+| R6 | Restricted folder; organization `owner` | `manage` |
+| R7 | Restricted folder; later a grant on its parent | The grant does not reach the folder |
+| R8 | Grant on a page inside a restricted folder | That grant counts on the page |
+| R9 | Restriction removed | Inheritance from above applies again on the next request |
+| R10 | Restricted item owned by a user, not an organization | Only its own grants and its owner's `manage` count |
+| R11 | Link token for the folder above a restricted page | Refused on the page: links stop at restrictions too |
 
 ## Placing
 
