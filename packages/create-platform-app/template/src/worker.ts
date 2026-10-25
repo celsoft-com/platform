@@ -1,18 +1,20 @@
-import { defineApp } from "@celsoft/platform";
+import { defineApp, endpoint } from "@celsoft/platform";
 import { desc } from "drizzle-orm";
+import { z } from "zod";
 import * as schema from "./schema";
 
 const { items } = schema;
 
-export default defineApp(
-  async (request, { db }) => {
-    const url = new URL(request.url);
+const Item = z.object({ id: z.uuid(), name: z.string(), createdAt: z.date(), updatedAt: z.date() });
 
-    if (url.pathname === "/api/items" && request.method === "GET") {
-      return Response.json(await db.select().from(items).orderBy(desc(items.createdAt)).limit(100));
-    }
-
-    return new Response("not found", { status: 404 });
+// Each endpoint is one typed function; its Zod schemas are its only types. Every /api/ path
+// needs a signed-in user except those under /api/public/.
+export default defineApp(undefined, {
+  schema,
+  endpoints: {
+    listItems: endpoint(
+      { method: "GET", path: "/api/public/items", description: "The newest 100 items", input: z.object({}), output: z.array(Item) },
+      async (_, { db }) => db.select().from(items).orderBy(desc(items.createdAt)).limit(100),
+    ),
   },
-  { schema },
-);
+});

@@ -2,9 +2,13 @@
   "name": "{{name}}",
   "private": true,
   "type": "module",
+  "scripts": {
+    "postinstall": "platform generate"
+  },
   "dependencies": {
     "@celsoft/platform": "^{{platformVersion}}",
-    "drizzle-orm": "^0"
+    "drizzle-orm": "^0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261023.1",

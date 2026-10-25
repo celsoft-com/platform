@@ -47,7 +47,7 @@ describe("deploy prod", () => {
       name: "demo",
       routes: [{ pattern: "demo.example.com", custom_domain: true }],
       hyperdrive: [{ binding: "DB", id: ports.cloudflare.hyperdrives[0]!.id }],
-      assets: { directory: "dist" },
+      assets: { directory: "../dist" },
     });
     expect(d?.secrets).toEqual({ SESSION_SECRET: "s3cret" });
   });
@@ -155,7 +155,7 @@ describe("auth and email", () => {
     });
     expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
     expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
-    expect(first.config.main).toBe(".platform-entry.ts");
+    expect(first.config.main).toBe("entry.ts");
     expect(first.config.durable_objects).toEqual({ bindings: [{ name: "LIVE", class_name: "LiveRoom" }] });
     expect(first.config.migrations).toEqual([{ tag: "live-rooms-v1", new_sqlite_classes: ["LiveRoom"] }]);
 

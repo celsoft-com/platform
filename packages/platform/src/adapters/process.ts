@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { generatedPath } from "../generate.js";
 import type { Wrangler } from "../ports.js";
 import { ENTRY_FILE, entryModule } from "../wrangler-config.js";
 
@@ -13,8 +14,8 @@ export class WranglerCli implements Wrangler {
   ) {}
 
   async deploy(config: object, secrets: Record<string, string>): Promise<void> {
-    const configFile = join(this.appDir, ".platform-wrangler.json");
-    const secretsFile = join(this.appDir, ".platform-secrets.json");
+    const configFile = generatedPath(this.appDir, "wrangler.json");
+    const secretsFile = generatedPath(this.appDir, "secrets.json");
     const entryFile = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
@@ -31,7 +32,8 @@ export class WranglerCli implements Wrangler {
   }
 
   private async writeEntry(): Promise<string> {
-    const file = join(this.appDir, ENTRY_FILE);
+    await mkdir(generatedPath(this.appDir, ""), { recursive: true });
+    const file = generatedPath(this.appDir, ENTRY_FILE);
     await writeFile(file, entryModule(this.worker));
     return file;
   }
@@ -39,8 +41,8 @@ export class WranglerCli implements Wrangler {
   // wrangler dev reads secrets from a .dev.vars file beside its config, and takes the local
   // database through an environment variable in place of the Hyperdrive binding.
   async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void> {
-    const configFile = join(this.appDir, ".platform-wrangler.json");
-    const devVars = join(this.appDir, ".dev.vars");
+    const configFile = generatedPath(this.appDir, "wrangler.json");
+    const devVars = generatedPath(this.appDir, ".dev.vars");
     const entryFile = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(devVars, Object.entries(secrets).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n", { mode: 0o600 });

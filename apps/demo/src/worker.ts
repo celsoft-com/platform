@@ -1,16 +1,21 @@
-import { defineApp, type AppContext, type PlatformBindings } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, type AppContext, type PlatformBindings } from "@celsoft/platform";
 import { member, user as users } from "@celsoft/platform/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { z } from "zod";
 import * as schema from "./schema";
 
 const { notes } = schema;
 const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt };
 const teamColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
-const TEAM_NOTES = /^\/api\/teams\/([0-9a-f-]{36})\/notes$/;
 const TEAM_ROOM = /^team:([0-9a-f-]{36})$/;
 
 type App = AppContext<PlatformBindings, typeof schema>;
+
+const TeamNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
+
+// Everything said in a team room: new notes from the server, typing notices from browsers.
+const TeamMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: TeamNote }), z.object({ type: z.literal("typing") })]);
 
 async function isMember({ db }: App, organizationId: string, userId: string): Promise<boolean> {
   const rows = await db.select({ id: member.id }).from(member).where(and(eq(member.organizationId, organizationId), eq(member.userId, userId)));
@@ -63,29 +68,47 @@ export default defineApp(
       return files.response(`${folder(note.id)}/${note.attachmentName}`);
     }
 
-    const team = TEAM_NOTES.exec(url.pathname)?.[1];
-    if (team) {
-      if (!(await isMember(app, team, user.id))) return new Response("not found", { status: 404 });
-
-      if (request.method === "GET") {
-        const teamNotes = db.select(teamColumns).from(notes).innerJoin(users, eq(users.id, notes.userId));
-        return Response.json(await teamNotes.where(eq(notes.organizationId, team)).orderBy(desc(notes.createdAt)).limit(100));
-      }
-
-      if (request.method === "POST") {
-        const { body } = (await request.json().catch(() => ({}))) as { body?: unknown };
-        if (typeof body !== "string" || body.trim() === "" || body.length > 10000) {
-          return Response.json({ error: "body must be 1 to 10000 characters" }, { status: 400 });
-        }
-        const [inserted] = await db.insert(notes).values({ body: body.trim(), userId: user.id, organizationId: team }).returning({ id: notes.id, body: notes.body, createdAt: notes.createdAt });
-        const note = { ...inserted!, author: user.name };
-        // Saved first; the announcement only tells the team's open pages.
-        await live.publish(`team:${team}`, { type: "note", note });
-        return Response.json(note, { status: 201 });
-      }
-    }
-
     return new Response("not found", { status: 404 });
   },
-  { schema, live: { canJoin: inTeamRoom, canSend: inTeamRoom } },
+  {
+    schema,
+    live: { message: TeamMessage, canJoin: inTeamRoom, canSend: inTeamRoom },
+    endpoints: {
+      listTeamNotes: endpoint(
+        {
+          serve: ["api"],
+          method: "GET",
+          path: "/api/teams/:team/notes",
+          description: "The newest 100 notes of a team the signed-in user belongs to",
+          input: z.object({ team: z.uuid() }),
+          output: z.array(TeamNote),
+        },
+        async ({ team }, app) => {
+          const user = await app.requireUser();
+          if (!(await isMember(app, team, user.id))) throw new EndpointError(404, "not found");
+          const teamNotes = app.db.select(teamColumns).from(notes).innerJoin(users, eq(users.id, notes.userId));
+          return teamNotes.where(eq(notes.organizationId, team)).orderBy(desc(notes.createdAt)).limit(100);
+        },
+      ),
+      addTeamNote: endpoint(
+        {
+          serve: ["api"],
+          method: "POST",
+          path: "/api/teams/:team/notes",
+          description: "Add a note to a team the signed-in user belongs to; the team's open pages see it live",
+          input: z.object({ team: z.uuid(), body: z.string().trim().min(1).max(10000) }),
+          output: TeamNote,
+        },
+        async ({ team, body }, app) => {
+          const user = await app.requireUser();
+          if (!(await isMember(app, team, user.id))) throw new EndpointError(404, "not found");
+          const [inserted] = await app.db.insert(notes).values({ body, userId: user.id, organizationId: team }).returning({ id: notes.id, body: notes.body, createdAt: notes.createdAt });
+          const note = { ...inserted!, author: user.name };
+          // Saved first; the announcement only tells the team's open pages.
+          await app.live.publish(`team:${team}`, { type: "note", note });
+          return note;
+        },
+      ),
+    },
+  },
 );

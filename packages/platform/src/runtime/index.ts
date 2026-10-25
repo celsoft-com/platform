@@ -2,13 +2,17 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
+import { apiHandler, type Endpoint } from "./endpoints.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
-import { CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace } from "./live.js";
+import type { z } from "zod";
+import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
 import { isScreen, renderScreen } from "./screens.js";
 
 export type { Auth } from "./auth.js";
+export { EndpointError } from "./endpoint-error.js";
+export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
 export type { Live } from "./live.js";
@@ -47,15 +51,27 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
 export type Handler<Env, Schema extends Record<string, unknown>> = (request: Request, app: AppContext<Env, Schema>) => Response | Promise<Response>;
 
 // Who may join and send to a live room, and what the app does with messages browsers send.
-// Joining and sending are refused unless the app says yes.
-export interface LiveOptions<Env, Schema extends Record<string, unknown>> {
+// Joining and sending are refused unless the app says yes. With a `message` schema, every message
+// is checked against it, both from browsers and through app.live.publish.
+export interface LiveOptions<Env, Schema extends Record<string, unknown>, Message extends z.ZodType = z.ZodType> {
+  message?: Message;
   canJoin?(room: string, user: User | null, app: AppContext<Env, Schema>): boolean | Promise<boolean>;
   canSend?(room: string, user: User | null, app: AppContext<Env, Schema>): boolean | Promise<boolean>;
-  onMessage?(room: string, message: unknown, from: LivePeer | null, app: AppContext<Env, Schema>): void | Promise<void>;
+  onMessage?(room: string, message: z.output<Message>, from: LivePeer | null, app: AppContext<Env, Schema>): void | Promise<void>;
+}
+
+function messageCheck(schema: z.ZodType | undefined): MessageCheck {
+  if (!schema) return anyMessage;
+  return (message) => {
+    const result = schema.safeParse(message);
+    return result.success ? { ok: true, value: result.data } : { ok: false, error: result.error.issues.map((i) => `${i.path.join(".") || "message"}: ${i.message}`).join("; ") };
+  };
 }
 
 export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   schema?: Schema;
+  // Typed functions served over the API, MCP or both; see `endpoint`.
+  endpoints?: Record<string, Endpoint<any, any, AppContext<Env, Schema>>>;
   screens?: { stylesheet?: string };
   live?: LiveOptions<Env, Schema>;
   pool?: (connectionString: string) => Pool;
@@ -65,17 +81,31 @@ const defaultPool = (connectionString: string) => new Pool({ connectionString, m
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
+const notFound: Handler<unknown, Record<string, unknown>> = () => json({ error: "not found" }, 404);
+
 // `Secrets` names the app's secrets, such as `defineApp<{ SESSION_SECRET: string }>`; the
 // platform's own bindings are added to it. Pass the app's tables as `schema` for a typed `app.db`.
-// A handler may throw a Response, as `requireUser` does, and it is sent as the answer.
-export function defineApp<Secrets extends object = object, Schema extends Record<string, unknown> = Record<string, never>>(
-  handler: Handler<Secrets & PlatformBindings, Schema>,
-  options: AppOptions<Secrets & PlatformBindings, Schema> = {},
+// Endpoints are answered first; the handler, when given, takes every other request. A handler or
+// endpoint may throw a Response, as `requireUser` does, and it is sent as the answer.
+export function defineApp<
+  Secrets extends object = object,
+  Schema extends Record<string, unknown> = Record<string, never>,
+  E extends Record<string, Endpoint<any, any, AppContext<Secrets & PlatformBindings, Schema>>> = Record<string, never>,
+  Message extends z.ZodType = z.ZodType,
+>(
+  handler: Handler<Secrets & PlatformBindings, Schema> | undefined,
+  options: AppOptions<Secrets & PlatformBindings, Schema> & { endpoints?: E; live?: LiveOptions<Secrets & PlatformBindings, Schema, Message> } = {},
 ) {
   type Env = Secrets & PlatformBindings;
   const onMessage = options.live?.onMessage;
+  const check = messageCheck(options.live?.message);
+  const handle = handler ?? (notFound as Handler<Env, Schema>);
+  const api = apiHandler(options.endpoints ?? {});
 
   return {
+    // Read by the package to generate the browser client's routes; the app's own types come from here.
+    endpoints: (options.endpoints ?? {}) as E,
+
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const url = new URL(request.url);
       const { app, close } = createContext(request, env, ctx, options);
@@ -87,7 +117,9 @@ export function defineApp<Secrets extends object = object, Schema extends Record
           const platform = await platformRoute(request, url, env, app, options);
           if (platform) return platform;
         }
-        return await handler(request, app);
+        const answered = await api?.handle(request, app);
+        if (answered) return answered;
+        return await handle(request, app);
       } catch (thrown) {
         if (thrown instanceof Response) return thrown;
         throw thrown;
@@ -105,13 +137,13 @@ export function defineApp<Secrets extends object = object, Schema extends Record
         const pending: Promise<unknown>[] = [];
         const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options);
         try {
-          await onMessage(room, message, from, app);
+          await onMessage(room, message as z.output<Message>, from, app);
           await Promise.allSettled(pending);
         } finally {
           close();
         }
       };
-    }),
+    }, check),
   };
 }
 
@@ -153,7 +185,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       }));
     },
     get live() {
-      return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on"));
+      return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
     },
     session() {
       return (session ??= env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
