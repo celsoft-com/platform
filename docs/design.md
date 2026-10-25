@@ -244,6 +244,11 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Owner recovery**: `npx @celsoft/platform owner reset <email>` makes that account the owner and sets a password typed into the terminal; only people holding the project's tokens can run it, and they already control the app, so no recovery secret ever exists or appears on a screen.
     7. **Signup**: open to anyone.
     8. **Organizations**: Better Auth's organization plugin, with members, roles, invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
+        1. **Names**: an organization is the top-level group people join, and a team is a group inside an organization, as in Better Auth; docs, the skill and the demo use both words only that way.
+        2. **Membership**: `app.membership(organizationId)` returns the signed-in user's role there, or null; `app.requireMember(organizationId, roles?)` throws a 404 unless they belong, with one of the given roles when given, so outsiders cannot tell an organization exists.
+        3. **Permissions**: `defineApp({ roles })` maps each role to what it may do, such as `{ admin: { notes: ["create", "delete"] } }`, handed to Better Auth's access control; `app.can(organizationId, { notes: ["delete"] })` checks the signed-in user. The names are typed from the declaration, and the docs and skill tell apps to define them once as constants.
+        4. **Explicit organization**: endpoints take the organization they act on as an input, such as `/api/orgs/:org/notes`; the platform never scopes data by the session's active organization, which stays available for UI defaults.
+        5. **Owner columns**: `...owner()` from `@celsoft/platform/schema` adds `userId` and an optional `organizationId`, each referencing Better Auth's tables and deleted with them.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
