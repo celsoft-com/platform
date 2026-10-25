@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 The celsoft-com platform repository.
 
@@ -19,6 +19,11 @@ The celsoft-com platform repository.
   `apps/demo` as the app; never build repo-only tooling that stands in for a user command.
 - **Secrets:** `platform init` (here `mise run platform -- init`) writes a blank entry in
   `.env.secrets` for each token and reports which are empty. Never read `.env.secrets`.
+
+## Agent skills
+
+- **Shipped skills:** `packages/platform/skills/` is what agents read in every app, at that
+  version; update it in the same change whenever what apps write or run changes.
 
 ## Issues
 

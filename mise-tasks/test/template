@@ -19,4 +19,6 @@ npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null
 ls drizzle/*.sql >/dev/null
-echo "✓ template app installs, type-checks, runs the platform CLI, and generates its migrations"
+test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
+grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
+echo "✓ template app installs, type-checks, runs the platform CLI, generates its migrations, and points AGENTS.md at the package's skills"
