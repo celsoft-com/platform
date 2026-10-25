@@ -49,7 +49,25 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
 3. **Line in app code**: see App Code.
 
-## 6. Resource Identity
+## 6. Domains
+
+1. **One zone, many apps**: the project adds its apex domain, such as `example.com`, to Cloudflare once; every app in that account can live in it.
+2. **Prod hostname**: each app picks its own as `hostname` in `platform.jsonc`, either the apex itself or any name below it.
+3. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; that zone is the one it works in.
+4. **Previews**: always one label directly under the zone, `<app>--pr-<n>.<zone>`, whatever the prod hostname is.
+5. **Email**: prod sends from `noreply@<hostname>`, with Resend's records below that hostname, so the zone's own mail records are never touched; previews never send.
+6. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
+7. **Hidden values**: `hostname` may be written as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI, to keep it out of a public repo.
+8. **Examples**:
+
+| Setup | `name` | `hostname` | Zone | Preview for PR 3 | Email from |
+| --- | --- | --- | --- | --- | --- |
+| **App on the apex** | `shop` | `shop.dev` | `shop.dev` | `shop--pr-3.shop.dev` | `noreply@shop.dev` |
+| **App on a subdomain** | `notes` | `notes.example.com` | `example.com` | `notes--pr-3.example.com` | `noreply@notes.example.com` |
+| **Second app, same zone** | `blog` | `blog.example.com` | `example.com` | `blog--pr-3.example.com` | `noreply@blog.example.com` |
+| **Deeper subdomain** | `api` | `api.tools.example.com` | `example.com` | `api--pr-3.example.com` | `noreply@api.tools.example.com` |
+
+## 7. Resource Identity
 
 1. **Names are identity**: a resource belongs to an app when its name is one the app's names produce, matched in full, never by prefix.
 2. **Namespace**: every name the platform makes is the app name, alone or followed by a suffix that starts with `--`.
@@ -58,14 +76,8 @@ A published CLI, runtime library and app template that create and reuse each app
 5. **Three or more**: a hostname label with `--` in positions 3 and 4 is reserved for internationalized names, such as `xn--`, so `ab--pr-1` is never made.
 6. **Reserved**: anything in the account named `<app>` or `<app>--…` belongs to the platform; never create one by hand.
 7. **Unique apps**: an app name is used by one repo only within a Cloudflare account, since two repos with the same name share every resource.
-8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` and `<zone>` are described under Hostnames.
-9. **Hostnames**:
-    1. **Prod**: `hostname` in `platform.jsonc`, written there or as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI.
-    2. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; `app.example.com` uses `example.com`.
-    3. **Preview**: `<app>--pr-<n>.<zone>`, directly under the zone, whatever the prod hostname is.
-    4. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
-    5. **Email**: prod sends from `noreply@<hostname>`; previews never send.
-10. **Resources**:
+8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` and `<zone>` are described under Domains.
+9. **Resources**:
 
 <table>
 <thead>
@@ -91,7 +103,7 @@ A published CLI, runtime library and app template that create and reuse each app
 </tbody>
 </table>
 
-## 7. Bootstrap
+## 8. Bootstrap
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
@@ -104,7 +116,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Wire**: writes the deploy workflow to the repo.
 3. **Handoff**: after `init`, the next push to the main branch deploys prod, and every PR gets a preview.
 
-## 8. Project Configuration
+## 9. Project Configuration
 
 1. **One file**: `platform.jsonc` at the repo root, validated by a published JSON schema, is everything a project tells the platform.
     1. **App name**: unique within the Cloudflare account; every resource name derives from it, as Resource Identity describes.
@@ -121,7 +133,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Preview hostnames**: one per PR, under the zone.
     3. **Wrangler config**: generated at deploy with the real ids and bindings.
 
-## 9. Deployment Methods
+## 10. Deployment Methods
 
 1. **GitHub Actions**: the default; deploys happen without anyone running anything.
     1. **Triggers**: a push to main deploys prod; PR events create, update or delete previews.
@@ -132,7 +144,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Secrets and tokens**: both come from a local `.env.secrets` file.
 3. **Same result**: both methods run the same CLI commands, so a deploy behaves identically either way.
 
-## 10. Lifecycle
+## 11. Lifecycle
 
 1. **Push to main**: deploys prod.
     1. **Backup**: takes a Neon backup branch of prod, with no compute, keeping only the newest 3.
@@ -162,7 +174,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Fail early**: a failed migration stops the run before deploy, leaving the running version in place.
     4. **Fork PRs**: get no secrets, so no preview.
 
-## 11. Platform Components
+## 12. Platform Components
 
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
@@ -183,7 +195,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.
 
-## 12. App Code
+## 13. App Code
 
 1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
 2. **Conventions over settings**: where a fixed name or path does the job, the platform uses it instead of a setting.
@@ -223,7 +235,7 @@ A published CLI, runtime library and app template that create and reuse each app
 9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
 10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
 
-## 13. Upgrades
+## 14. Upgrades
 
 1. **Versioning**: the CLI and runtime library release together under one version.
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
@@ -244,7 +256,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Latest major**: the only version that gets fixes.
 5. **Compatibility date**: set by the project in `platform.jsonc`, never changed by the platform.
 
-## 14. Testing
+## 15. Testing
 
 1. **Dogfood**: the platform repo is itself a project, deploying a demo app with the platform as far as it can.
     1. **Demo app**: a real, usable app (proposed: shared notes) living in the repo with its own `platform.jsonc`, in an account and zone the maintainer owns.
@@ -263,7 +275,7 @@ A published CLI, runtime library and app template that create and reuse each app
 4. **Template test**: scaffolds an app from the template and builds it.
 5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
 
-## 15. Roadmap
+## 16. Roadmap
 
 1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
 2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.
