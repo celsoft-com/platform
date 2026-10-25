@@ -235,19 +235,25 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
 export async function destroy(ctx: Context, { data }: { data: boolean }): Promise<void> {
   const { config, ports, run } = ctx;
   const prod = names(config, { kind: "prod" });
+  // A prefix alone would also catch another app whose name starts with this one's, such as
+  // demo-pr; only names this app's previews can actually have are taken.
+  const preview = new RegExp(`^${config.name}-pr-\\d+$`);
   const previews = `${config.name}-pr-`;
 
-  const workers = [...((await ports.cloudflare.findWorker(prod.worker)) ? [prod.worker] : []), ...(await ports.cloudflare.listWorkers(previews))];
+  const workers = [
+    ...((await ports.cloudflare.findWorker(prod.worker)) ? [prod.worker] : []),
+    ...(await ports.cloudflare.listWorkers(previews)).filter((name) => preview.test(name)),
+  ];
   for (const worker of workers) await run.mutate(`delete Worker ${worker}`, () => ports.cloudflare.deleteWorker(worker), undefined);
 
   const prodHyperdrive = await ports.cloudflare.findHyperdrive(prod.hyperdrive);
-  for (const h of [...(prodHyperdrive ? [prodHyperdrive] : []), ...(await ports.cloudflare.listHyperdrives(previews))]) {
+  for (const h of [...(prodHyperdrive ? [prodHyperdrive] : []), ...(await ports.cloudflare.listHyperdrives(previews)).filter((h) => preview.test(h.name))]) {
     await run.mutate(`delete Hyperdrive config ${h.name}`, () => ports.cloudflare.deleteHyperdrive(h.id), undefined);
   }
 
   if (config.database) {
     const project = config.database.neonProject;
-    const doomed = [...(await ports.neon.listBranches(project, "pr-"))];
+    const doomed = (await ports.neon.listBranches(project, "pr-")).filter((b) => /^pr-\d+$/.test(b.name));
     if (data) doomed.push(...(await ports.neon.listBranches(project, BACKUP_PREFIX)), ...[await ports.neon.findBranch(project, DEV_BRANCH)].filter((b) => b !== undefined));
     for (const branch of doomed) await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);
     if (data) {

@@ -268,6 +268,15 @@ describe("destroy", () => {
     expect(ports.migrator.runs.at(-1)).toBe("postgresql://owner:secret@br-prod.neon.test/app");
   });
 
+  it("leaves another app whose name starts with this one's alone", async () => {
+    const c = await deployEverything();
+    ports.cloudflare.workers.add("demo-pr-pr-3");
+    ports.cloudflare.hyperdrives.push({ id: "other", name: "demo-pr-pr-3", origin: "", cached: false });
+    await destroy(c, { data: false });
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-pr-3"]);
+    expect(ports.cloudflare.hyperdrives.map((h) => h.id)).toEqual(["other"]);
+  });
+
   it("changes nothing on a dry run", async () => {
     const c = await deployEverything();
     await destroy({ ...c, run: new Run(true, (line) => log.push(line)) }, { data: true });
