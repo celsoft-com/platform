@@ -255,12 +255,13 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Zod only**: every type an app writes is a Zod schema; whatever the API and MCP need beyond that is the package's wrapping, never the app's.
     2. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.
     3. **Where served**: each endpoint says `serve: ["api"]`, `["mcp"]` or both; only an API endpoint has a method and path.
-    4. **Types**: input and output are Zod schemas, which give the TypeScript types, the runtime checks and the JSON Schema MCP describes tools with.
-    5. **Outputs checked**: every response is validated against its output schema; a mismatch is a 500, logged.
-    6. **Errors**: a handler fails by throwing one typed error; over HTTP it is that status with `{ error }`, over MCP a tool result with `isError: true` and the message, input check failures included, as MCP asks so a model can correct itself.
-    7. **Access**: the existing path rule; `/api/public/` needs no user, every other `/api/` path needs one, and MCP calls always carry a signed-in user.
-    8. **Hand-written routes**: the `defineApp` handler stays for uploads, downloads, streaming and webhooks; both live in the package's request handling, so the app only writes its functions.
-    9. **MCP sign-in**: AI clients connect with OAuth 2.1 served by Better Auth's MCP plugin; a person approves a client once, its calls run as that person, and its registered clients, tokens and consents add auth tables and a consent screen.
+    4. **URL inputs**: API endpoints take inputs from the path, the query and the JSON body, merged into one object matching the input schema; MCP passes that object directly.
+    6. **Types**: input and output are Zod schemas, which give the TypeScript types, the runtime checks and the JSON Schema MCP describes tools with.
+    6. **Outputs checked**: every response is validated against its output schema; a mismatch is a 500, logged.
+    7. **Errors**: a handler fails by throwing one typed error; over HTTP it is that status with `{ error }`, over MCP a tool result with `isError: true` and the message, input check failures included, as MCP asks so a model can correct itself.
+    8. **Access**: the existing path rule; `/api/public/` needs no user, every other `/api/` path needs one, and MCP calls always carry a signed-in user.
+    9. **Hand-written routes**: the `defineApp` handler stays for uploads, downloads, streaming and webhooks; both live in the package's request handling, so the app only writes its functions.
+    10. **MCP sign-in**: AI clients connect with OAuth 2.1 served by Better Auth's MCP plugin; a person approves a client once, its calls run as that person, and its registered clients, tokens and consents add auth tables and a consent screen.
 
 ## 14. Upgrades
 
