@@ -232,7 +232,15 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Helper**: `app.files` stores objects by path, `/` making folders, with JSON helpers and folder listing; a preview's prefix is added for it.
     2. **Cleanup**: closing a PR deletes its folder; the preview bucket also expires files after 14 days as a backstop.
 4. **Background work**: Queues and Cron Triggers.
-5. **Realtime**: Durable Objects rooms over WebSockets.
+5. **Realtime**: Durable Objects rooms over WebSockets, the same save-then-announce pattern as aiplanner's Ably setup with no outside service.
+    1. **Switch**: `"live": true` in `platform.jsonc`; no new token permission or account.
+    2. **Rooms**: one per name the app chooses, such as `note:123`, each reaching one Durable Object; rooms start on first use and go idle when empty, so cost follows activity, not page count.
+    3. **Joining**: browsers open `/api/live/<room>` and only listen; the app's `canJoin` decides who may join and refuses by default, and changes go through the app's own API.
+    4. **Catch up**: each room numbers its announcements and keeps the last 500 in its own storage; a reconnecting browser gets what it missed, or is told to reload.
+    5. **Presence**: each room tracks who is connected and tells everyone on join and leave; quiet connections hibernate at no cost.
+    6. **Client**: a small dependency-free browser client, served at `/api/live/client.js` for plain pages and exported from the package for bundled apps such as Svelte, which handles reconnecting and catching up.
+    7. **Previews**: each preview Worker has its own rooms, deleted with it.
+    8. **Demo**: team notes inside an organization, changing live with presence.
 6. **MCP**: an MCP server in the runtime library, behind auth.
 7. **Observability**: Sentry wired in by the runtime library.
 8. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
