@@ -21,7 +21,10 @@ export async function hashCode(code: string): Promise<string> {
 type Db = NodePgDatabase<Record<string, unknown>>;
 
 // Shown once, right after the owner signs in without one; the screen tells them to save it.
+// The role is read from the database: the session's cached copy predates the owner claim.
 export async function issueRecoveryCode(db: Db, userId: string): Promise<string | null> {
+  const [row] = await db.select({ role: user.role }).from(user).where(eq(user.id, userId));
+  if (row?.role !== OWNER_ROLE) return null;
   const code = newRecoveryCode();
   const inserted = await db
     .insert(ownerRecovery)

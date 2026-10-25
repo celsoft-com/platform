@@ -137,7 +137,7 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   const db = app.db as NodePgDatabase<Record<string, unknown>>;
   if (path === `${PLATFORM_API}recovery-code` && request.method === "POST") {
     const user = await app.requireUser();
-    return json({ code: user.role === "owner" ? await issueRecoveryCode(db, user.id) : null });
+    return json({ code: await issueRecoveryCode(db, user.id) });
   }
   if (path === `${PLATFORM_API}recover` && request.method === "POST") {
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
