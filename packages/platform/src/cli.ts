@@ -15,7 +15,7 @@ import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, destroy, dev, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dev, findPreviews, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
@@ -30,6 +30,7 @@ commands:
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
+  previews         list the previews that exist, with their pull request's state
   sweep            delete previews whose pull request is closed
   owner reset <email> [--pr <n>]
                    make that account the owner and set its password, for an owner locked out
@@ -37,7 +38,7 @@ commands:
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "previews" } | { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -105,6 +106,10 @@ async function main(argv: string[]): Promise<void> {
     await ownerReset(ctx, app.config, command.email, values.pr === undefined ? undefined : prNumber(values.pr));
     return;
   }
+  if (command.name === "previews") {
+    await listPreviews(ctx, appDir);
+    return;
+  }
   if (command.name === "sweep") {
     await sweep(ctx, await new GhCli(repoRoot(appDir)).openPullRequests());
     return;
@@ -136,7 +141,7 @@ function parseCommand([name, pr, extra]: string[]): Command {
   }
   if (name === "db" && pr === "generate") return { name: "db generate" };
   if (name === "apps" && pr === "move") return { name: "apps move" };
-  if (name === "upgrade" || name === "sweep") return { name };
+  if (name === "upgrade" || name === "sweep" || name === "previews") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
@@ -194,6 +199,17 @@ async function currentRepo(appDir: string): Promise<Repo> {
   const { GITHUB_REPOSITORY_ID: id, GITHUB_REPOSITORY: name } = process.env;
   if (id && name) return { id: Number(id), name };
   return new GhCli(repoRoot(appDir)).repository();
+}
+
+// Read-only: what exists for each preview, so leftovers a cleanup missed stand out.
+async function listPreviews(ctx: Context, appDir: string): Promise<void> {
+  const previews = await findPreviews(ctx);
+  if (previews.length === 0) return console.log("no previews");
+  const open = await new GhCli(repoRoot(appDir)).openPullRequests();
+  for (const { pr, pieces } of previews) {
+    const state = open.includes(pr) ? "open" : "closed, the next sweep removes it";
+    console.log(`PR ${String(pr).padEnd(6)} ${state}\n           ${pieces.join(", ")}`);
+  }
 }
 
 // Recovery for an owner who lost their password or email: whoever holds the project's tokens can

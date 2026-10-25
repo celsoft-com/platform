@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, dnsComment, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dnsComment, findPreviews, moveApp, PreflightError, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -455,6 +455,17 @@ describe("sweep", () => {
     expect([...ports.cloudflare.workers]).toEqual(["demo--pr-8"]);
     expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "pr-8"]);
     expect(ports.cloudflare.buckets.get("demo--previews")!.keys).toEqual(["pr-8/a.txt"]);
+  });
+
+  it("lists each preview with the pieces that exist, old names included", async () => {
+    await deploy({ ...ctx(), config: { ...config, files: true } }, { kind: "preview", pr: 7 });
+    ports.cloudflare.buckets.get("demo--previews")!.keys = ["pr-7/a.txt", "pr-9/b.txt"];
+    ports.cloudflare.workers.add("demo-pr-5");
+    expect(await findPreviews(ctx())).toEqual([
+      { pr: 5, pieces: ["old Worker"] },
+      { pr: 7, pieces: ["Worker", "Hyperdrive config", "Neon branch", "files"] },
+      { pr: 9, pieces: ["files"] },
+    ]);
   });
 
   it("finds a preview from any piece left behind", async () => {
