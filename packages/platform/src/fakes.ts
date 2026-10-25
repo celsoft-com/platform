@@ -1,5 +1,5 @@
-import type { Branch, Cloudflare, DnsRecord, Hyperdrive, Mail, MailDomain, Migrator, Neon, Ports, Wrangler, Zone, ZoneRecord } from "./ports.js";
-import { appTag, PLATFORM_TAG, prTag } from "./ownership.js";
+import { LEGACY_PLATFORM_TAG } from "./legacy.js";
+import type { Branch, Cloudflare, DnsRecord, Hyperdrive, Mail, MailDomain, Migrator, Neon, Ports, Registry, Repo, Wrangler, Zone, ZoneRecord } from "./ports.js";
 import { originOf } from "./target.js";
 
 export class FakeNeon implements Neon {
@@ -73,16 +73,14 @@ export class FakeCloudflare implements Cloudflare {
   async findWorker(name: string) {
     return this.workers.has(name);
   }
-  workerTags = new Map<string, string[]>();
+  // Tags only versions before the `--` names wrote.
+  legacyTags = new Map<string, string[]>();
   workerHyperdrives = new Map<string, string[]>();
-  async workerOwner(name: string) {
+  async legacyWorker(name: string) {
     if (!this.workers.has(name)) return undefined;
-    const tags = this.workerTags.get(name) ?? [];
-    const app = tags.includes(PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
+    const tags = this.legacyTags.get(name) ?? [];
+    const app = tags.includes(LEGACY_PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
     return { app, hyperdriveIds: this.workerHyperdrives.get(name) ?? [] };
-  }
-  async tagWorker(name: string, app: string, pr: number | undefined) {
-    this.workerTags.set(name, [PLATFORM_TAG, appTag(app), ...(pr ? [prTag(pr)] : [])]);
   }
   async listWorkers(namePrefix: string) {
     return [...this.workers].filter((w) => w.startsWith(namePrefix));
@@ -90,7 +88,7 @@ export class FakeCloudflare implements Cloudflare {
   async deleteWorker(name: string) {
     this.workers.delete(name);
     this.workerSecrets.delete(name);
-    this.workerTags.delete(name);
+    this.legacyTags.delete(name);
     this.workerHyperdrives.delete(name);
   }
   async workerSecretNames(worker: string) {
@@ -99,16 +97,26 @@ export class FakeCloudflare implements Cloudflare {
   async dnsRecords(_zoneId: string, name: string) {
     return this.records.filter((r) => r.name === name);
   }
-  buckets = new Map<string, { expiryDays?: number; keys: string[]; owner?: string }>();
-  async bucketOwner(name: string) {
+  // legacyOwner is the old marker object's app, which only versions before the `--` names wrote.
+  buckets = new Map<string, { expiryDays?: number; keys: string[]; legacyOwner?: string }>();
+  async legacyBucketApp(name: string) {
     const bucket = this.buckets.get(name);
-    return bucket && (bucket.owner ?? null);
+    return bucket && (bucket.legacyOwner ?? null);
   }
   async findBucket(name: string) {
     return this.buckets.has(name);
   }
-  async createBucket(name: string, app: string) {
-    this.buckets.set(name, { keys: [], owner: app });
+  async createBucket(name: string) {
+    if (this.buckets.has(name)) throw new Error(`bucket ${name} exists`);
+    this.buckets.set(name, { keys: [] });
+  }
+  async listObjects(bucket: string, prefix: string) {
+    return this.buckets.get(bucket)!.keys.filter((k) => k.startsWith(prefix));
+  }
+  async copyObject(from: string, key: string, to: string) {
+    if (!this.buckets.get(from)!.keys.includes(key)) throw new Error(`no ${key} in ${from}`);
+    const target = this.buckets.get(to)!;
+    if (!target.keys.includes(key)) target.keys.push(key);
   }
   async deleteBucket(name: string) {
     if (this.buckets.get(name)?.keys.length) throw new Error(`bucket ${name} is not empty`);
@@ -126,14 +134,17 @@ export class FakeCloudflare implements Cloudflare {
     b.keys = b.keys.filter((k) => !k.startsWith(prefix));
     return before - b.keys.length;
   }
-  async managedDnsRecords() {
-    return this.records.filter((r) => r.managed);
+  async commentedDnsRecords(_zoneId: string, comment: string) {
+    return this.records.filter((r) => r.comment === comment);
+  }
+  async setDnsRecordComment(_zoneId: string, id: string, comment: string) {
+    this.records.find((r) => r.id === id)!.comment = comment;
   }
   async deleteDnsRecord(_zoneId: string, id: string) {
     this.records = this.records.filter((r) => r.id !== id);
   }
-  async createDnsRecord(_zoneId: string, record: DnsRecord) {
-    this.records.push({ ...record, id: `rec-${this.next++}`, managed: true });
+  async createDnsRecord(_zoneId: string, record: DnsRecord, comment: string) {
+    this.records.push({ ...record, id: `rec-${this.next++}`, comment });
   }
 }
 
@@ -193,12 +204,29 @@ export class FakeWrangler implements Wrangler {
     const name = c.name as string;
     this.deploys.push({ config: c, secrets });
     this.cloudflare.workers.add(name);
-    // Like the real upload, a deploy carries no tags; the platform applies them afterwards.
-    this.cloudflare.workerTags.delete(name);
     this.cloudflare.workerHyperdrives.set(name, ((c.hyperdrive as { id: string }[] | undefined) ?? []).map((h) => h.id));
     const stored = this.cloudflare.workerSecrets.get(name) ?? new Set<string>();
     for (const key of Object.keys(secrets)) stored.add(key);
     this.cloudflare.workerSecrets.set(name, stored);
+  }
+}
+
+export class FakeRegistry implements Registry {
+  claims = new Map<string, Repo>();
+
+  async get(app: string) {
+    return this.claims.get(app);
+  }
+  async claim(app: string, repo: Repo) {
+    if (this.claims.has(app)) return false;
+    this.claims.set(app, repo);
+    return true;
+  }
+  async set(app: string, repo: Repo) {
+    this.claims.set(app, repo);
+  }
+  async release(app: string) {
+    this.claims.delete(app);
   }
 }
 
@@ -231,5 +259,6 @@ export function fakePorts() {
   const mail = new FakeMail();
   const wrangler = new FakeWrangler(cloudflare);
   const migrator = new FakeMigrator();
-  return { neon, cloudflare, mail, wrangler, migrator } satisfies Ports;
+  const registry = new FakeRegistry();
+  return { neon, cloudflare, mail, registry, wrangler, migrator } satisfies Ports;
 }

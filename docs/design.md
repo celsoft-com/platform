@@ -43,46 +43,81 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
-    1. **Own resources only**: it changes or deletes only what it can prove it made for the app; see Resource Identity.
+    1. **Own resources only**: it changes or deletes only resources named the way Resource Identity says it names the app's.
     2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.
     3. **Lifecycle**: creates, updates and deletes its own resources, previews included.
     4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
 3. **Line in app code**: see App Code.
 
-## 6. Resource Identity
+## 6. Domains
 
-1. **Why**: Cloudflare has no project scope inside an account, so a matching name never proves the platform made a resource for this app.
-2. **Rule**: every resource is found by a name derived from the app, then proven before any change; a resource with the right name but no proof stops the run untouched.
-3. **Names**: `<app>` and `<hostname>` come from `platform.jsonc`, `<n>` is the PR number, and `<zone>` is the apex domain.
-4. **Previews**: preview names are matched exactly against `<app>-pr-<n>`, never by prefix alone, so an app named `demo` never matches one named `demo-pr`.
-5. **Checked first**: every proof is checked before the first change or deletion, so a failed proof leaves everything as it was.
-6. **Resources**:
+1. **Split**: resources are named after the app, and hostnames after the prod hostname; a preview hostname is the prod hostname with `pr-<n>.` in front.
+2. **One zone, many apps**: the project adds its apex domain, such as `example.com`, to Cloudflare once; every app in that account can live in it.
+3. **Prod hostname**: each app picks its own as `hostname` in `platform.jsonc`, either the apex itself or any name below it.
+4. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; that zone is the one it works in.
+5. **Previews**: `pr-<n>.<hostname>`, directly under the app's prod hostname, so changing the prod hostname moves its previews too.
+6. **Email**: prod sends from `noreply@<hostname>`, with Resend's records below that hostname, so the zone's own mail records are never touched; previews never send.
+7. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
+8. **Hidden values**: `hostname` may be written as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI, to keep it out of a public repo.
+9. **Examples**:
+
+| Setup | `name` | `hostname` | Zone | Preview for PR 3 | Email from |
+| --- | --- | --- | --- | --- | --- |
+| **App on the apex** | `shop` | `shop.dev` | `shop.dev` | `pr-3.shop.dev` | `noreply@shop.dev` |
+| **App on a subdomain** | `notes` | `notes.example.com` | `example.com` | `pr-3.notes.example.com` | `noreply@notes.example.com` |
+| **Second app, same zone** | `blog` | `blog.example.com` | `example.com` | `pr-3.blog.example.com` | `noreply@blog.example.com` |
+| **Deeper subdomain** | `api` | `api.tools.example.com` | `example.com` | `pr-3.api.tools.example.com` | `noreply@api.tools.example.com` |
+
+## 7. Resource Identity
+
+1. **Names are identity**: a resource belongs to an app when its name is one the app's names produce, matched in full, never by prefix.
+2. **Namespace**: every name the platform makes is the app name, alone or followed by a suffix that starts with `--`.
+3. **App names**: 3 to 50 characters of `a-z`, `0-9` and single hyphens, starting with a letter; never `--`, so each name splits into app and suffix one way only.
+4. **Length**: 50 leaves room for the longest suffix within the 63-character limit Cloudflare puts on Worker names, bucket names and hostname labels.
+5. **Three or more**: a hostname label with `--` in positions 3 and 4 is reserved for internationalized names, such as `xn--`, so `ab--pr-1` is never made.
+6. **Reserved**: anything in the account named `<app>` or `<app>--…`, and the bucket `celsoft-platform`, belongs to the platform; never create one by hand.
+7. **App claims**: an app name belongs to one repo per Cloudflare account, enforced by a registry.
+    1. **Registry**: the account-wide bucket `celsoft-platform` holds one object per app, `apps/<app>.json`, recording the deploying repo's numeric GitHub ID and its `owner/repo` name.
+    2. **Claim**: the first deploy writes the object through R2's S3 API with `If-None-Match: *`, so of two first deploys only one lands; R2's REST API ignores that condition.
+    3. **Check**: every deploy, cleanup and destroy stops before any change when the claim names a different repo ID; renames and transfers keep the ID, so they pass.
+    4. **Move**: the error names the exact `apps move` command that re-points the claim, for when a different repo is meant to take over.
+    5. **Release**: `destroy` deletes the claim last.
+    6. **Lost registry**: deleting the bucket by hand erases every claim, and each app's next deploy claims its name again.
+8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` is described under Domains.
+9. **Nothing written on resources**: identity is never stored on a resource, so Workers carry no platform tags and buckets no marker object; email DNS records are the one exception, since Resend chooses their names.
+10. **Destroy**: removes every resource the app's names produce that exists, whatever `platform.jsonc` turns on now; a provider whose key is missing is skipped with a warning.
+11. **Earlier names**: versions before the `--` namespace used `-pr-<n>`, `-files` and `-previews`, with tags and a bucket marker as proof.
+    1. **Prod bucket**: the first deploy on the new version copies `<app>-files` into `<app>--files`, binds the Worker to it, then deletes the old bucket.
+    2. **Old previews**: cleanup and sweep also remove `<app>-pr-<n>` Workers and Hyperdrive configs and the `<app>-previews` bucket, only when they carry the old `app:<app>` tag or marker.
+    3. **Dropped**: that old-name code is removed in the next major.
+12. **Resources**:
 
 <table>
 <thead>
-<tr><th>Resource</th><th>Preview name</th><th>Prod name</th><th>Proof</th><th>Removed by</th></tr>
+<tr><th>Resource</th><th>Preview name</th><th>Prod name</th><th>Matched by</th><th>Removed by</th></tr>
 </thead>
 <tbody>
-<tr><td colspan="5"><strong>Cloudflare</strong>. Scope is an account ID, the one account <code>CLOUDFLARE_API_TOKEN</code> reaches, shared by every app in it, so a name alone never proves ownership.</td></tr>
-<tr><td><strong>Worker</strong></td><td><code>&lt;app&gt;-pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Tags <code>celsoft-platform</code> and <code>app:&lt;app&gt;</code>; previews also <code>pr:&lt;n&gt;</code></td><td>Cleanup, sweep, destroy</td></tr>
-<tr><td><strong>Hostname</strong></td><td><code>&lt;app&gt;-pr-&lt;n&gt;.&lt;zone&gt;</code></td><td><code>&lt;hostname&gt;</code></td><td>A custom domain of the app's Worker</td><td>Deleted with its Worker</td></tr>
-<tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;-pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Bound by one of the app's Workers, or its origin is in the app's Neon project</td><td>Cleanup, sweep, destroy</td></tr>
-<tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;-previews</code></td><td><code>&lt;app&gt;-files</code></td><td>A <code>.celsoft-platform</code> object naming the app; one preview bucket is shared by every PR</td><td>Destroy; the prod bucket only with <code>--data</code></td></tr>
-<tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Inside the preview bucket, so the bucket's proof covers it</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
-<tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Each record's Cloudflare comment field reads <code>managed by @celsoft/platform</code>; previews never send email</td><td>Destroy</td></tr>
-<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names; a project-scoped <code>NEON_API_KEY</code> reaches nothing else, but a personal key reaches every project; prod uses the project's default branch, which the project owns.</td></tr>
-<tr><td><strong>Preview branch</strong></td><td><code>pr-&lt;n&gt;</code></td><td>(none)</td><td>Inside the app's own Neon project</td><td>Cleanup, sweep, destroy</td></tr>
-<tr><td><strong>Backup branch</strong></td><td>(none)</td><td><code>backup-&lt;time&gt;</code></td><td>Inside the app's own Neon project</td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
-<tr><td><strong>Dev branch</strong></td><td>(none)</td><td><code>dev</code></td><td>Inside the app's own Neon project; used by <code>dev</code></td><td><code>destroy --data</code></td></tr>
-<tr><td colspan="5"><strong>Resend</strong>. Scope is an API key, <code>RESEND_API_KEY</code>, whose account is shared by every app using it; there is no account ID.</td></tr>
-<tr><td><strong>Sending domain</strong></td><td>(none)</td><td><code>&lt;hostname&gt;</code></td><td>Name only</td><td>Destroy</td></tr>
-<tr><td><strong>Sending key</strong></td><td>(none)</td><td><code>platform &lt;hostname&gt;</code></td><td>Name only</td><td>Replaced when a Worker lacks it; destroy</td></tr>
+<tr><td colspan="5"><strong>Cloudflare</strong>. Scope is an account ID, the one account <code>CLOUDFLARE_API_TOKEN</code> reaches, shared by every app in it.</td></tr>
+<tr><td><strong>Worker</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>Hostname</strong></td><td><code>pr-&lt;n&gt;.&lt;hostname&gt;</code></td><td><code>&lt;hostname&gt;</code></td><td>A custom domain of the app's Worker for that PR</td><td>Deleted with its Worker</td></tr>
+<tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;--previews</code></td><td><code>&lt;app&gt;--files</code></td><td>Exact name; one preview bucket is shared by every PR</td><td>Destroy; the prod bucket only with <code>--data</code></td></tr>
+<tr><td><strong>App claim</strong></td><td>(none)</td><td><code>apps/&lt;app&gt;.json</code> in <code>celsoft-platform</code></td><td>Exact name</td><td>Destroy, last</td></tr>
+<tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
+<tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Resend chooses the names, so each record's comment field reads <code>managed by @celsoft/platform for &lt;app&gt;</code></td><td>Destroy</td></tr>
+<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
+<tr><td><strong>Preview branch</strong></td><td><code>pr-&lt;n&gt;</code></td><td>(none)</td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>Backup branch</strong></td><td>(none)</td><td><code>backup-&lt;time&gt;</code></td><td>Name starting <code>backup-</code></td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
+<tr><td><strong>Dev branch</strong></td><td>(none)</td><td><code>dev</code></td><td>Exact name</td><td><code>destroy --data</code></td></tr>
+<tr><td colspan="5"><strong>Resend</strong>. Scope is an API key, <code>RESEND_API_KEY</code>, whose account may be shared by several apps; there is no account ID.</td></tr>
+<tr><td><strong>Sending domain</strong></td><td>(none)</td><td><code>&lt;hostname&gt;</code></td><td>Exact name</td><td>Destroy</td></tr>
+<tr><td><strong>Sending key</strong></td><td>(none)</td><td><code>platform &lt;hostname&gt;</code></td><td>Exact name</td><td>Replaced when a Worker lacks it; destroy</td></tr>
 <tr><td colspan="5"><strong>GitHub</strong>. Scope is a repo name, the <code>owner/repo</code> the workflow runs in, from <code>GITHUB_REPOSITORY</code>.</td></tr>
-<tr><td><strong>Preview link comment</strong></td><td>(none)</td><td>(none)</td><td>One per PR, posted by the workflow; its text starts with the hidden HTML comment <code>&lt;!-- platform-preview --&gt;</code></td><td>Never; edited in place on each push</td></tr>
+<tr><td><strong>Preview link comment</strong></td><td>(none)</td><td>(none)</td><td>One per PR; its text starts with the hidden HTML comment <code>&lt;!-- platform-preview --&gt;</code></td><td>Never; edited in place on each push</td></tr>
 </tbody>
 </table>
 
-## 7. Bootstrap
+## 8. Bootstrap
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
@@ -95,10 +130,10 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Wire**: writes the deploy workflow to the repo.
 3. **Handoff**: after `init`, the next push to the main branch deploys prod, and every PR gets a preview.
 
-## 8. Project Configuration
+## 9. Project Configuration
 
 1. **One file**: `platform.jsonc` at the repo root, validated by a published JSON schema, is everything a project tells the platform.
-    1. **App name**: unique within the Cloudflare account; every resource name derives from it.
+    1. **App name**: unique within the Cloudflare account; every resource name derives from it, as Resource Identity describes.
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Worker**: the path to the Worker's entry module.
     4. **Frontend**: the directory holding the built static files, if any.
@@ -112,7 +147,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Preview hostnames**: one per PR, under the zone.
     3. **Wrangler config**: generated at deploy with the real ids and bindings.
 
-## 9. Deployment Methods
+## 10. Deployment Methods
 
 1. **GitHub Actions**: the default; deploys happen without anyone running anything.
     1. **Triggers**: a push to main deploys prod; PR events create, update or delete previews.
@@ -123,7 +158,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Secrets and tokens**: both come from a local `.env.secrets` file.
 3. **Same result**: both methods run the same CLI commands, so a deploy behaves identically either way.
 
-## 10. Lifecycle
+## 11. Lifecycle
 
 1. **Push to main**: deploys prod.
     1. **Backup**: takes a Neon backup branch of prod, with no compute, keeping only the newest 3.
@@ -153,7 +188,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Fail early**: a failed migration stops the run before deploy, leaving the running version in place.
     4. **Fork PRs**: get no secrets, so no preview.
 
-## 11. Platform Components
+## 12. Platform Components
 
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
@@ -165,16 +200,17 @@ A published CLI, runtime library and app template that create and reuse each app
     7. **`db generate`**: writes new migrations from the platform's tables and the app's schema.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
     9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape.
-    10. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
-    11. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
-    12. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
+    10. **`apps move`**: gives the app's name to the repo it runs in; only ever suggested by the error that needs it.
+    11. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
+    12. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
+    13. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.
 
-## 12. App Code
+## 13. App Code
 
 1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
 2. **Conventions over settings**: where a fixed name or path does the job, the platform uses it instead of a setting.
@@ -214,7 +250,7 @@ A published CLI, runtime library and app template that create and reuse each app
 9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
 10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
 
-## 13. Upgrades
+## 14. Upgrades
 
 1. **Versioning**: the CLI and runtime library release together under one version.
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
@@ -235,7 +271,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Latest major**: the only version that gets fixes.
 5. **Compatibility date**: set by the project in `platform.jsonc`, never changed by the platform.
 
-## 14. Testing
+## 15. Testing
 
 1. **Dogfood**: the platform repo is itself a project, deploying a demo app with the platform as far as it can.
     1. **Demo app**: a real, usable app (proposed: shared notes) living in the repo with its own `platform.jsonc`, in an account and zone the maintainer owns.
@@ -254,7 +290,7 @@ A published CLI, runtime library and app template that create and reuse each app
 4. **Template test**: scaffolds an app from the template and builds it.
 5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
 
-## 15. Roadmap
+## 16. Roadmap
 
 1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
 2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.

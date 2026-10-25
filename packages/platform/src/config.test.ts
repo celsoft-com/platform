@@ -46,6 +46,12 @@ describe("parseConfig", () => {
     expect(() => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "extra": true,`))).toThrow(/extra/);
   });
 
+  it("keeps app names to 3 to 50 characters with no --, which starts every platform suffix", () => {
+    const named = (name: string) => () => parseConfig(valid.replace(`"name": "demo",`, `"name": "${name}",`));
+    for (const bad of ["ab", "a--b", "demo-", "-demo", "1demo", "a".repeat(51)]) expect(named(bad)).toThrow(/name:/);
+    for (const good of ["abc", "my-app", "app2", "a".repeat(50)]) expect(named(good)).not.toThrow();
+  });
+
   it("tells an older config to upgrade", () => {
     expect(() => parseConfig(valid.replace(`"name": "demo",`, `"version": 1, "name": "demo",`))).toThrow(/older shape \(version\).*platform upgrade/);
   });

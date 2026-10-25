@@ -54,7 +54,7 @@ The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each
     | Account > Workers Scripts > Edit | Deploy and delete Workers, and set their secrets |
     | Account > Hyperdrive > Edit | Create and delete database connection configs |
     | Account > Account Settings > Read | Find the account id |
-    | Account > Workers R2 Storage > Edit | Create file buckets, and delete a preview's files when its PR closes |
+    | Account > Workers R2 Storage > Edit | Create file buckets, delete a preview's files when its PR closes, and record which repo owns each app name |
     | Zone > Workers Routes > Edit | Attach app and preview hostnames |
     | Zone > Zone > Read | Find the zone by its domain |
     | Zone > DNS > Edit | Write the email-sending records for each app hostname |
@@ -66,8 +66,8 @@ The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each
 ## 6. Neon API key
 
 1. **Open:** your organization's **Settings**, then **API keys**, then **Create new API key**.
-2. **Scope:** **Project-scoped**, and pick the project from step 2. It can manage everything inside that project and nothing else.
-3. **No organization?** If the project is in a personal account, create a personal key at [API keys](https://console.neon.tech/app/settings/api-keys) instead.
+2. **Scope:** **Project-scoped**, and pick the project from step 2. It can manage everything inside that project and nothing else; the platform accepts no other kind of key.
+3. **Admin:** only an organization admin can create one, so ask yours if the option is missing.
 4. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`.
 
 ## 7. Resend API key
