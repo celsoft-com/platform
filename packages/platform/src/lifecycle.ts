@@ -188,7 +188,8 @@ export const DEV_BRANCH = "dev";
 export const DEV_URL = "http://localhost:8787";
 
 // Runs the app locally against its own Neon branch, copied from prod once and kept between runs.
-export async function dev(ctx: Context): Promise<void> {
+// `appUrl` is where the person opens the app: the frontend's dev server when the app has one.
+export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string } = {}): Promise<void> {
   const { config, ports, run } = ctx;
   const secrets = requireSecrets(config, ctx.secrets);
 
@@ -208,7 +209,7 @@ export async function dev(ctx: Context): Promise<void> {
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
   }
 
-  const vars: Record<string, string> = { APP_URL: DEV_URL, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const vars: Record<string, string> = { APP_URL: appUrl, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
   const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
     config,
     worker: `${config.name}-dev`,
@@ -220,7 +221,7 @@ export async function dev(ctx: Context): Promise<void> {
     bucket: config.files ? `${config.name}-dev` : undefined,
   }) as Record<string, unknown>;
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
-  run.note(`serving at ${DEV_URL}; email is captured to this terminal`);
+  run.note(`serving at ${appUrl}; email is captured to this terminal`);
   await ports.wrangler.dev(local, devSecrets, uri);
 }
 
