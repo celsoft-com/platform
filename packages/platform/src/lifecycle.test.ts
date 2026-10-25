@@ -147,12 +147,16 @@ describe("auth and email", () => {
     expect(first.config.vars).toEqual({
       APP_URL: "https://demo.example.com",
       APP_NAME: "demo",
+      LIVE_ROOMS: "off",
       AUTH_ORGANIZATIONS: "off",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });
     expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
     expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
+    expect(first.config.main).toBe(".platform-entry.ts");
+    expect(first.config.durable_objects).toEqual({ bindings: [{ name: "LIVE", class_name: "LiveRoom" }] });
+    expect(first.config.migrations).toEqual([{ tag: "live-rooms-v1", new_sqlite_classes: ["LiveRoom"] }]);
 
     await deploy(authCtx(), { kind: "prod" });
     expect(Object.keys(ports.wrangler.deploys[1]!.secrets)).toEqual(["SESSION_SECRET"]);

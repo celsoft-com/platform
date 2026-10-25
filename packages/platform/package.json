@@ -18,7 +18,8 @@
   },
   "exports": {
     ".": "./dist/runtime/index.js",
-    "./schema": "./dist/schema.js"
+    "./schema": "./dist/schema.js",
+    "./live": "./dist/runtime/live-client.js"
   },
   "files": [
     "dist",

@@ -14,23 +14,35 @@ export interface WranglerInput {
 
 export const AUTH_LIMIT = { limit: 10, period: 60 } as const;
 
+// Wrangler deploys this generated module, which exports the app's handler and the live room
+// class, so the app's own worker file never has to export platform code.
+export const ENTRY_FILE = ".platform-entry.ts";
+
+export function entryModule(worker: string): string {
+  const path = worker.startsWith(".") ? worker : `./${worker}`;
+  return `// Written by @celsoft/platform at deploy; never edit or commit it.\nimport app from ${JSON.stringify(path)};\nexport default app;\nexport const LiveRoom = app.LiveRoom;\n`;
+}
+
 export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket }: WranglerInput): object {
   const auth = config.auth;
   return {
     name: worker,
     account_id: accountId,
-    main: config.worker,
+    main: ENTRY_FILE,
     compatibility_date: config.compatibilityDate,
     compatibility_flags: ["nodejs_compat"],
     workers_dev: false,
     routes: [{ pattern: hostname, custom_domain: true }],
     observability: { enabled: true },
-    vars: { ...vars, APP_NAME: config.name, ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off" }) },
+    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off" }) },
     ...(config.frontend && {
       assets: { directory: config.frontend, not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? SCREEN_PATHS : [])] },
     }),
     ...(hyperdriveId && { hyperdrive: [{ binding: "DB", id: hyperdriveId }] }),
     ...(bucket && { r2_buckets: [{ binding: "FILES", bucket_name: bucket }] }),
+    // The room class is always deployed, so turning live off and on never needs a Durable Object migration.
+    durable_objects: { bindings: [{ name: "LIVE", class_name: "LiveRoom" }] },
+    migrations: [{ tag: "live-rooms-v1", new_sqlite_classes: ["LiveRoom"] }],
     ...(auth && { ratelimits: [{ name: "AUTH_LIMIT", namespace_id: namespaceId(worker), simple: AUTH_LIMIT }] }),
   };
 }

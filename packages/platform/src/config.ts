@@ -32,6 +32,7 @@ export const configSchema = z
       .transform((auth) => (auth === true ? { organizations: false } : auth))
       .describe("Sign-up and login with email and password; needs database and email"),
     files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
+    live: z.boolean().default(false).describe("Live rooms: messages and presence over WebSockets, on Durable Objects"),
     secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE name")).default([]),
   })
   .strict()

@@ -3,16 +3,19 @@ import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { Wrangler } from "../ports.js";
+import { ENTRY_FILE, entryModule } from "../wrangler-config.js";
 
 export class WranglerCli implements Wrangler {
   constructor(
     private readonly appDir: string,
     private readonly env: { CLOUDFLARE_API_TOKEN: string },
+    private readonly worker: string,
   ) {}
 
   async deploy(config: object, secrets: Record<string, string>): Promise<void> {
     const configFile = join(this.appDir, ".platform-wrangler.json");
     const secretsFile = join(this.appDir, ".platform-secrets.json");
+    const entryFile = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
     try {
@@ -23,7 +26,14 @@ export class WranglerCli implements Wrangler {
     } finally {
       await rm(secretsFile, { force: true });
       await rm(configFile, { force: true });
+      await rm(entryFile, { force: true });
     }
+  }
+
+  private async writeEntry(): Promise<string> {
+    const file = join(this.appDir, ENTRY_FILE);
+    await writeFile(file, entryModule(this.worker));
+    return file;
   }
 
   // wrangler dev reads secrets from a .dev.vars file beside its config, and takes the local
@@ -31,6 +41,7 @@ export class WranglerCli implements Wrangler {
   async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void> {
     const configFile = join(this.appDir, ".platform-wrangler.json");
     const devVars = join(this.appDir, ".dev.vars");
+    const entryFile = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(devVars, Object.entries(secrets).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n", { mode: 0o600 });
     try {
@@ -41,6 +52,7 @@ export class WranglerCli implements Wrangler {
     } finally {
       await rm(devVars, { force: true });
       await rm(configFile, { force: true });
+      await rm(entryFile, { force: true });
     }
   }
 }
