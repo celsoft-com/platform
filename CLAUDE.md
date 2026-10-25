@@ -7,6 +7,9 @@ The celsoft-com platform repository.
 - **Source of truth:** read [docs/design.md](docs/design.md) before designing or changing
   anything; update it when a design decision changes.
 
+- **Guide:** [docs/how-it-works.md](docs/how-it-works.md) explains what the platform provides
+  and what an app writes, summary first; update it whenever either side changes.
+
 ## Setup
 
 - **Guide:** [SETUP.md](SETUP.md) is the one-time setup for adopters. When a user needs
