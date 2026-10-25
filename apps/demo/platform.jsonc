@@ -3,7 +3,7 @@
   "name": "demo",
   "hostname": "${DEMO_HOSTNAME}",
   "worker": "src/worker.ts",
-  "frontend": "public",
+  "frontend": "dist",
   "compatibilityDate": "2026-10-01",
   "database": {
     "neonProject": "${DEMO_NEON_PROJECT}"

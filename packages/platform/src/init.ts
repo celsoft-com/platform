@@ -113,7 +113,7 @@ async function expectedWorkflow(repoRoot: string, appDir: string, config: Config
   });
 }
 
-async function packageManager(repoRoot: string): Promise<PackageManager> {
+export async function packageManager(repoRoot: string): Promise<PackageManager> {
   return (await readOptional(join(repoRoot, "pnpm-lock.yaml"))) !== undefined ? "pnpm" : "npm";
 }
 

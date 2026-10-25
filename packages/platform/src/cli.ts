@@ -15,8 +15,9 @@ import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { generate } from "./generate.js";
-import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, destroy, dev, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
+import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
+import { packageScripts, runScript, startScript } from "./scripts.js";
+import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
@@ -109,7 +110,7 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   if (command.name === "dev") {
-    await dev(ctx);
+    await devWithFrontend(ctx, appDir);
     return;
   }
   if (command.name === "owner reset") {
@@ -133,6 +134,8 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // The frontend is built first, so a broken build stops the run before anything changes.
+  if (!dryRun && (await packageScripts(appDir)).build) await runScript(appDir, await packageManager(repoRoot(appDir)), "build");
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
   console.log(`\nlive at https://${hostname}`);
@@ -219,6 +222,21 @@ async function listPreviews(ctx: Context, appDir: string): Promise<void> {
   for (const { pr, pieces } of previews) {
     const state = open.includes(pr) ? "open" : "closed, the next sweep removes it";
     console.log(`PR ${String(pr).padEnd(6)} ${state}\n           ${pieces.join(", ")}`);
+  }
+}
+
+export const DEV_SERVER_PORT = 5173;
+
+// With a `dev` script, the frontend's dev server runs beside the local Worker and is where the app
+// is opened; it forwards the Worker's paths, as the package's Vite plugin sets up.
+async function devWithFrontend(ctx: Context, appDir: string): Promise<void> {
+  if (!(await packageScripts(appDir)).dev) return dev(ctx);
+  const appUrl = `http://localhost:${DEV_SERVER_PORT}`;
+  const frontend = startScript(appDir, await packageManager(repoRoot(appDir)), "dev", { PLATFORM_WORKER_URL: DEV_URL, PLATFORM_DEV_PORT: String(DEV_SERVER_PORT) });
+  try {
+    await dev(ctx, { appUrl });
+  } finally {
+    frontend.kill();
   }
 }
 
