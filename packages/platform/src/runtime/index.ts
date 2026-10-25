@@ -1,5 +1,6 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import { createAccess, LINK_HEADER, type Access } from "./access.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { apiHandler, type Endpoint } from "./endpoints.js";
@@ -11,6 +12,7 @@ import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { isScreen, renderScreen } from "./screens.js";
 
+export { LEVELS, LINK_HEADER, MAX_DEPTH, type Access, type Grant, type Grantee, type Level, type Link } from "./access.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
 export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
@@ -29,6 +31,7 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   LIVE?: LiveNamespace;
   LIVE_ROOMS?: string;
   MCP?: string;
+  ACCESS?: string;
 }
 
 export interface ExecutionContext {
@@ -45,6 +48,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly files: Files;
   readonly auth: Auth;
   readonly live: Live;
+  readonly access: Access;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -168,6 +172,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let files: Files | undefined;
   let auth: Auth | undefined;
   let live: Live | undefined;
+  let access: Access | undefined;
   let session: Promise<Session | null> | undefined;
 
   const app: AppContext<Env, Schema> = {
@@ -194,6 +199,13 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     get live() {
       return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
+    },
+    get access() {
+      if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
+      return (access ??= createAccess(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({
+        userId: (await app.session())?.user.id ?? null,
+        link: request.headers.get(LINK_HEADER),
+      })));
     },
     session() {
       return (session ??= knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));

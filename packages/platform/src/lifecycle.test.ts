@@ -151,6 +151,7 @@ describe("auth and email", () => {
       LIVE_ROOMS: "off",
       AUTH_ORGANIZATIONS: "off",
       MCP: "off",
+      ACCESS: "off",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });

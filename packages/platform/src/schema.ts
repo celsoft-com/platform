@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
 
 // Better Auth's tables, with its core, admin and organization fields, transcribed from
 // getAuthTables() in the installed version; schema.test.ts fails when they drift apart.
@@ -337,6 +337,74 @@ export const oauthClientAssertion = pgTable("oauth_client_assertion", {
   expiresAt: at("expires_at").notNull(),
 });
 
+// Access: the item tree, grants and links behind app.access; see docs/design.md, App Code, Access.
+// Levels are stored as numbers, 1 read to 5 manage. An item's parent is another item, or the user
+// or organization at the top of its chain, named by the reserved kinds "user" and "organization".
+
+export const accessItem = pgTable(
+  "access_item",
+  {
+    kind: text("kind").notNull(),
+    id: text("id").notNull(),
+    parentKind: text("parent_kind").notNull(),
+    parentId: text("parent_id").notNull(),
+    restricted: boolean("restricted").notNull().default(false),
+    ...timestamps(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.kind, t.id] }),
+    index("access_item_parent_idx").on(t.parentKind, t.parentId),
+    check("access_item_kind", sql`${t.kind} not in ('user', 'organization')`),
+  ],
+);
+
+export const accessGrant = pgTable(
+  "access_grant",
+  {
+    id: id(),
+    itemKind: text("item_kind").notNull(),
+    itemId: text("item_id").notNull(),
+    userId: uuid("user_id").references(() => user.id, { onDelete: "cascade" }),
+    teamId: uuid("team_id").references(() => team.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "cascade" }),
+    email: text("email"),
+    level: smallint("level").notNull(),
+    grantedBy: uuid("granted_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.itemKind, t.itemId], foreignColumns: [accessItem.kind, accessItem.id], name: "access_grant_item_fk" }).onDelete("cascade"),
+    unique("access_grant_once").on(t.itemKind, t.itemId, t.userId, t.teamId, t.organizationId, t.email).nullsNotDistinct(),
+    check("access_grant_one_grantee", sql`num_nonnulls(${t.userId}, ${t.teamId}, ${t.organizationId}, ${t.email}) = 1`),
+    check("access_grant_level", sql`${t.level} between 1 and 5`),
+    check("access_grant_email_lower", sql`${t.email} = lower(${t.email})`),
+    index("access_grant_user_idx").on(t.userId),
+    index("access_grant_team_idx").on(t.teamId),
+    index("access_grant_organization_idx").on(t.organizationId),
+    index("access_grant_email_idx").on(t.email),
+  ],
+);
+
+// Only a hash of each link's token is stored, so the database never holds a working link.
+export const accessLink = pgTable(
+  "access_link",
+  {
+    id: id(),
+    itemKind: text("item_kind").notNull(),
+    itemId: text("item_id").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    level: smallint("level").notNull(),
+    expiresAt: at("expires_at"),
+    createdBy: uuid("created_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => [
+    foreignKey({ columns: [t.itemKind, t.itemId], foreignColumns: [accessItem.kind, accessItem.id], name: "access_link_item_fk" }).onDelete("cascade"),
+    check("access_link_level", sql`${t.level} between 1 and 3`),
+    index("access_link_item_idx").on(t.itemKind, t.itemId),
+  ],
+);
+
 export const authSchema = {
   user,
   session,
@@ -356,3 +424,5 @@ export const authSchema = {
   oauthConsent,
   oauthClientAssertion,
 };
+
+export const accessSchema = { accessItem, accessGrant, accessLink };

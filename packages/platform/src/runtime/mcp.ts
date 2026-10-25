@@ -4,7 +4,7 @@ import { verifyJwsAccessToken } from "better-auth/oauth2";
 import type { z } from "zod";
 import type { Auth } from "./auth.js";
 import { EndpointError } from "./endpoint-error.js";
-import type { Endpoint } from "./endpoints.js";
+import { runEndpoint, type Endpoint } from "./endpoints.js";
 
 export const MCP_PATH = "/mcp";
 export const WELL_KNOWN = "/.well-known/";
@@ -46,7 +46,7 @@ export async function serveMcp<App>(request: Request, app: App, name: string, en
     const register = server.registerTool.bind(server) as (name: string, config: object, handler: (args: unknown) => Promise<object>) => void;
     register(tool, { description: e.description ?? tool, inputSchema: e.input }, async (args) => {
       try {
-        const output = e.output.parse(await e.handler(args as z.output<z.ZodType>, app));
+        const output = e.output.parse(await runEndpoint(e, args, app));
         return { content: [{ type: "text" as const, text: JSON.stringify(output) }] };
       } catch (error) {
         return { isError: true, content: [{ type: "text" as const, text: await toolError(tool, error) }] };

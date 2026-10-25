@@ -145,7 +145,8 @@ Every case the access system must get right. Each row becomes a test; the design
 
 ## How the tests prove it
 
-1. **Each row:** one test against a real Postgres 18 database.
-2. **Against a reference:** a short, slow, obviously correct version of the rules in plain TypeScript; randomized tests build thousands of trees, members, grants and links and require the SQL to answer the same.
+1. **Each row:** one test named by its row, against a real Postgres 18 database, in [access.rules.test.ts](../packages/platform/src/runtime/access.rules.test.ts), with the stranger cases around each group.
+2. **Against a reference:** [access-reference.ts](../packages/platform/test/access-reference.ts) is a short, slow, obviously correct version of these rules in plain TypeScript; [access.model.test.ts](../packages/platform/src/runtime/access.model.test.ts) runs random people, trees, grants, links and moves against both and requires every outcome and every level to match. `ACCESS_WORLDS`, `ACCESS_STEPS` and `ACCESS_SEED` run more of them or replay one.
 3. **Races:** many concurrent moves, checking no loop is ever stored.
-4. **End to end:** E rows through real HTTP requests and MCP calls on a preview.
+4. **Endpoints:** E rows through the real API handler and MCP server.
+5. **Postgres:** `mise run test` starts a throwaway Postgres 18 from the binaries pinned in `mise.toml`, and each test file gets its own database.

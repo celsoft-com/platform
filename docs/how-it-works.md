@@ -129,6 +129,14 @@ flowchart LR
 4. **As the user:** every call runs with `app.requireUser()` returning the person who approved the client.
 5. **Errors:** bad input, `EndpointError` and other failures come back as tool errors with a message, so the AI can correct itself.
 
+### Access
+
+1. **On:** `"access": true` in `platform.jsonc`, with auth on.
+2. **Items:** the app tells the platform where each item sits with `app.access.place(kind, id, parentKind, parentId)`, under another item or at the top under a user or organization.
+3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from owning the item, an organization role, grants to people, teams, organizations or emails, and links.
+4. **Checks:** an endpoint declares `access: { kind, id, level }`, hand-written routes call `app.access.can`, and lists filter with `app.access.accessible`; anything short is a 404.
+5. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
+
 ### Live rooms
 
 1. **On:** `"live": true` in `platform.jsonc`.

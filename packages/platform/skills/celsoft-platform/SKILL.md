@@ -1,6 +1,6 @@
 ---
 name: celsoft-platform
-description: "MUST READ before changing an app built on @celsoft/platform: its endpoints, tables and migrations, pages, auth, files, email, live rooms, MCP tools, platform.jsonc, deploys or previews. Matches the installed version of the package."
+description: "MUST READ before changing an app built on @celsoft/platform: its endpoints, tables and migrations, pages, auth, files, email, live rooms, MCP tools, item access, platform.jsonc, deploys or previews. Matches the installed version of the package."
 ---
 
 # Working on a @celsoft/platform app
@@ -56,14 +56,32 @@ export default defineApp(undefined, {
 2. **Checks:** bad input is a 400; an output that does not match its schema is a 500, logged.
 3. **Errors:** throw `EndpointError(status, message)`; a thrown `Response`, as `requireUser()` throws, keeps its status.
 4. **Access:** every `/api/` path needs a signed-in user except under `/api/public/`; MCP calls always carry one.
-5. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
-6. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
+5. **Item access:** with `access` on, `access: { kind: "note", id: "id", level: "write" }` in the definition checks the caller's level on the item whose id is in that input field before the function runs, and answers 404 when it falls short.
+6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
+7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
 ## `app`
 
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `session()`, `requireUser()`,
 `files` (R2, folders), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
-`env` and `waitUntil`. Each is created on first use.
+`access` (with `access` on), `env` and `waitUntil`. Each is created on first use.
+
+## Access
+
+With `"access": true`, the platform keeps who may do what to the app's items:
+
+1. **Place every item** when it is created or moved, in the same transaction as the app's own row:
+   `await app.db.transaction(async (tx) => { ...insert...; await app.access.in(tx).place("note", id, "folder", folderId); })`.
+   The top of a tree is `"user", userId` or `"organization", orgId`; an item never placed is reachable by nobody.
+2. **Levels:** `read` < `create` < `write` < `delete` < `manage`; each includes those below.
+3. **Where they come from:** owning the item (`manage`), organization roles (member `read`, admin `delete`, owner `manage`), grants, and links; the highest wins, and a level on a folder covers everything inside it.
+4. **Grants:** `app.access.share(kind, id, { user | team | organization | email }, level)`, `revoke`, `grants`, `sharedWithMe(kind)`; sharing needs `manage`.
+5. **Links:** `app.access.link(kind, id, level, { expires })` returns a token, at most `write`; the browser sends it as the `x-access-link` header.
+6. **Restrict:** `app.access.restrict(kind, id)` stops levels from above reaching an item, except organization owners and admins.
+7. **Check:** `can(kind, id, level)` and `require(kind, id, level)` in hand-written routes; `require` throws a 404.
+8. **Lists:** `.where(await app.access.accessible("note", "read", notes.id))` filters in the same query.
+9. **Delete:** `app.access.remove(kind, id)` needs `delete` and refuses an item that still has children.
+10. **Kinds:** lowercase names the app chooses, never `user` or `organization`; ids are strings.
 
 ## Tables and migrations
 
@@ -80,6 +98,7 @@ Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `session()
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth. Needs `auth`.
+7. **`access`:** `app.access`, for who may do what to the app's items; see Access above. Needs `auth`.
 
 ## Commands
 

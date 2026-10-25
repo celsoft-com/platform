@@ -2,6 +2,7 @@ import { ORPCError, os, type Router } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { experimental_ZodSmartCoercionPlugin } from "@orpc/zod/zod4";
 import type { z } from "zod";
+import type { Access, Level } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
 import type { AppContext } from "./index.js";
 
@@ -21,6 +22,9 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   description?: string;
   input: Input;
   output: Output;
+  // Checked before the function runs: the caller needs `level` on the `kind` item whose id is in
+  // the input field named `id`, or gets a 404.
+  access?: { kind: string; id: string; level: Level };
 }
 
 export interface Endpoint<Input extends z.ZodType = z.ZodType, Output extends z.ZodType = z.ZodType, App = AnyApp> extends EndpointDefinition<Input, Output> {
@@ -32,7 +36,20 @@ export function endpoint<Input extends z.ZodType, Output extends z.ZodType, App 
   definition: EndpointDefinition<Input, Output>,
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>,
 ): Endpoint<Input, Output, App> {
+  if (definition.access) {
+    const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
+    if (!shape || !(definition.access.id in shape)) throw new Error(`an endpoint's access names input field ${definition.access.id}, which its input schema does not have`);
+  }
   return { ...definition, handler };
+}
+
+// Runs one endpoint's function for either door, after its access check.
+export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
+  if (e.access) {
+    const { kind, id, level } = e.access;
+    await (app as { access: Access }).access.require(kind, String((input as Record<string, unknown>)[id]), level);
+  }
+  return e.handler(input as z.output<z.ZodType>, app);
 }
 
 export type Endpoints = Record<string, Endpoint<z.ZodType, z.ZodType, never>>;
@@ -82,7 +99,7 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
         .output(e.output)
         .handler(async ({ input, context }) => {
           try {
-            return await e.handler(input, context.app);
+            return await runEndpoint(e, input, context.app);
           } catch (error) {
             if (error instanceof EndpointError) throw new ORPCError("ENDPOINT_ERROR", { status: error.status, message: error.message });
             // A thrown Response, as requireUser throws, keeps its status and message.

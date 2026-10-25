@@ -18,6 +18,13 @@ describe("parseConfig", () => {
     expect(config.secrets).toEqual([]);
   });
 
+  it("turns access on only with auth", () => {
+    const withAccess = (fields: string) => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", ${fields}`)).access;
+    expect(parseConfig(valid).access).toBe(false);
+    expect(withAccess(`"email": true, "auth": true, "access": true,`)).toBe(true);
+    expect(() => withAccess(`"access": true,`)).toThrow(/access needs auth/);
+  });
+
   it("rejects a Neon branch id with a hint", () => {
     expect(() => parseConfig(valid.replace("quiet-meadow-12345678", "br-quiet-meadow-abcdefgh"))).toThrow(/not a branch id/);
   });
