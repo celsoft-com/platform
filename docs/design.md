@@ -57,20 +57,29 @@ A published CLI, runtime library and app template that create and reuse each app
 4. **Checked first**: every proof is checked before the first change or deletion, so a failed proof leaves everything as it was.
 5. **Resources**:
 
-| Resource | Prod name | Preview name | Proof | Removed by |
-| --- | --- | --- | --- | --- |
-| **Worker** | `<app>` | `<app>-pr-<n>` | Tags `celsoft-platform` and `app:<app>`; previews also `pr:<n>` | Cleanup, sweep, destroy |
-| **Hostname** | `hostname` in `platform.jsonc` | `<app>-pr-<n>.<zone>` | A custom domain of the Worker | Deleted with its Worker |
-| **Hyperdrive config** | `<app>` | `<app>-pr-<n>` | Bound by one of the app's Workers, or its origin is in the app's Neon project | Cleanup, sweep, destroy |
-| **Neon branch** | The project's default branch | `pr-<n>` | Inside the app's own Neon project, which the key is scoped to | Cleanup, sweep, destroy |
-| **Backup branch** | `backup-<time>` | None | Inside the app's own Neon project | Deploy keeps the newest 3; `destroy --data` |
-| **Dev branch** | `dev` | None | Inside the app's own Neon project | `destroy --data` |
-| **R2 bucket** | `<app>-files` | `<app>-previews`, shared | A `.celsoft-platform` object naming the app | `destroy`; prod bucket only with `--data` |
-| **Preview files** | None | Folder `pr-<n>/` in the preview bucket | The bucket's proof | Cleanup, sweep, and 14-day expiry |
-| **Mail DNS records** | Below `hostname` | None | Comment `managed by @celsoft/platform` | Destroy |
-| **Resend domain** | `hostname` | None | Name only | Destroy |
-| **Resend key** | `platform <hostname>` | None | Name only | Replaced when a Worker lacks it; destroy |
-| **PR comment** | None | The PR's comment starting `<!-- platform-preview -->` | The marker | Never; updated in place |
+<table>
+<thead>
+<tr><th>Resource</th><th>Prod name</th><th>Preview name</th><th>Proof</th><th>Removed by</th></tr>
+</thead>
+<tbody>
+<tr><th colspan="5">Cloudflare</th></tr>
+<tr><td><strong>Worker</strong></td><td><code>&lt;app&gt;</code></td><td><code>&lt;app&gt;-pr-&lt;n&gt;</code></td><td>Tags <code>celsoft-platform</code> and <code>app:&lt;app&gt;</code>; previews also <code>pr:&lt;n&gt;</code></td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>Hostname</strong></td><td><code>hostname</code> in <code>platform.jsonc</code></td><td><code>&lt;app&gt;-pr-&lt;n&gt;.&lt;zone&gt;</code></td><td>A custom domain of the Worker</td><td>Deleted with its Worker</td></tr>
+<tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;</code></td><td><code>&lt;app&gt;-pr-&lt;n&gt;</code></td><td>Bound by one of the app's Workers, or its origin is in the app's Neon project</td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;-files</code></td><td><code>&lt;app&gt;-previews</code>, shared</td><td>A <code>.celsoft-platform</code> object naming the app</td><td><code>destroy</code>; prod bucket only with <code>--data</code></td></tr>
+<tr><td><strong>Preview files</strong></td><td>None</td><td>Folder <code>pr-&lt;n&gt;/</code> in the preview bucket</td><td>The bucket's proof</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
+<tr><td><strong>Mail DNS records</strong></td><td>Below <code>hostname</code></td><td>None</td><td>Comment <code>managed by @celsoft/platform</code></td><td>Destroy</td></tr>
+<tr><th colspan="5">Neon</th></tr>
+<tr><td><strong>Neon branch</strong></td><td>The project's default branch</td><td><code>pr-&lt;n&gt;</code></td><td>Inside the app's own Neon project, which the key is scoped to</td><td>Cleanup, sweep, destroy</td></tr>
+<tr><td><strong>Backup branch</strong></td><td><code>backup-&lt;time&gt;</code></td><td>None</td><td>Inside the app's own Neon project</td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
+<tr><td><strong>Dev branch</strong></td><td><code>dev</code></td><td>None</td><td>Inside the app's own Neon project</td><td><code>destroy --data</code></td></tr>
+<tr><th colspan="5">Resend</th></tr>
+<tr><td><strong>Resend domain</strong></td><td><code>hostname</code></td><td>None</td><td>Name only</td><td>Destroy</td></tr>
+<tr><td><strong>Resend key</strong></td><td><code>platform &lt;hostname&gt;</code></td><td>None</td><td>Name only</td><td>Replaced when a Worker lacks it; destroy</td></tr>
+<tr><th colspan="5">GitHub</th></tr>
+<tr><td><strong>PR comment</strong></td><td>None</td><td>The PR's comment starting <code>&lt;!-- platform-preview --&gt;</code></td><td>The marker</td><td>Never; updated in place</td></tr>
+</tbody>
+</table>
 
 ## 7. Bootstrap
 
