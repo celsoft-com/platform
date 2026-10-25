@@ -1,7 +1,7 @@
 // Sign-in, sign-up and password screens every app with auth gets. Class names are part of the
 // public interface: an app restyles them with its own stylesheet, loaded after this one.
 
-export const SCREEN_PATHS = ["/login", "/signup", "/forgot", "/reset"] as const;
+export const SCREEN_PATHS = ["/login", "/signup", "/forgot", "/reset", "/consent"] as const;
 export type ScreenPath = (typeof SCREEN_PATHS)[number];
 
 interface Field {
@@ -48,6 +48,14 @@ const SCREENS: Record<ScreenPath, Screen> = {
     fields: [password("new-password", "New password")],
     button: "Change password",
     links: [["/login", "Back to sign in"]],
+  },
+  // Where an AI client a person is connecting asks to act as them, through the app's MCP server.
+  "/consent": {
+    title: "Allow access",
+    intro: "An AI app wants to use this app as you.",
+    fields: [],
+    button: "Allow",
+    links: [["#deny", "Deny"]],
   },
 };
 
@@ -116,7 +124,15 @@ const SCRIPT = `
 const page = document.body.dataset.page;
 const params = new URLSearchParams(location.search);
 const next = (p => p && p.startsWith("/") && !p.startsWith("//") ? p : "/")(params.get("next"));
-const carried = new URLSearchParams([...params].filter(([k]) => k === "next" || k === "invitation")).toString();
+// An AI client signing in through OAuth arrives with a signed query; it rides along on sign-in,
+// sign-up and consent, and the answer says where to go next. Kept to the signed parameters only.
+const oauthQuery = (() => {
+  if (!params.has("sig")) return undefined;
+  const signed = new Set(params.getAll("ba_param"));
+  if (!signed.size) return undefined;
+  return new URLSearchParams([...params].filter(([k]) => k === "sig" || k === "ba_param" || signed.has(k))).toString();
+})();
+const carried = new URLSearchParams([...params].filter(([k]) => k === "next" || k === "invitation" || oauthQuery)).toString();
 for (const a of document.querySelectorAll("[data-carry]")) if (carried) a.href += "?" + carried;
 const form = document.querySelector(".platform-form");
 const error = document.querySelector(".platform-error");
@@ -135,6 +151,11 @@ function say(...parts) {
   message.hidden = false;
 }
 
+function follow(data) {
+  if (data && data.url) { location.assign(data.url); return true; }
+  return false;
+}
+
 async function finish() {
   const invitation = params.get("invitation");
   if (invitation) await post("/api/auth/organization/accept-invitation", { invitationId: invitation }).catch(() => {});
@@ -142,15 +163,34 @@ async function finish() {
 }
 
 const actions = {
-  login: async v => { await post("/api/auth/sign-in/email", { email: v.email, password: v.password }); await finish(); },
+  login: async v => { if (!follow(await post("/api/auth/sign-in/email", { email: v.email, password: v.password, oauth_query: oauthQuery }))) await finish(); },
   signup: async v => {
-    const data = await post("/api/auth/sign-up/email", { name: v.name, email: v.email, password: v.password, callbackURL: "/login" + (carried ? "?" + carried : "") });
+    const data = await post("/api/auth/sign-up/email", { name: v.name, email: v.email, password: v.password, oauth_query: oauthQuery, callbackURL: "/login" + (carried ? "?" + carried : "") });
+    if (follow(data)) return;
     if (data.token) return finish();
     say("Check your email for a link to confirm your address. It signs you in.");
   },
   forgot: async v => { await post("/api/auth/request-password-reset", { email: v.email, redirectTo: "/reset?email=" + encodeURIComponent(v.email) }); say("If that address has an account, a reset link is on its way."); },
   reset: async v => { await post("/api/auth/reset-password", { newPassword: v.password, token: params.get("token") }); say("Your password is changed. Sign in with it now."); },
+  consent: async () => { follow(await post("/api/auth/oauth2/consent", { accept: true, oauth_query: oauthQuery })); },
 };
+
+if (page === "consent") {
+  const deny = document.querySelector('a[href^="#deny"]');
+  deny.addEventListener("click", async e => {
+    e.preventDefault();
+    try { follow(await post("/api/auth/oauth2/consent", { accept: false, oauth_query: oauthQuery })); }
+    catch (err) { error.textContent = err.message; error.hidden = false; }
+  });
+  const scopes = { openid: "know who you are", profile: "see your name", email: "see your email address", offline_access: "stay connected until you disconnect it" };
+  const wants = (params.get("scope") || "").split(" ").filter(Boolean).map(s => scopes[s] || s);
+  fetch("/api/auth/oauth2/public-client?client_id=" + encodeURIComponent(params.get("client_id") || ""), { credentials: "same-origin" })
+    .then(r => r.ok ? r.json() : {}).catch(() => ({}))
+    .then(c => {
+      const intro = document.querySelector(".platform-intro");
+      intro.textContent = (c.client_name || "An AI app") + " wants to use this app as you" + (wants.length ? ", to " + wants.join(", ") : "") + ".";
+    });
+}
 
 form.addEventListener("submit", async e => {
   e.preventDefault();
@@ -166,5 +206,5 @@ form.addEventListener("submit", async e => {
 // The reset link carries the email, so a password manager knows which saved login to update.
 if (page === "reset") document.getElementById("email").value = params.get("email") || "";
 if (page === "reset" && (params.get("error") || !params.get("token"))) say("That reset link has expired or was already used. Ask for a new one from the sign-in page.");
-if (page === "login") fetch("/api/auth/get-session", { credentials: "same-origin" }).then(r => r.json()).then(s => s && s.session && finish()).catch(() => {});
+if (page === "login" && !oauthQuery) fetch("/api/auth/get-session", { credentials: "same-origin" }).then(r => r.json()).then(s => s && s.session && finish()).catch(() => {});
 `;

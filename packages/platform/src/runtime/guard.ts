@@ -5,10 +5,15 @@ export const PUBLIC_API = "/api/public/";
 const FORM_TYPES = ["application/x-www-form-urlencoded", "multipart/form-data", "text/plain"];
 const UNSAFE = ["POST", "PUT", "PATCH", "DELETE"];
 
+// OAuth endpoints AI clients post forms to directly; they prove themselves with a code or token,
+// never a cookie, so a forged browser form gains nothing.
+const OAUTH_FORM_PATHS = ["/oauth2/token", "/oauth2/revoke", "/oauth2/introspect"].map((p) => `${AUTH_PATH}${p}`);
+
 // A browser sends any site's form to any other without asking, cookies included; it always
 // sends an Origin with it, so a missing or foreign one is refused.
 export function isCrossSiteForm(request: Request, url: URL): boolean {
   if (!UNSAFE.includes(request.method)) return false;
+  if (OAUTH_FORM_PATHS.includes(url.pathname)) return false;
   const type = request.headers.get("content-type")?.split(";", 1)[0]!.trim().toLowerCase() ?? "";
   if (!FORM_TYPES.includes(type)) return false;
   return request.headers.get("origin") !== url.origin;

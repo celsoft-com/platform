@@ -36,9 +36,9 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     workers_dev: false,
     routes: [{ pattern: hostname, custom_domain: true }],
     observability: { enabled: true },
-    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off" }) },
+    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", MCP: config.mcp ? "on" : "off" }) },
     ...(config.frontend && {
-      assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? SCREEN_PATHS : [])] },
+      assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? SCREEN_PATHS : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : [])] },
     }),
     ...(hyperdriveId && { hyperdrive: [{ binding: "DB", id: hyperdriveId }] }),
     ...(bucket && { r2_buckets: [{ binding: "FILES", bucket_name: bucket }] }),

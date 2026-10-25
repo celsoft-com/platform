@@ -8,6 +8,7 @@ import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./
 import type { z } from "zod";
 import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
+import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { isScreen, renderScreen } from "./screens.js";
 
 export type { Auth } from "./auth.js";
@@ -27,6 +28,7 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   AUTH_LIMIT?: RateLimiter;
   LIVE?: LiveNamespace;
   LIVE_ROOMS?: string;
+  MCP?: string;
 }
 
 export interface ExecutionContext {
@@ -113,6 +115,10 @@ export function defineApp<
         if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
         const live = await liveRoute(request, url, env, app, options);
         if (live) return live;
+        if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
+          const answered = await mcpRoute(request, url, env, ctx, app, options);
+          if (answered) return answered;
+        }
         if (env.BETTER_AUTH_SECRET) {
           const platform = await platformRoute(request, url, env, app, options);
           if (platform) return platform;
@@ -152,6 +158,8 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   env: Env,
   ctx: ExecutionContext,
   options: AppOptions<Env, Schema>,
+  // Set when the caller is already known, as for an MCP client signed in with a token.
+  knownSession?: () => Promise<Session | null>,
 ): { app: AppContext<Env, Schema>; close(): void } {
   const openPool = options.pool ?? defaultPool;
   let pool: Pool | undefined;
@@ -188,7 +196,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
     },
     session() {
-      return (session ??= env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      return (session ??= knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
     },
     async requireUser() {
       const current = await app.session();
@@ -198,6 +206,37 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     waitUntil: (promise) => ctx.waitUntil(promise),
   };
   return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
+}
+
+// The OAuth server's routes, which exist only for MCP.
+const MCP_AUTH_PATHS = ["/oauth2/", "/admin/oauth2/", "/jwks", "/.well-known/"];
+
+// MCP for AI clients: OAuth discovery under /.well-known/, and /mcp, where each call runs as the
+// user its token was issued to.
+async function mcpRoute<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
+  request: Request,
+  url: URL,
+  env: Env,
+  ctx: ExecutionContext,
+  app: AppContext<Env, Schema>,
+  options: AppOptions<Env, Schema>,
+): Promise<Response | undefined> {
+  if (url.pathname.startsWith(WELL_KNOWN)) return app.auth.handler(request);
+  if (url.pathname !== MCP_PATH) return undefined;
+  const origin = env.APP_URL ?? url.origin;
+  const userId = await mcpUserId(request, app.auth, `${origin}${MCP_PATH}`);
+  if (!userId) return mcpChallenge(origin);
+  const known = async (): Promise<Session | null> => {
+    const user = await (await app.auth.$context).internalAdapter.findUserById(userId);
+    return user ? ({ user, session: { id: "mcp", userId, token: "", expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date() } } as unknown as Session) : null;
+  };
+  const { app: asUser, close } = createContext(request, env, ctx, options, known);
+  try {
+    if (!(await asUser.session())) return mcpChallenge(origin);
+    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
+  } finally {
+    close();
+  }
 }
 
 // Live rooms answer for themselves: the browser client, and joining a room once the app agrees.
@@ -228,9 +267,11 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   options: AppOptions<Env, Schema>,
 ): Promise<Response | undefined> {
   const path = url.pathname;
+  if (path === "/consent" && env.MCP !== "on") return undefined;
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
   if (path.startsWith(`${AUTH_PATH}/organization/`) && env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
+  if (env.MCP !== "on" && MCP_AUTH_PATHS.some((p) => path.startsWith(`${AUTH_PATH}${p}`))) return json({ error: "not found" }, 404);
   if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
 
   if (needsSession(path)) await app.requireUser();

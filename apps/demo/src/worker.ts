@@ -1,5 +1,5 @@
 import { defineApp, endpoint, EndpointError, type AppContext, type PlatformBindings } from "@celsoft/platform";
-import { member, user as users } from "@celsoft/platform/schema";
+import { member, organization, user as users } from "@celsoft/platform/schema";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
@@ -74,9 +74,22 @@ export default defineApp(
     schema,
     live: { message: TeamMessage, canJoin: inTeamRoom, canSend: inTeamRoom },
     endpoints: {
+      // For AI clients only: which teams they can read and add notes to.
+      listMyTeams: endpoint(
+        {
+          serve: ["mcp"],
+          description: "The teams the signed-in user belongs to, with their ids for the team note tools",
+          input: z.object({}),
+          output: z.array(z.object({ id: z.uuid(), name: z.string() })),
+        },
+        async (_, app) => {
+          const user = await app.requireUser();
+          return app.db.select({ id: organization.id, name: organization.name }).from(member).innerJoin(organization, eq(organization.id, member.organizationId)).where(eq(member.userId, user.id));
+        },
+      ),
       listTeamNotes: endpoint(
         {
-          serve: ["api"],
+          serve: ["api", "mcp"],
           method: "GET",
           path: "/api/teams/:team/notes",
           description: "The newest 100 notes of a team the signed-in user belongs to",
@@ -92,7 +105,7 @@ export default defineApp(
       ),
       addTeamNote: endpoint(
         {
-          serve: ["api"],
+          serve: ["api", "mcp"],
           method: "POST",
           path: "/api/teams/:team/notes",
           description: "Add a note to a team the signed-in user belongs to; the team's open pages see it live",

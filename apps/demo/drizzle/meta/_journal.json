@@ -22,6 +22,13 @@
       "when": 1792899741272,
       "tag": "20261025034221_little_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792955693826,
+      "tag": "20261025191453_special_rogue",
+      "breakpoints": true
     }
   ]
 }
