@@ -1,6 +1,7 @@
 # AGENTS.md
 
-The celsoft-com platform repository.
+The celsoft-com platform repository. This file is for working on the platform itself; to build
+a new app with it, follow [SETUP.md](SETUP.md) instead, step by step, in the app's own repo.
 
 ## Design
 
