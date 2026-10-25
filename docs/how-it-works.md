@@ -123,4 +123,4 @@ flowchart LR
 2. **Preview:** each PR gets its own Worker, hostname, database copy and file space.
 3. **Cleanup:** closing a PR deletes its preview, and a daily sweep catches any that were missed.
 4. **Same everywhere:** CI and a local `npx @celsoft/platform deploy` run the same steps.
-5. **Own resources only:** the platform changes or deletes only what it can prove it made for the app; [design.md](design.md#6-resource-identity) lists how each resource is identified.
+5. **Own resources only:** the platform changes or deletes only resources carrying a name it makes for the app; [design.md](design.md#6-resource-identity) lists every name.
