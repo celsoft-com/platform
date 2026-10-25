@@ -136,7 +136,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **App name**: unique within the Cloudflare account; every resource name derives from it, as Resource Identity describes.
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Worker**: the path to the Worker's entry module.
-    4. **Frontend**: the directory holding the built static files, if any; when `package.json` has a `build` script, every deploy runs it first, and a failed build stops the deploy with the running version left in place.
+    4. **Frontend**: the directory holding the built static files, if any; when `package.json` has a `build` script, every deploy runs it first, and a failed build stops the deploy with the running version left in place. Output is static: pages search engines must read without JavaScript are rendered at build time by the app's own tool, such as SvelteKit's static adapter or Astro, and nothing renders on the server, since the platform owns the Worker.
     5. **Database**: the app's Neon project id; its tables are found in `src/schema.ts` by convention.
     6. **Auth**: on or off, and whether organizations are on; either can change at any time.
     7. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
