@@ -329,7 +329,13 @@ A published CLI, runtime library and app template that create and reuse each app
     10. **Previews**: each preview Worker has its own rooms, deleted with it.
     11. **Entry file**: deploy generates a hidden entry module exporting the app's handler and the room class, so apps never export platform code.
     12. **Demo**: team notes inside an organization, changing live with presence.
-6. **MCP**: an MCP server in the runtime library, behind auth.
+6. **MCP**: the app's MCP endpoints served to AI clients, behind auth; designed in App Code, Endpoints.
+    1. **Switch**: `"mcp": true` in `platform.jsonc`, which needs auth; off by default, and while off `/mcp`, the OAuth routes and the consent screen do not exist.
+    2. **Route**: the app's Worker answers `/mcp` and OAuth discovery under `/.well-known/`; each call is one stateless request, run as the user the token was issued to.
+    3. **Tokens**: JWTs bound to the app's `/mcp`, checked against signing keys read from the app's own database, since a Worker cannot fetch its own hostname.
+    4. **Screens**: AI clients sign in through the built-in `/login`, which carries the OAuth request through, then approve on a built-in `/consent` screen.
+    5. **Tables**: the JWT and MCP plugins' tables are installed for every app with auth, so turning MCP on never needs a migration.
+    6. **Demo**: team notes are tools, plus an MCP-only tool listing the user's teams; the preview smoke test signs in as an AI client and calls them.
 7. **Observability**: Sentry wired in by the runtime library.
 8. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
 9. **Demo first**: no stage ships until the demo app uses it.

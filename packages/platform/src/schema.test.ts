@@ -1,7 +1,8 @@
 import { getTableColumns } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import { getAuthTables } from "better-auth/db";
-import { admin, organization } from "better-auth/plugins";
+import { admin, jwt, organization } from "better-auth/plugins";
+import { mcp } from "@better-auth/mcp";
 import { describe, expect, it } from "vitest";
 import { authSchema } from "./schema.js";
 
@@ -10,11 +11,15 @@ const COLUMN_TYPES: Record<string, string[]> = {
   boolean: ["PgBoolean"],
   date: ["PgTimestamp"],
   number: ["PgInteger"],
+  "string[]": ["PgArray"],
+  json: ["PgJsonb"],
 };
 
 // A Better Auth upgrade that adds or changes a field fails here, before any app sees it.
 describe("auth tables", () => {
-  const expected = getAuthTables({ plugins: [admin(), organization({ teams: { enabled: true } })] } as never);
+  const expected = getAuthTables({
+    plugins: [admin(), organization({ teams: { enabled: true } }), jwt(), mcp({ loginPage: "/login", consentPage: "/consent", resource: "https://app.test/mcp" })],
+  } as never);
 
   it("cover every Better Auth model", () => {
     expect(Object.keys(authSchema).sort()).toEqual(Object.keys(expected).sort());

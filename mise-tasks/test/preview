@@ -28,6 +28,7 @@ check "create organization" "$(curl -s -b "$jar" -H 'content-type: application/j
 
 cookie=$(awk '{ sub(/^#HttpOnly_/, "") } !/^#/ && NF >= 7 { printf "%s=%s; ", $6, $7 }' "$jar")
 node "$(dirname "$0")/_live.mjs" "$base" "$cookie"
+node "$(dirname "$0")/_mcp.mjs" "$base" "$email" "first-password-1"
 
 signin='{"email":"'$email'","password":"second-password-2"}'
 check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"

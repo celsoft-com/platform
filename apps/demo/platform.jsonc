@@ -11,5 +11,6 @@
   "email": true,
   "auth": { "organizations": true },
   "files": true,
-  "live": true
+  "live": true,
+  "mcp": true
 }

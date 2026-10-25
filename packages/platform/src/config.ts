@@ -36,10 +36,12 @@ export const configSchema = z
       .describe("Sign-up and login with email and password; needs database and email"),
     files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
     live: z.boolean().default(false).describe("Live rooms: messages and presence over WebSockets, on Durable Objects"),
+    mcp: z.boolean().default(false).describe("Serve endpoints marked for MCP at /mcp, to AI clients that sign in with OAuth; needs auth"),
     secrets: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "must be an UPPER_SNAKE_CASE name")).default([]),
   })
   .strict()
-  .refine((c) => !c.auth || (c.database && c.email), { message: "auth needs both database and email", path: ["auth"] });
+  .refine((c) => !c.auth || (c.database && c.email), { message: "auth needs both database and email", path: ["auth"] })
+  .refine((c) => !c.mcp || c.auth, { message: "mcp needs auth, since AI clients sign in as a user", path: ["mcp"] });
 
 export type Config = z.output<typeof configSchema>;
 

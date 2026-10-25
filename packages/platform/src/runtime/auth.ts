@@ -1,6 +1,9 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { admin, organization } from "better-auth/plugins";
+import { mcp } from "@better-auth/mcp";
+// Lets the declaration of createAuth name the OAuth provider types the MCP plugin brings.
+import type {} from "@better-auth/oauth-provider";
+import { admin, jwt, organization } from "better-auth/plugins";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -24,6 +27,8 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     baseURL,
     basePath: AUTH_PATH,
     database: drizzleAdapter(db, { provider: "pg", schema: authSchema }),
+    // The JWT plugin's session-to-token route is not part of the platform.
+    disabledPaths: ["/token"],
     // Postgres fills every id with uuidv7(), so Better Auth leaves the column out.
     advanced: { database: { generateId: "uuid" } },
     // The Workers rate limiting binding guards these routes before Better Auth sees them.
@@ -57,8 +62,8 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
         },
       },
     },
-    // Always installed so its tables and types never change; the runtime hides its routes
-    // unless platform.jsonc turns organizations on.
+    // Always installed so their tables and types never change; the runtime hides their routes
+    // unless platform.jsonc turns organizations or MCP on.
     plugins: [
       admin({ defaultRole: "user", adminRoles: [OWNER_ROLE, "admin"], roles: { [OWNER_ROLE]: adminAc, admin: adminAc, user: userAc } }),
       organization({
@@ -70,6 +75,17 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
             text: `${inviter.user.name} invited you to join ${org.name}:\n\n${baseURL}/login?invitation=${id}`,
           });
         },
+      }),
+      // The OAuth server AI clients sign in through to reach the app's MCP endpoints; its tokens
+      // are JWTs bound to the app's /mcp, signed with keys the JWT plugin keeps.
+      jwt(),
+      mcp({
+        loginPage: "/login",
+        consentPage: "/consent",
+        resource: `${baseURL}/mcp`,
+        scopes: ["openid", "profile", "email", "offline_access"],
+        allowDynamicClientRegistration: true,
+        allowUnauthenticatedClientRegistration: true,
       }),
     ],
   });

@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -30,6 +30,9 @@
     "prepare": "tsc -b && node dist/write-schema.js"
   },
   "dependencies": {
+    "@better-auth/mcp": "1.7.12",
+    "@better-auth/oauth-provider": "1.7.12",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@neondatabase/api-client": "^2.7.3",
     "@orpc/client": "1.16.1",
     "@orpc/contract": "1.16.1",
