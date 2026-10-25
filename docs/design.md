@@ -251,6 +251,14 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
 9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
 10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
+11. **Endpoints**: typed functions an app declares once and serves over its API, MCP, or both; some choices are still open.
+    1. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.
+    2. **Where served**: each endpoint says `serve: ["api"]`, `["mcp"]` or both; only an API endpoint has a method and path.
+    3. **Types**: input and output are Zod schemas, which give the TypeScript types, the runtime checks and the JSON Schema MCP describes tools with.
+    4. **Outputs checked**: every response is validated against its output schema; a mismatch is a 500, logged.
+    5. **Errors**: a handler fails by throwing one typed error; over HTTP it is that status with `{ error }`, over MCP a tool result with `isError: true` and the message, input check failures included, as MCP asks so a model can correct itself.
+    6. **Access**: the existing path rule; `/api/public/` needs no user, every other `/api/` path needs one, and MCP calls always carry a signed-in user.
+    7. **Hand-written routes**: the `defineApp` handler stays for uploads, downloads, streaming and webhooks; both live in the package's request handling, so the app only writes its functions.
 
 ## 14. Upgrades
 
