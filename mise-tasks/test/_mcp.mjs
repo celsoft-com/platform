@@ -35,8 +35,9 @@ const verifier = randomBytes(32).toString("base64url");
 const challenge = createHash("sha256").update(verifier).digest("base64url");
 const authorize = new URL(server.authorization_endpoint);
 for (const [k, v] of Object.entries({ response_type: "code", client_id: client.client_id, redirect_uri: redirectUri, scope: "openid profile email offline_access", code_challenge: challenge, code_challenge_method: "S256", state: "s1", resource: `${base}/mcp` })) authorize.searchParams.set(k, v);
-const toLogin = await fetch(authorize, { redirect: "manual" });
-const login = new URL(toLogin.headers.get("location") ?? "", base);
+// A browser navigation, as when an AI client opens the authorize URL for the person.
+const toLogin = await fetch(authorize, { redirect: "manual", headers: { "sec-fetch-mode": "navigate", accept: "text/html" } });
+const login = new URL(toLogin.headers.get("location") ?? (await json(toLogin)).url ?? "", base);
 check("authorize sends a signed-out user to /login", login.pathname === "/login" && login.searchParams.has("sig") ? "yes" : `${toLogin.status} ${login}`);
 
 // What the /login screen sends: the signed parameters only.
