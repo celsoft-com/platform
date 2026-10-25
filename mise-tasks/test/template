@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Scaffold an app from the template, install the locally packed platform, and type-check it"
+#MISE description="Scaffold an app from the template, install the locally packed platform, type-check it, and generate its migrations"
 #MISE depends=["build"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
@@ -17,4 +17,6 @@ npm install --no-audit --no-fund --loglevel=error "$tarball"
 npm install --no-audit --no-fund --loglevel=error
 npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
-echo "✓ template app installs, type-checks, and runs the platform CLI"
+npx --no-install @celsoft/platform db generate >/dev/null
+ls drizzle/*.sql >/dev/null
+echo "✓ template app installs, type-checks, runs the platform CLI, and generates its migrations"

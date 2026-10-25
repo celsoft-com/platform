@@ -1,3 +1,5 @@
+import { BUCKET_MARKER } from "../ownership.js";
+
 // The subset of Cloudflare's R2Bucket binding the helper uses, so the runtime needs no Workers types.
 export interface FilesBucket {
   put(key: string, value: ReadableStream | ArrayBuffer | string | Blob, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
@@ -66,7 +68,9 @@ export function createFiles(env: FilesBindings): Files {
       let cursor: string | undefined;
       do {
         const page = await bucket().list({ prefix: base, delimiter: "/", ...(cursor && { cursor }) });
-        result.files.push(...page.objects.map((o) => ({ path: o.key.slice(prefix.length), size: o.size, uploaded: o.uploaded })));
+        // The platform's ownership marker sits at the bucket root and is never the app's file.
+        const objects = page.objects.filter((o) => o.key !== BUCKET_MARKER);
+        result.files.push(...objects.map((o) => ({ path: o.key.slice(prefix.length), size: o.size, uploaded: o.uploaded })));
         result.folders.push(...page.delimitedPrefixes.map((p) => p.slice(prefix.length)));
         cursor = page.truncated ? page.cursor : undefined;
       } while (cursor);

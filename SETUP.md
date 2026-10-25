@@ -19,7 +19,7 @@ One Neon project per app. Its default branch is prod; the platform adds a branch
 1. **Open:** the [Neon console](https://console.neon.tech), then **New project**.
 2. **Name:** the app's name.
 3. **Region:** the one closest to most of your users.
-4. **Postgres version:** the default.
+4. **Postgres version:** 18 or later; the platform's ids need it.
 5. **Project ID:** copy it from **Settings**, then **General**; it is not a secret.
 
 ## 3. App
@@ -100,4 +100,12 @@ APP_NEON_PROJECT=quiet-meadow-12345678
 npx @celsoft/platform init
 ```
 
-It checks each token reaches your accounts, stores the tokens as GitHub secrets, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`. Commit that file and push; from then on, pushes to main deploy prod and every PR gets a preview.
+It checks each token reaches your accounts, stores the tokens as GitHub secrets, creates the `production` and `preview` Environments, and writes `.github/workflows/platform.yml`.
+
+## 10. First migration
+
+```sh
+npx @celsoft/platform db generate
+```
+
+It writes the SQL for the app's tables in `src/schema.ts`, plus the platform's own tables when auth is on, to `drizzle/`. Commit `drizzle/` and the workflow file, then push; from then on, pushes to main deploy prod and every PR gets a preview.

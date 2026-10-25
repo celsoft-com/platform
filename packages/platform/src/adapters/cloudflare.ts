@@ -1,5 +1,6 @@
 import CloudflareClient from "cloudflare";
 import { MANAGED_COMMENT } from "../lifecycle.js";
+import { appTag, BUCKET_MARKER, PLATFORM_TAG, prTag } from "../ownership.js";
 import type { Cloudflare, DnsRecord, Hyperdrive, Zone, ZoneRecord } from "../ports.js";
 import { originOf } from "../target.js";
 
@@ -79,6 +80,21 @@ export class CloudflareApi implements Cloudflare {
     return false;
   }
 
+  async workerOwner(name: string): Promise<{ app: string | null; hyperdriveIds: string[] } | undefined> {
+    if (!(await this.findWorker(name))) return undefined;
+    const account_id = await this.accountId();
+    const { tags } = await this.client.workers.scripts.settings.get(name, { account_id });
+    const { bindings = [] } = await this.client.workers.scripts.scriptAndVersionSettings.get(name, { account_id });
+    const app = tags?.includes(PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
+    const hyperdriveIds = (bindings as { type: string; id?: string }[]).filter((b) => b.type === "hyperdrive" && b.id).map((b) => b.id!);
+    return { app, hyperdriveIds };
+  }
+
+  async tagWorker(name: string, app: string, pr: number | undefined): Promise<void> {
+    const tags = [PLATFORM_TAG, appTag(app), ...(pr ? [prTag(pr)] : [])];
+    await this.client.workers.scripts.settings.edit(name, { account_id: await this.accountId(), tags });
+  }
+
   async listWorkers(namePrefix: string): Promise<string[]> {
     const account_id = await this.accountId();
     const names: string[] = [];
@@ -114,8 +130,16 @@ export class CloudflareApi implements Cloudflare {
     return buckets.some((b) => b.name === name);
   }
 
-  async createBucket(name: string): Promise<void> {
-    await this.client.r2.buckets.create({ account_id: await this.accountId(), name });
+  async createBucket(name: string, app: string): Promise<void> {
+    const account_id = await this.accountId();
+    await this.client.r2.buckets.create({ account_id, name });
+    await this.client.r2.buckets.objects.upload(BUCKET_MARKER, app, { account_id, bucket_name: name });
+  }
+
+  async bucketOwner(name: string): Promise<string | null | undefined> {
+    if (!(await this.findBucket(name))) return undefined;
+    const response = await this.client.r2.buckets.objects.get(BUCKET_MARKER, { account_id: await this.accountId(), bucket_name: name }).catch(() => undefined);
+    return response?.ok ? (await response.text()).trim() : null;
   }
 
   async deleteBucket(name: string): Promise<void> {

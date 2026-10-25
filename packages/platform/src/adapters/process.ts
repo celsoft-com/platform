@@ -2,10 +2,7 @@ import { spawn } from "node:child_process";
 import { rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { getMigrations } from "better-auth/db/migration";
-import { Client } from "pg";
-import type { Migrator, Wrangler } from "../ports.js";
-import { authOptions, authPool } from "../runtime/auth.js";
+import type { Wrangler } from "../ports.js";
 
 export class WranglerCli implements Wrangler {
   constructor(
@@ -52,36 +49,7 @@ function wranglerBin(): string {
   return join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
 }
 
-export class ShellMigrator implements Migrator {
-  constructor(private readonly appDir: string) {}
-
-  async migrate(command: string, databaseUrl: string): Promise<void> {
-    await run(`migrations (${command})`, command, [], { cwd: this.appDir, env: { ...process.env, DATABASE_URL: databaseUrl }, shell: true });
-  }
-
-  async migrateAuth(databaseUrl: string): Promise<void> {
-    const pool = authPool(databaseUrl);
-    try {
-      const options = authOptions({ pool, secret: "migrations-only", baseURL: "http://localhost", email: { send: async () => {} }, requireVerification: false });
-      const { runMigrations } = await getMigrations(options);
-      await runMigrations();
-    } finally {
-      await pool.end();
-    }
-  }
-
-  async dropAll(databaseUrl: string): Promise<void> {
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
-      await client.query("drop schema if exists drizzle cascade; drop schema public cascade; create schema public;");
-    } finally {
-      await client.end();
-    }
-  }
-}
-
-function run(label: string, command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; shell?: boolean }): Promise<void> {
+function run(label: string, command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { ...options, stdio: "inherit" });
     child.on("error", reject);

@@ -1,30 +1,38 @@
-import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { Pool } from "pg";
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { admin, organization } from "better-auth/plugins";
+import { adminAc, userAc } from "better-auth/plugins/admin/access";
+import { sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { authSchema } from "../schema.js";
 import type { Email } from "./email.js";
 
 export const AUTH_PATH = "/api/auth";
+export const OWNER_ROLE = "owner";
 
 export interface AuthSettings {
-  pool: Pool;
+  db: NodePgDatabase<Record<string, unknown>>;
   secret: string;
   baseURL: string;
   email: Email;
   requireVerification: boolean;
 }
 
-// Better Auth gets its own pg pool: sharing the app's postgres.js client through a Kysely
-// dialect stalls on Workers, while pg is the driver Cloudflare documents for Hyperdrive.
-export function authPool(connectionString: string): Pool {
-  return new Pool({ connectionString, max: 1 });
-}
-
-// Shared by the Worker and by `platform deploy`, which creates the auth tables from it.
-export function authOptions({ pool, secret, baseURL, email, requireVerification }: AuthSettings): BetterAuthOptions {
-  return {
+export function createAuth({ db, secret, baseURL, email, requireVerification }: AuthSettings) {
+  return betterAuth({
     secret,
     baseURL,
     basePath: AUTH_PATH,
-    database: pool,
+    database: drizzleAdapter(db, { provider: "pg", schema: authSchema }),
+    // Postgres fills every id with uuidv7(), so Better Auth leaves the column out.
+    advanced: { database: { generateId: "uuid" } },
+    // The Workers rate limiting binding guards these routes before Better Auth sees them.
+    rateLimit: { enabled: false },
+    session: {
+      // Most requests read the session from a signed cookie instead of the database; a revoked
+      // session therefore keeps working until this copy expires.
+      cookieCache: { enabled: true, maxAge: 5 * 60 },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: requireVerification,
@@ -39,11 +47,32 @@ export function authOptions({ pool, secret, baseURL, email, requireVerification 
         await email.send({ to: user.email, subject: "Confirm your email", text: `Confirm your email address:\n\n${url}` });
       },
     },
-  };
-}
-
-export function createAuth(settings: AuthSettings) {
-  return betterAuth(authOptions(settings));
+    databaseHooks: {
+      user: {
+        create: {
+          // The first account becomes the owner; a single statement, so two at once cannot both win.
+          after: async (user) => {
+            await db.execute(sql`update "user" set role = ${OWNER_ROLE} where id = ${user.id} and not exists (select 1 from "user" where role = ${OWNER_ROLE})`);
+          },
+        },
+      },
+    },
+    // Always installed so its tables and types never change; the runtime hides its routes
+    // unless platform.jsonc turns organizations on.
+    plugins: [
+      admin({ defaultRole: "user", adminRoles: [OWNER_ROLE, "admin"], roles: { [OWNER_ROLE]: adminAc, admin: adminAc, user: userAc } }),
+      organization({
+        teams: { enabled: true },
+        sendInvitationEmail: async ({ email: to, organization: org, inviter, id }) => {
+          await email.send({
+            to,
+            subject: `Join ${org.name}`,
+            text: `${inviter.user.name} invited you to join ${org.name}:\n\n${baseURL}/login?invitation=${id}`,
+          });
+        },
+      }),
+    ],
+  });
 }
 
 export type Auth = ReturnType<typeof createAuth>;

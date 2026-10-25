@@ -1,17 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, PreflightError, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
-  "version": 1,
   "name": "demo",
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
   "frontend": "dist",
-  "database": { "neonProject": "quiet-meadow-12345678", "migrate": "pnpm migrate" },
+  "database": { "neonProject": "quiet-meadow-12345678" },
   "secrets": ["SESSION_SECRET"]
 }`);
 
@@ -73,6 +72,13 @@ describe("deploy prod", () => {
     ]);
   });
 
+  it("stops before touching anything when the schema has ungenerated changes", async () => {
+    ports.migrator.current = false;
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/db generate/);
+    expect(ports.neon.branches).toHaveLength(1);
+    expect(ports.wrangler.deploys).toEqual([]);
+  });
+
   it("stops before deploying when migrations fail", async () => {
     ports.migrator.failWith = new Error("migration failed");
     await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow("migration failed");
@@ -128,14 +134,8 @@ describe("preview", () => {
 });
 
 describe("auth and email", () => {
-  const authConfig: Config = { ...config, auth: true, email: true };
+  const authConfig: Config = { ...config, auth: { organizations: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
-
-  it("creates auth tables before the app's migrations", async () => {
-    await deploy(authCtx(), { kind: "prod" });
-    expect(ports.migrator.authRuns).toEqual(ports.migrator.runs);
-    expect(log.findIndex((l) => l.includes("update auth tables"))).toBeLessThan(log.findIndex((l) => l.includes("run migrations")));
-  });
 
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
     await deploy(authCtx(), { kind: "prod" });
@@ -146,9 +146,13 @@ describe("auth and email", () => {
     expect(Object.keys(first.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
     expect(first.config.vars).toEqual({
       APP_URL: "https://demo.example.com",
+      APP_NAME: "demo",
+      AUTH_ORGANIZATIONS: "off",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });
+    expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
+    expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
 
     await deploy(authCtx(), { kind: "prod" });
     expect(Object.keys(ports.wrangler.deploys[1]!.secrets)).toEqual(["SESSION_SECRET"]);
@@ -213,7 +217,7 @@ describe("files", () => {
 });
 
 describe("destroy", () => {
-  const full: Config = { ...config, auth: true, email: true, files: true };
+  const full: Config = { ...config, auth: { organizations: false }, email: true, files: true };
 
   async function deployEverything() {
     const c = { ...ctx(), config: full };
@@ -248,6 +252,30 @@ describe("destroy", () => {
     expect(ports.cloudflare.buckets.size).toBe(0);
   });
 
+  it("leaves nothing that stops the next deploy from setting everything up again", async () => {
+    const c = await deployEverything();
+    await destroy(c, { data: true });
+    ports.wrangler.deploys = [];
+    await deploy(c, { kind: "prod" });
+
+    expect(ports.mail.domains).toMatchObject([{ name: "demo.example.com", verified: true }]);
+    expect(ports.mail.keys).toHaveLength(1);
+    expect(ports.cloudflare.records.map((r) => `${r.type} ${r.name}`)).toEqual(["TXT resend._domainkey.demo.example.com", "MX send.demo.example.com"]);
+    expect(Object.keys(ports.wrangler.deploys[0]!.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
+    expect(ports.cloudflare.hyperdrives).toMatchObject([{ name: "demo" }]);
+    expect(ports.cloudflare.buckets.has("demo-files")).toBe(true);
+    expect(ports.migrator.runs.at(-1)).toBe("postgresql://owner:secret@br-prod.neon.test/app");
+  });
+
+  it("leaves another app whose name starts with this one's alone", async () => {
+    const c = await deployEverything();
+    ports.cloudflare.workers.add("demo-pr-pr-3");
+    ports.cloudflare.hyperdrives.push({ id: "other", name: "demo-pr-pr-3", origin: "", cached: false });
+    await destroy(c, { data: false });
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-pr-3"]);
+    expect(ports.cloudflare.hyperdrives.map((h) => h.id)).toEqual(["other"]);
+  });
+
   it("changes nothing on a dry run", async () => {
     const c = await deployEverything();
     await destroy({ ...c, run: new Run(true, (line) => log.push(line)) }, { data: true });
@@ -255,5 +283,88 @@ describe("destroy", () => {
     expect(ports.cloudflare.workers.size).toBe(2);
     expect(ports.migrator.dropped).toEqual([]);
     expect(log).toContain("~ would delete Worker demo-pr-7");
+  });
+});
+
+describe("postgres version", () => {
+  it("stops before touching anything on a project older than Postgres 18", async () => {
+    ports.neon.pgVersion = 17;
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Postgres 17/);
+    expect(ports.neon.branches).toHaveLength(1);
+  });
+});
+
+describe("ownership", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+
+  it("tags the Worker it deploys", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.cloudflare.workerTags.get("demo")).toEqual(["celsoft-platform", "app:demo"]);
+  });
+
+  it("stops before any change when a Worker with the app's name has no platform tags", async () => {
+    ports.cloudflare.workers.add("demo");
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Worker demo exists, but nothing shows/);
+    expect(ports.neon.branches).toHaveLength(1);
+    expect(ports.wrangler.deploys).toEqual([]);
+  });
+
+  it("stops on a bucket whose marker is missing", async () => {
+    ports.cloudflare.buckets.set("demo-files", { keys: [] });
+    await expect(deploy(filesCtx(), { kind: "prod" })).rejects.toThrow(/R2 bucket demo-files/);
+  });
+
+  it("stops on a Hyperdrive config that points outside the app's Neon project", async () => {
+    ports.cloudflare.hyperdrives.push({ id: "hd-x", name: "demo", origin: "owner@elsewhere.example/app", cached: false });
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Hyperdrive config demo/);
+  });
+
+  it("accepts a Hyperdrive config left by a deploy that never got as far as its Worker", async () => {
+    await ports.cloudflare.createHyperdrive("demo", "postgresql://owner:secret@br-prod.neon.test/app");
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys).toHaveLength(1);
+  });
+
+  it("destroy deletes nothing when any resource is unproven", async () => {
+    await deploy(filesCtx(), { kind: "prod" });
+    ports.cloudflare.workers.add("demo-pr-4");
+    await expect(destroy(filesCtx(), { data: true })).rejects.toThrow(/Worker demo-pr-4/);
+    expect(ports.cloudflare.workers.has("demo")).toBe(true);
+    expect(ports.migrator.dropped).toEqual([]);
+  });
+});
+
+describe("sweep", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+
+  it("cleans up previews whose pull request is closed and keeps open ones", async () => {
+    await deploy(filesCtx(), { kind: "preview", pr: 7 });
+    await deploy(filesCtx(), { kind: "preview", pr: 8 });
+    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-8/a.txt"];
+
+    expect(await sweep(filesCtx(), [8])).toEqual([7]);
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-8"]);
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "pr-8"]);
+    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+  });
+
+  it("finds a preview from any piece left behind", async () => {
+    await ports.neon.createBranch("p", "pr-9", "br-prod", true);
+    expect(await sweep(ctx(), [])).toEqual([9]);
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production"]);
+  });
+});
+
+describe("cleanup by what exists", () => {
+  it("tags a preview Worker with its pull request", async () => {
+    await deploy(ctx(), { kind: "preview", pr: 7 });
+    expect(ports.cloudflare.workerTags.get("demo-pr-7")).toEqual(["celsoft-platform", "app:demo", "pr:7"]);
+  });
+
+  it("removes a preview's files even after platform.jsonc turned files off", async () => {
+    await deploy({ ...ctx(), config: { ...config, files: true } }, { kind: "preview", pr: 7 });
+    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt"];
+    await cleanup(ctx(), 7);
+    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual([]);
   });
 });

@@ -30,11 +30,17 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
+  # GitHub can skip a pull_request run for a close; pull_request_target needs no merge commit, so it always runs.
+  pull_request_target: # zizmor: ignore[dangerous-triggers] the job runs only for this repo's own pull requests
+    types: [closed]
+  # Once a day, remove any preview whose pull request is closed but was never cleaned up.
+  schedule:
+    - cron: "17 6 * * *"
 
 concurrency:
-  group: platform-\${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
+  group: platform-\${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'sweep') || github.ref }}
+  cancel-in-progress: \${{ github.event_name == 'pull_request' || github.event_name == 'pull_request_target' }}
 
 permissions:
   contents: read
@@ -42,11 +48,15 @@ permissions:
 
 jobs:
   platform:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: \${{ github.event_name == 'push' && 'production' || 'preview' }}
     steps:
-      - uses: actions/checkout@v5${setupPnpm}
+      # A close cleans up with the pull request's own last commit, which knows everything its preview made.
+      - uses: actions/checkout@v5
+        with:
+          ref: \${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
+          persist-credentials: false${setupPnpm}
       - uses: actions/setup-node@v5
         with:
           node-version: 24

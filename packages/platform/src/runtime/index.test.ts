@@ -1,10 +1,11 @@
+import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
-import { defineApp, type Sql } from "./index.js";
+import { defineApp } from "./index.js";
 
-function fakeSql() {
+function fakePool() {
   const calls: string[] = [];
-  const sql = Object.assign(async () => calls.push("query"), { end: async () => void calls.push("end") }) as unknown as Sql;
-  return { sql, calls };
+  const pool = { end: async () => void calls.push("end") } as unknown as Pool;
+  return { pool, calls };
 }
 
 function fakeCtx() {
@@ -13,39 +14,34 @@ function fakeCtx() {
 }
 
 const env = { DB: { connectionString: "postgres://db" } };
+const authEnv = { ...env, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", APP_URL: "https://app.example.com", APP_NAME: "demo" };
+const ok = () => new Response("ok");
 
 describe("defineApp", () => {
   it("opens the database only when used and closes it after the response", async () => {
-    const { sql, calls } = fakeSql();
+    const { pool, calls } = fakePool();
     const { ctx, settle } = fakeCtx();
-    const app = defineApp(async (_req, { sql }) => {
-      await (sql as unknown as () => Promise<void>)();
-      return new Response("ok");
-    }, { connect: () => sql });
+    const app = defineApp((_req, app) => (void app.db, ok()), { pool: () => pool });
 
-    const response = await app.fetch(new Request("https://x/"), env, ctx);
+    expect(await (await app.fetch(new Request("https://x/"), env, ctx)).text()).toBe("ok");
     await settle();
-
-    expect(await response.text()).toBe("ok");
-    expect(calls).toEqual(["query", "end"]);
+    expect(calls).toEqual(["end"]);
   });
 
   it("never connects when the handler skips the database", async () => {
-    let connects = 0;
-    const { ctx } = fakeCtx();
-    const app = defineApp(() => new Response("ok"), { connect: () => (connects++, fakeSql().sql) });
-
-    await app.fetch(new Request("https://x/"), env, ctx);
-    expect(connects).toBe(0);
+    let opened = 0;
+    const app = defineApp(ok, { pool: () => (opened++, fakePool().pool) });
+    await app.fetch(new Request("https://x/"), env, fakeCtx().ctx);
+    expect(opened).toBe(0);
   });
 
   it("still closes the database when the handler throws", async () => {
-    const { sql, calls } = fakeSql();
+    const { pool, calls } = fakePool();
     const { ctx, settle } = fakeCtx();
     const app = defineApp((_req, app) => {
-      void app.sql;
+      void app.db;
       throw new Error("boom");
-    }, { connect: () => sql });
+    }, { pool: () => pool });
 
     await expect(app.fetch(new Request("https://x/"), env, ctx)).rejects.toThrow("boom");
     await settle();
@@ -53,8 +49,54 @@ describe("defineApp", () => {
   });
 
   it("explains a missing database", async () => {
-    const { ctx } = fakeCtx();
-    const app = defineApp((_req, app) => (void app.sql, new Response()));
-    await expect(app.fetch(new Request("https://x/"), {}, ctx)).rejects.toThrow(/platform\.jsonc/);
+    const app = defineApp((_req, app) => (void app.db, ok()));
+    await expect(app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).rejects.toThrow(/platform\.jsonc/);
+  });
+
+  it("sends a thrown Response as the answer", async () => {
+    const app = defineApp(() => {
+      throw new Response("nope", { status: 418 });
+    });
+    expect((await app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).status).toBe(418);
+  });
+
+  it("refuses a form posted from another site", async () => {
+    const app = defineApp(ok);
+    const post = (origin?: string) =>
+      new Request("https://x/api/thing", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...(origin && { origin }) }, body: "a=1" });
+    expect((await app.fetch(post("https://evil.example"), {}, fakeCtx().ctx)).status).toBe(403);
+    expect((await app.fetch(post(), {}, fakeCtx().ctx)).status).toBe(403);
+    expect((await app.fetch(post("https://x"), {}, fakeCtx().ctx)).status).toBe(200);
+  });
+});
+
+describe("with auth", () => {
+  const app = defineApp(ok, { pool: () => fakePool().pool, screens: { stylesheet: "/auth.css" } });
+  const call = (path: string, init?: RequestInit, extra = {}) => app.fetch(new Request(`https://app.example.com${path}`, init), { ...authEnv, ...extra }, fakeCtx().ctx);
+
+  it("asks for sign-in on private API routes and lets public ones through", async () => {
+    expect((await call("/api/notes")).status).toBe(401);
+    expect((await call("/api/public/status")).status).toBe(200);
+    expect((await call("/about")).status).toBe(200);
+  });
+
+  it("serves the sign-in screens with the app's stylesheet after the default", async () => {
+    const response = await call("/login");
+    const html = await response.text();
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(html).toContain('<h1 class="platform-title">Sign in</h1>');
+    expect(html.indexOf("<style>")).toBeLessThan(html.indexOf('href="/auth.css"'));
+  });
+
+  it("hides organization routes unless organizations are on", async () => {
+    expect((await call("/api/auth/organization/list", undefined, { AUTH_ORGANIZATIONS: "off" })).status).toBe(404);
+  });
+
+  it("answers 429 once the rate limit is spent", async () => {
+    const keys: string[] = [];
+    const AUTH_LIMIT = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: false }) };
+    const response = await call("/api/auth/sign-in/email", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "A@B.com", password: "x" }) }, { AUTH_LIMIT });
+    expect(response.status).toBe(429);
+    expect(keys).toEqual(["/api/auth/sign-in/email:a@b.com"]);
   });
 });

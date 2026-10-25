@@ -1,13 +1,11 @@
 {
   "$schema": "./node_modules/@celsoft/platform/schema.json",
-  "version": 1,
   "name": "{{name}}",
   "hostname": "{{hostname}}",
   "worker": "src/worker.ts",
   "frontend": "public",
   "compatibilityDate": "{{compatibilityDate}}",
   "database": {
-    "neonProject": "{{neonProject}}",
-    "migrate": "node scripts/migrate.js"
+    "neonProject": "{{neonProject}}"
   }
 }
