@@ -249,6 +249,10 @@ A published CLI, runtime library and app template that create and reuse each app
         3. **Permissions**: `defineApp({ roles })` maps each role to what it may do, such as `{ admin: { notes: ["create", "delete"] } }`, handed to Better Auth's access control; `app.can(organizationId, { notes: ["delete"] })` checks the signed-in user. The names are typed from the declaration, and the docs and skill tell apps to define them once as constants.
         4. **Explicit organization**: endpoints take the organization they act on as an input, such as `/api/orgs/:org/notes`; the platform never scopes data by the session's active organization, which stays available for UI defaults.
         5. **Owner columns**: `...owner()` from `@celsoft/platform/schema` adds `userId` and an optional `organizationId`, each referencing Better Auth's tables and deleted with them.
+    9. **Sharing**: one item shared with someone it is not already visible to; organizations cover groups that see everything.
+        1. **Grants**: a `grant` table in the platform's schema, and `app.share` in the runtime: `share(kind, id, to, ...)`, `can(kind, id, ...)`, `list(kind, id)`, `revoke(...)` and `sharedWithMe(kind)`, where `kind` and `id` name any of the app's items, such as `"note"` and its id; grants for items that no longer exist are revoked by the app or cleared by the platform.
+        2. **Who**: a grant goes to a user, an organization, a team, or an email address; a grant to an email waits until someone signs up and confirms that address, then becomes theirs.
+        3. **Email**: `share` sends an email from `noreply@` the app's hostname with a link the app gives, such as `/notes/<id>`; the app may pass its own subject and text, or turn the email off; previews and local dev capture it.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
