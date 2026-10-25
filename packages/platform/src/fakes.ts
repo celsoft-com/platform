@@ -1,5 +1,5 @@
 import type { Branch, Cloudflare, DnsRecord, Hyperdrive, Mail, MailDomain, Migrator, Neon, Ports, Wrangler, Zone, ZoneRecord } from "./ports.js";
-import { appTag, PLATFORM_TAG } from "./ownership.js";
+import { appTag, PLATFORM_TAG, prTag } from "./ownership.js";
 import { originOf } from "./target.js";
 
 export class FakeNeon implements Neon {
@@ -81,8 +81,8 @@ export class FakeCloudflare implements Cloudflare {
     const app = tags.includes(PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
     return { app, hyperdriveIds: this.workerHyperdrives.get(name) ?? [] };
   }
-  async tagWorker(name: string, app: string) {
-    this.workerTags.set(name, [PLATFORM_TAG, appTag(app)]);
+  async tagWorker(name: string, app: string, pr: number | undefined) {
+    this.workerTags.set(name, [PLATFORM_TAG, appTag(app), ...(pr ? [prTag(pr)] : [])]);
   }
   async listWorkers(namePrefix: string) {
     return [...this.workers].filter((w) => w.startsWith(namePrefix));

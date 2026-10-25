@@ -1,6 +1,6 @@
 import CloudflareClient from "cloudflare";
 import { MANAGED_COMMENT } from "../lifecycle.js";
-import { appTag, BUCKET_MARKER, PLATFORM_TAG } from "../ownership.js";
+import { appTag, BUCKET_MARKER, PLATFORM_TAG, prTag } from "../ownership.js";
 import type { Cloudflare, DnsRecord, Hyperdrive, Zone, ZoneRecord } from "../ports.js";
 import { originOf } from "../target.js";
 
@@ -90,8 +90,9 @@ export class CloudflareApi implements Cloudflare {
     return { app, hyperdriveIds };
   }
 
-  async tagWorker(name: string, app: string): Promise<void> {
-    await this.client.workers.scripts.settings.edit(name, { account_id: await this.accountId(), tags: [PLATFORM_TAG, appTag(app)] });
+  async tagWorker(name: string, app: string, pr: number | undefined): Promise<void> {
+    const tags = [PLATFORM_TAG, appTag(app), ...(pr ? [prTag(pr)] : [])];
+    await this.client.workers.scripts.settings.edit(name, { account_id: await this.accountId(), tags });
   }
 
   async listWorkers(namePrefix: string): Promise<string[]> {

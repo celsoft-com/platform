@@ -48,7 +48,7 @@ export interface Cloudflare {
   deleteHyperdrive(id: string): Promise<void>;
   findWorker(name: string): Promise<boolean>;
   workerOwner(name: string): Promise<{ app: string | null; hyperdriveIds: string[] } | undefined>;
-  tagWorker(name: string, app: string): Promise<void>;
+  tagWorker(name: string, app: string, pr: number | undefined): Promise<void>;
   listWorkers(namePrefix: string): Promise<string[]>;
   deleteWorker(name: string): Promise<void>;
   workerSecretNames(worker: string): Promise<string[]>;
@@ -97,6 +97,7 @@ export interface Migrator {
 export interface GitHub {
   setSecret(name: string, value: string): Promise<void>;
   ensureEnvironment(name: string): Promise<void>;
+  openPullRequests(): Promise<number[]>;
 }
 
 export interface Ports {

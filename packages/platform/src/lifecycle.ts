@@ -101,7 +101,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined });
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, async () => {
     await ports.wrangler.deploy(wrangler, { ...secrets, ...generated });
-    await ports.cloudflare.tagWorker(n.worker, config.name);
+    await ports.cloudflare.tagWorker(n.worker, config.name, target.kind === "preview" ? target.pr : undefined);
   }, undefined);
   return { hostname };
 }
@@ -222,7 +222,9 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
   const worker = await ownedWorker(ports, config, n.worker);
   const hyperdrive = await ports.cloudflare.findHyperdrive(n.hyperdrive);
   if (hyperdrive) await requireOwnedHyperdrive(ports, config, hyperdrive, worker?.hyperdriveIds ?? []);
-  const bucket = config.files && (await ownedBucket(ports, config, n.bucket));
+  // Found by what exists, not by platform.jsonc, so a preview made with files on is still cleaned
+  // after files is turned off.
+  const bucket = await ownedBucket(ports, config, n.bucket);
 
   if (worker) await run.mutate(`delete Worker ${n.worker}`, () => ports.cloudflare.deleteWorker(n.worker), undefined);
   if (hyperdrive) await run.mutate(`delete Hyperdrive config ${n.hyperdrive}`, () => ports.cloudflare.deleteHyperdrive(hyperdrive.id), undefined);
@@ -238,6 +240,29 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
   if (bucket) {
     await run.mutate(`delete files under ${n.filesPrefix} in ${n.bucket}`, () => ports.cloudflare.deleteObjects(n.bucket, n.filesPrefix), 0);
   }
+}
+
+// Removes every preview whose pull request is no longer open: the backstop for a close whose
+// cleanup never ran. Previews are found by what exists in Cloudflare and Neon.
+export async function sweep(ctx: Context, open: number[]): Promise<number[]> {
+  const { config, ports, run } = ctx;
+  const preview = new RegExp(`^${config.name}-pr-(\\d+)$`);
+  const prefix = `${config.name}-pr-`;
+  const found = new Set<number>();
+  const add = (match: RegExpExecArray | null) => match && found.add(Number(match[1]));
+  for (const worker of await ports.cloudflare.listWorkers(prefix)) add(preview.exec(worker));
+  for (const hyperdrive of await ports.cloudflare.listHyperdrives(prefix)) add(preview.exec(hyperdrive.name));
+  if (config.database) {
+    for (const branch of await ports.neon.listBranches(config.database.neonProject, "pr-")) add(/^pr-(\d+)$/.exec(branch.name));
+  }
+
+  const stale = [...found].filter((pr) => !open.includes(pr)).sort((a, b) => a - b);
+  if (stale.length === 0) run.note("✓ no previews left behind");
+  for (const pr of stale) {
+    run.note(`pull request ${pr} is closed; cleaning up its preview`);
+    await cleanup(ctx, pr);
+  }
+  return stale;
 }
 
 // Deletes everything the platform made for the app. Without `data` it keeps what holds the app's

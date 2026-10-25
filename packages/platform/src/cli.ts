@@ -12,7 +12,7 @@ import { DrizzleMigrator } from "./adapters/drizzle.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
-import { cleanup, deploy, destroy, dev, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dev, PreflightError, sweep, type Context } from "./lifecycle.js";
 import { UnprovenError } from "./ownership.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
@@ -27,10 +27,11 @@ commands:
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
+  sweep            delete previews whose pull request is closed
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "db generate" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "db generate" } | { name: "sweep" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -94,6 +95,10 @@ async function main(argv: string[]): Promise<void> {
     await dev(ctx);
     return;
   }
+  if (command.name === "sweep") {
+    await sweep(ctx, await new GhCli(repoRoot(appDir)).openPullRequests());
+    return;
+  }
   if (command.name === "destroy") {
     await confirmDestroy(ctx, app.config.name, values.data);
     return;
@@ -112,7 +117,7 @@ async function main(argv: string[]): Promise<void> {
 
 function parseCommand([name, pr]: string[]): Command {
   if (name === "db" && pr === "generate") return { name: "db generate" };
-  if (name === "upgrade") return { name };
+  if (name === "upgrade" || name === "sweep") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
@@ -124,7 +129,9 @@ async function commandForGitHubEvent(): Promise<Command | undefined> {
   if (!name || !path) throw new UsageError("`platform ci` runs only inside GitHub Actions");
   const event = JSON.parse(await readFile(path, "utf8")) as { action?: string; number?: number; pull_request?: { head?: { sha?: string } } };
   if (name === "push") return { name: "deploy" };
+  if (name === "pull_request_target" && event.action === "closed") return { name: "cleanup", pr: event.number! };
   if (name === "pull_request") return event.action === "closed" ? { name: "cleanup", pr: event.number! } : { name: "preview", pr: event.number!, sha: event.pull_request?.head?.sha };
+  if (name === "schedule") return { name: "sweep" };
   return undefined;
 }
 

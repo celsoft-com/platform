@@ -107,10 +107,15 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Deploy**: deploys the preview Worker and attaches its preview hostname.
     6. **Link**: posts or updates the preview link on the PR.
 3. **PR closed**: deletes that PR's preview.
-    1. **Worker**: deletes the preview Worker, its hostname with it.
-    2. **Connect**: deletes its Hyperdrive config.
-    3. **Branch**: deletes its Neon branch.
-4. **Rules**: hold for every event.
+    1. **Trigger**: `pull_request_target`, because GitHub can skip a `pull_request` run for a close when the PR's test merge commit is missing; it still runs only for the repo's own PRs.
+    2. **Code**: the job checks out the PR's last commit, so the version that made the preview, and its `platform.jsonc`, clean it up.
+    3. **By what exists**: preview Workers carry a `pr:<n>` tag, and cleanup removes whatever it finds for that PR, not only what the config says it made.
+    4. **Worker**: deletes the preview Worker, its hostname with it.
+    5. **Connect**: deletes its Hyperdrive config.
+    6. **Branch**: deletes its Neon branch.
+    7. **Files**: deletes the PR's folder in the preview bucket.
+4. **Daily sweep**: a scheduled run lists every preview, asks GitHub which PRs are still open, and cleans up the rest, for any close whose cleanup never ran.
+5. **Rules**: hold for every event.
     1. **Create or reuse**: every step finds by name first, so reruns are safe.
     2. **One run per PR**: a new push cancels the PR's run in progress.
     3. **Fail early**: a failed migration stops the run before deploy, leaving the running version in place.
@@ -229,7 +234,6 @@ A published CLI, runtime library and app template that create and reuse each app
 5. **Realtime**: Durable Objects rooms over WebSockets.
 6. **MCP**: an MCP server in the runtime library, behind auth.
 7. **Observability**: Sentry wired in by the runtime library.
-8. **Sweep**: a scheduled cleanup of previews whose PR closed without cleanup running.
-9. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
-10. **Demo first**: no stage ships until the demo app uses it.
+8. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
+9. **Demo first**: no stage ships until the demo app uses it.
 

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, PreflightError, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, PreflightError, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -331,5 +331,40 @@ describe("ownership", () => {
     await expect(destroy(filesCtx(), { data: true })).rejects.toThrow(/Worker demo-pr-4/);
     expect(ports.cloudflare.workers.has("demo")).toBe(true);
     expect(ports.migrator.dropped).toEqual([]);
+  });
+});
+
+describe("sweep", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+
+  it("cleans up previews whose pull request is closed and keeps open ones", async () => {
+    await deploy(filesCtx(), { kind: "preview", pr: 7 });
+    await deploy(filesCtx(), { kind: "preview", pr: 8 });
+    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt", "pr-8/a.txt"];
+
+    expect(await sweep(filesCtx(), [8])).toEqual([7]);
+    expect([...ports.cloudflare.workers]).toEqual(["demo-pr-8"]);
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production", "pr-8"]);
+    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual(["pr-8/a.txt"]);
+  });
+
+  it("finds a preview from any piece left behind", async () => {
+    await ports.neon.createBranch("p", "pr-9", "br-prod", true);
+    expect(await sweep(ctx(), [])).toEqual([9]);
+    expect(ports.neon.branches.map((b) => b.name)).toEqual(["production"]);
+  });
+});
+
+describe("cleanup by what exists", () => {
+  it("tags a preview Worker with its pull request", async () => {
+    await deploy(ctx(), { kind: "preview", pr: 7 });
+    expect(ports.cloudflare.workerTags.get("demo-pr-7")).toEqual(["celsoft-platform", "app:demo", "pr:7"]);
+  });
+
+  it("removes a preview's files even after platform.jsonc turned files off", async () => {
+    await deploy({ ...ctx(), config: { ...config, files: true } }, { kind: "preview", pr: 7 });
+    ports.cloudflare.buckets.get("demo-previews")!.keys = ["pr-7/a.txt"];
+    await cleanup(ctx(), 7);
+    expect(ports.cloudflare.buckets.get("demo-previews")!.keys).toEqual([]);
   });
 });

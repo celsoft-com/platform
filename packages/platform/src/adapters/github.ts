@@ -13,6 +13,11 @@ export class GhCli implements GitHub {
     await this.gh(["api", "--method", "PUT", `repos/${repo}/environments/${name}`, "--silent"]);
   }
 
+  async openPullRequests(): Promise<number[]> {
+    const out = await this.gh(["pr", "list", "--state", "open", "--limit", "1000", "--json", "number", "--jq", ".[].number"]);
+    return out.split("\n").filter(Boolean).map(Number);
+  }
+
   private gh(args: string[], stdin?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn("gh", args, { cwd: this.repoRoot, stdio: ["pipe", "pipe", "inherit"] });

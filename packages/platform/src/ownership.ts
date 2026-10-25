@@ -5,6 +5,7 @@ import type { Hyperdrive, Ports } from "./ports.js";
 // platform made a resource. Each resource carries proof instead, checked before any change.
 export const PLATFORM_TAG = "celsoft-platform";
 export const appTag = (app: string) => `app:${app}`;
+export const prTag = (pr: number) => `pr:${pr}`;
 export const BUCKET_MARKER = ".celsoft-platform";
 
 export class UnprovenError extends Error {
