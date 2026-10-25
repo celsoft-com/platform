@@ -70,14 +70,8 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  // On install a failure only warns: install must never be blocked by the app's own code.
   if (command.name === "generate") {
-    try {
-      for (const file of await generate(appDir)) console.log(`✓ ${file}`);
-    } catch (error) {
-      if (process.env.npm_lifecycle_event !== "postinstall") throw error;
-      console.warn(`! could not generate .platform/: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    for (const file of await generate(appDir)) console.log(`✓ ${file}`);
     return;
   }
 
