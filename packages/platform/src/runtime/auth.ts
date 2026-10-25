@@ -86,6 +86,8 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
         scopes: ["openid", "profile", "email", "offline_access"],
         allowDynamicClientRegistration: true,
         allowUnauthenticatedClientRegistration: true,
+        // Clients that leave out their type are judged by their redirect URIs, so local ones work.
+        clientRegistrationDefaultApplicationType: "infer",
       }),
     ],
   });
