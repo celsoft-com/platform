@@ -243,34 +243,41 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **First owner**: the first account an app creates gets the owner role, through Better Auth's admin plugin.
     6. **Owner recovery**: `npx @celsoft/platform owner reset <email>` makes that account the owner and sets a password typed into the terminal; only people holding the project's tokens can run it, and they already control the app, so no recovery secret ever exists or appears on a screen.
     7. **Signup**: open to anyone.
-    8. **Organizations**: Better Auth's organization plugin, with members, roles, invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
+    8. **Organizations**: Better Auth's organization plugin, with members, roles (owner, admin, member), invitations and teams, behind `auth.organizations` in `platform.jsonc`; turning it off hides its routes and keeps its tables and data.
         1. **Names**: an organization is the top-level group people join, and a team is a group inside an organization, as in Better Auth; docs, the skill and the demo use both words only that way.
         2. **Membership**: `app.membership(organizationId)` returns the signed-in user's role there, or null; `app.requireMember(organizationId, roles?)` throws a 404 unless they belong, with one of the given roles when given, so outsiders cannot tell an organization exists.
-        3. **Permissions**: organization roles map onto the same ladder as sharing grants: `member` can `create`, `admin` can `delete`, `owner` can `manage`; `app.can(organizationId, "delete")` checks the signed-in user, and apps declare no permissions of their own.
-        4. **Explicit organization**: endpoints take the organization they act on as an input, such as `/api/orgs/:org/notes`; the platform never scopes data by the session's active organization, which stays available for UI defaults.
-        5. **Owner columns**: `...owner()` from `@celsoft/platform/schema` adds `userId` and an optional `organizationId`, each referencing Better Auth's tables and deleted with them.
-    9. **Sharing**: one item shared with someone it is not already visible to; organizations cover groups that see everything.
-        1. **Grants**: a `grant` table in the platform's schema, and `app.share` in the runtime: `share(kind, id, to, level)`, `can(kind, id, level)`, `list(kind, id)`, `revoke(...)` and `sharedWithMe(kind)`, where `kind` and `id` name any of the app's items, such as `"note"` and its id; grants for items that no longer exist are revoked by the app or cleared by the platform.
-        2. **Who**: a grant goes to a user, an organization, a team, or an email address; a grant to an email waits until someone signs up and confirms that address, then becomes theirs.
-        3. **Email**: `share` sends an email from `noreply@` the app's hostname with a link the app gives, such as `/notes/<id>`; the app may pass its own subject and text, or turn the email off; previews and local dev capture it.
-        4. **Levels**: every grant gives one level from a fixed ladder, each including the ones below it: `read`, `create` (add things inside, such as notes in a folder), `write`, `delete`, `manage` (share and revoke); apps declare nothing, and an unusual action is mapped onto a level or checked by the app.
-        5. **Links**: `app.share.link(kind, id, level, { expires? })` makes a link carrying a secret token; anyone opening it gets that level on that item, signed in or not, until it expires or is revoked, and `can` honors the token a request carries; endpoints serving shared items work signed out when a token is present.
-        6. **Inheritance**: a grant on an item also applies to everything inside it, such as the pages in a folder; the app records each item's parent in a platform table, written in the same transaction as its own update, so the two never disagree.
-        7. **No cycles**: `app.share.place(kind, id, parentKind, parentId)` records an item's parent when it is created or moved, refusing a parent that is the item itself or anything inside it; it holds a database lock while it checks, so two moves at once cannot make a loop between them, and the access check's depth limit remains only as a backstop.
-        8. **Highest wins**: when someone has access several ways, as a person, through a team or organization, or through a link, the highest level applies.
-        9. **Checks in Postgres**: one recursive query walks up an item's parents, at most a fixed number of levels, and joins the grants for the user, their teams, their organization and any link token; lists use a filter the app adds to its own query, never one check per item. A Durable Object store stays an option if checks ever need to be faster.
+        3. **Explicit organization**: endpoints take the organization they act on as an input, such as `/api/orgs/:org/notes`; the platform never scopes data by the session's active organization, which stays available for UI defaults.
+        4. **Owner columns**: `...owner()` from `@celsoft/platform/schema` adds `userId` and an optional `organizationId`, each referencing Better Auth's tables and deleted with them, for the app's own queries.
+    9. **Access**: who may do what to an app's items, one model for people, teams, organizations and links, all through `app.access`; see App Code, Access.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
     3. **Pages**: the frontend, and any styling of the auth screens.
     4. **Content**: what its own emails say and how its files are organized.
-8. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
+8. **Access**: who may do what to an app's items; one model for people, teams, organizations and links, kept in the app's Postgres database and reached through `app.access`.
+    1. **Items**: the platform knows items, each a kind and an id such as `"page"` and 7, and which item each one sits inside; parents can have parents. The app decides what its kinds mean, such as folders, pages and files, and keeps everything else about them in its own tables.
+    2. **Top of the tree**: every item's chain ends at an organization or a user, the item's owner; an item with no parent of its own is placed directly under one of them.
+    3. **Placing**: `app.access.place(kind, id, parentKind, parentId)` records an item's parent when the app creates or moves it, in the same transaction as the app's own change, so the two never disagree; it refuses a parent that is the item itself or anything inside it, holding a database lock while it checks, so no loop can ever be stored.
+    4. **Levels**: one fixed ladder, each level including the ones below it: `read`, `create` (add things inside, such as pages in a folder), `write`, `delete`, `manage` (share and revoke). Apps declare no permissions; an unusual action is mapped onto a level or checked by the app.
+    5. **From ownership**: a user has `manage` on what they own; in an organization, `member` has `create`, `admin` has `delete` and `owner` has `manage` on everything placed under it.
+    6. **Grants**: `app.access.share(kind, id, to, level)` gives a user, a team, an organization, or an email address a level on one item; a grant to an email waits until someone signs up and confirms that address. `list`, `revoke` and `sharedWithMe(kind)` read and remove them.
+    7. **Sharing email**: `share` sends an email from `noreply@` the app's hostname with a link the app gives, such as `/pages/7`; the app may reword it or turn it off; previews and local dev capture it.
+    8. **Links**: `app.access.link(kind, id, level, { expires? })` makes a link carrying a secret token; anyone opening it gets that level on that item, signed in or not, until it expires or is revoked.
+    9. **Inheritance**: a level on an item applies to everything inside it, so a team with `write` on a folder can change its pages and add new ones.
+    10. **Highest wins**: when someone has access several ways, as owner, as an organization member, through a team, a personal grant or a link, the highest level applies.
+    11. **Endpoints**: an endpoint declares `access: { kind, id, level }`, naming the input field that holds the item's id, and the platform checks it before the function runs; anything short is a 404, so items people cannot see look missing.
+    12. **Lists**: `accessible(kind, level)` is a filter the app adds to its own query, such as listing the pages someone can read, so the database applies access in the same pass instead of one check per item.
+    13. **Hand-written routes**: uploads, downloads and other routes outside endpoints call `app.access.can(kind, id, level)` themselves.
+    14. **Checks**: one recursive query walks up an item's chain, at most a fixed number of levels as a backstop, and joins the grants for the user, their teams, their organization and any link token the request carries; nothing is cached between requests, so a removed member or a revoked grant takes effect on the next request.
+    15. **Files**: files are stored in R2 under keys that never change, such as `files/<id>`, and where they sit lives only in the item tree, so moving a file or a whole folder is one row, never a copy; `app.files` reads and writes a file by its item id.
+    16. **Later**: a Durable Object store for grants stays an option if checks ever need to be faster than a Postgres query.
+9. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
     1. **SQL**: `app.db` is Drizzle itself, with raw SQL through its `sql` tag.
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
-9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
-10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
-11. **Endpoints**: typed functions an app declares once and serves over its API, MCP, or both; some choices are still open.
+10. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
+11. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
+12. **Endpoints**: typed functions an app declares once and serves over its API, MCP, or both; some choices are still open.
     1. **Zod only**: every type an app writes is a Zod schema; whatever the API and MCP need beyond that is the package's wrapping, never the app's.
     2. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.
     3. **Where served**: each endpoint says `serve: ["api"]`, `["mcp"]` or both; only an API endpoint has a method and path.
