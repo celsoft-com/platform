@@ -1,0 +1,25 @@
+# The platform's own tests on every pull request, on Linux like the release job, before anything merges.
+name: test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v3
+      - run: mise run install
+      - run: mise run test
+      - run: mise run test:template
