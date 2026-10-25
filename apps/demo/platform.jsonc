@@ -1,6 +1,5 @@
 {
   "$schema": "./node_modules/@celsoft/platform/schema.json",
-  "version": 1,
   "name": "demo",
   "hostname": "${DEMO_HOSTNAME}",
   "worker": "src/worker.ts",

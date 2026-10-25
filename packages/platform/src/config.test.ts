@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, configJsonSchema, configVariables, parseConfig } from "./config.js";
+import { ConfigError, configJsonSchema, configVariables, parseConfig, upgradeConfigText } from "./config.js";
 
 const valid = `{
   // comments and trailing commas are allowed
-  "version": 1,
   "name": "demo",
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
@@ -24,22 +23,31 @@ describe("parseConfig", () => {
   });
 
   it("reads auth as on or off, with organizations off unless asked for", () => {
-    const withAuth = (auth: string) => parseConfig(valid.replace(`"version": 1,`, `"version": 1, "email": true, "auth": ${auth},`)).auth;
+    const withAuth = (auth: string) => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "email": true, "auth": ${auth},`)).auth;
     expect(parseConfig(valid).auth).toBe(false);
     expect(withAuth("true")).toEqual({ organizations: false });
     expect(withAuth(`{ "organizations": true }`)).toEqual({ organizations: true });
   });
 
   it("no longer takes a migrate command", () => {
-    expect(() => parseConfig(valid.replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`))).toThrow(/migrate/);
+    expect(() => parseConfig(valid.replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`))).toThrow(/database\.migrate/);
+  });
+
+  it("upgrades an older file, keeping its comments", () => {
+    const old = valid.replace(`"name": "demo",`, `"name": "demo", "version": 1,`).replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`);
+    const { text, changes } = upgradeConfigText(old);
+    expect(changes).toEqual(["removed version", "removed database.migrate"]);
+    expect(text).toContain("// comments and trailing commas are allowed");
+    expect(parseConfig(text).name).toBe("demo");
+    expect(upgradeConfigText(text).changes).toEqual([]);
   });
 
   it("rejects unknown keys", () => {
-    expect(() => parseConfig(valid.replace(`"version": 1,`, `"version": 1, "extra": true,`))).toThrow(/extra/);
+    expect(() => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "extra": true,`))).toThrow(/extra/);
   });
 
   it("tells an older config to upgrade", () => {
-    expect(() => parseConfig(`{ "version": 0 }`)).toThrow(/platform upgrade/);
+    expect(() => parseConfig(valid.replace(`"name": "demo",`, `"version": 1, "name": "demo",`))).toThrow(/older shape \(version\).*platform upgrade/);
   });
 
   it("reports JSON syntax errors", () => {
@@ -49,7 +57,7 @@ describe("parseConfig", () => {
   it("lists every invalid field", () => {
     const error = (() => {
       try {
-        parseConfig(`{ "version": 1, "name": "Demo", "hostname": "x" }`);
+        parseConfig(`{ "name": "Demo", "hostname": "x" }`);
       } catch (e) {
         return e as Error;
       }

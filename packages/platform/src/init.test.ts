@@ -11,7 +11,7 @@ import { Run } from "./run.js";
 import { WORKFLOW_PATH } from "./workflow.js";
 
 const config = parseConfig(`{
-  "version": 1, "name": "demo", "hostname": "demo.example.com", "worker": "src/worker.ts", "compatibilityDate": "2026-10-01",
+  "name": "demo", "hostname": "demo.example.com", "worker": "src/worker.ts", "compatibilityDate": "2026-10-01",
   "database": { "neonProject": "quiet-meadow-12345678" }
 }`);
 

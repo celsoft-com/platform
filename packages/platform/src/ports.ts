@@ -4,6 +4,7 @@ export interface Branch {
 }
 
 export interface Neon {
+  endpointHosts(project: string): Promise<string[]>;
   postgresVersion(project: string): Promise<number>;
   defaultBranch(project: string): Promise<Branch>;
   findBranch(project: string, name: string): Promise<Branch | undefined>;
@@ -46,6 +47,8 @@ export interface Cloudflare {
   updateHyperdrive(id: string, connectionUri: string): Promise<Hyperdrive>;
   deleteHyperdrive(id: string): Promise<void>;
   findWorker(name: string): Promise<boolean>;
+  workerOwner(name: string): Promise<{ app: string | null; hyperdriveIds: string[] } | undefined>;
+  tagWorker(name: string, app: string): Promise<void>;
   listWorkers(namePrefix: string): Promise<string[]>;
   deleteWorker(name: string): Promise<void>;
   workerSecretNames(worker: string): Promise<string[]>;
@@ -53,7 +56,8 @@ export interface Cloudflare {
   createDnsRecord(zoneId: string, record: DnsRecord): Promise<void>;
   managedDnsRecords(zoneId: string): Promise<ZoneRecord[]>;
   findBucket(name: string): Promise<boolean>;
-  createBucket(name: string): Promise<void>;
+  createBucket(name: string, app: string): Promise<void>;
+  bucketOwner(name: string): Promise<string | null | undefined>;
   deleteBucket(name: string): Promise<void>;
   bucketExpiryDays(name: string): Promise<number | undefined>;
   setBucketExpiry(name: string, days: number): Promise<void>;

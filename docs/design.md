@@ -44,7 +44,7 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
     1. **Named resources**: everything it creates, found by names derived from the app, and nothing else.
-    2. **Proof of ownership**: a matching name is never enough to change or delete a Cloudflare resource, since Cloudflare has no project scope inside an account; Workers carry the tags `celsoft-platform` and `app:<name>`, R2 buckets hold a `.celsoft-platform` file naming the app, a Hyperdrive config counts only when it points at the app's own Neon project, and DNS records carry the platform's comment. A resource with the right name but no proof stops the run untouched.
+    2. **Proof of ownership**: a matching name is never enough to change or delete a Cloudflare resource, since Cloudflare has no project scope inside an account; Workers carry the tags `celsoft-platform` and `app:<name>`, R2 buckets hold a `.celsoft-platform` file naming the app, a Hyperdrive config counts only when one of the app's Workers binds it or it points at the app's own Neon project, and DNS records carry the platform's comment. A resource with the right name but no proof stops the run untouched.
     3. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
     4. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
     5. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.

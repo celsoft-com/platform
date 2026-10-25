@@ -1,10 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parse, printParseErrorCode, type ParseError } from "jsonc-parser";
+import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { z } from "zod";
 
 export const CONFIG_FILE = "platform.jsonc";
-export const CONFIG_VERSION = 1;
 
 const hostname = z
   .string()
@@ -13,7 +12,6 @@ const hostname = z
 export const configSchema = z
   .object({
     $schema: z.string().optional(),
-    version: z.literal(CONFIG_VERSION),
     // Leaves room for "-pr-<number>" within Cloudflare's 63-character Worker name limit.
     name: z.string().regex(/^[a-z][a-z0-9-]{0,49}$/, "must start with a letter and use only a-z, 0-9 and -, at most 50 characters"),
     hostname,
@@ -63,8 +61,9 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
   }
   const raw = substitute(parsed, vars);
 
-  if (isObject(raw) && typeof raw.version === "number" && raw.version < CONFIG_VERSION) {
-    throw new ConfigError(`${source}: version ${raw.version} is older than this platform's ${CONFIG_VERSION}; run \`npx @celsoft/platform upgrade\``);
+  const old = olderShape(raw);
+  if (old.length > 0) {
+    throw new ConfigError(`${source} has an older shape (${old.map((path) => path.join(".")).join(", ")}); run \`npx @celsoft/platform upgrade\` and commit the result`);
   }
 
   const result = configSchema.safeParse(raw);
@@ -73,6 +72,23 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
     throw new ConfigError(`${source} is invalid:\n${lines.join("\n")}`);
   }
   return result.data;
+}
+
+// Fields earlier releases used, recognized by their presence so nobody has to write a version.
+const RETIRED: string[][] = [["version"], ["database", "migrate"]];
+
+function olderShape(raw: unknown): string[][] {
+  return RETIRED.filter((path) => path.reduce<unknown>((node, key) => (isObject(node) ? node[key] : undefined), raw) !== undefined);
+}
+
+// Rewrites an older file to the current shape, keeping its comments and layout.
+export function upgradeConfigText(text: string): { text: string; changes: string[] } {
+  const changes: string[] = [];
+  for (const path of olderShape(parse(text, [], { allowTrailingComma: true }))) {
+    text = applyEdits(text, modify(text, path, undefined, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+    changes.push(`removed ${path.join(".")}`);
+  }
+  return { text, changes };
 }
 
 export async function readConfigText(dir: string): Promise<string> {

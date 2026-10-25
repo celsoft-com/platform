@@ -5,7 +5,6 @@ import { cleanup, deploy, destroy, PreflightError, type Context } from "./lifecy
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
-  "version": 1,
   "name": "demo",
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
@@ -292,5 +291,45 @@ describe("postgres version", () => {
     ports.neon.pgVersion = 17;
     await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Postgres 17/);
     expect(ports.neon.branches).toHaveLength(1);
+  });
+});
+
+describe("ownership", () => {
+  const filesCtx = (): Context => ({ ...ctx(), config: { ...config, files: true } });
+
+  it("tags the Worker it deploys", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.cloudflare.workerTags.get("demo")).toEqual(["celsoft-platform", "app:demo"]);
+  });
+
+  it("stops before any change when a Worker with the app's name has no platform tags", async () => {
+    ports.cloudflare.workers.add("demo");
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Worker demo exists, but nothing shows/);
+    expect(ports.neon.branches).toHaveLength(1);
+    expect(ports.wrangler.deploys).toEqual([]);
+  });
+
+  it("stops on a bucket whose marker is missing", async () => {
+    ports.cloudflare.buckets.set("demo-files", { keys: [] });
+    await expect(deploy(filesCtx(), { kind: "prod" })).rejects.toThrow(/R2 bucket demo-files/);
+  });
+
+  it("stops on a Hyperdrive config that points outside the app's Neon project", async () => {
+    ports.cloudflare.hyperdrives.push({ id: "hd-x", name: "demo", origin: "owner@elsewhere.example/app", cached: false });
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/Hyperdrive config demo/);
+  });
+
+  it("accepts a Hyperdrive config left by a deploy that never got as far as its Worker", async () => {
+    await ports.cloudflare.createHyperdrive("demo", "postgresql://owner:secret@br-prod.neon.test/app");
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys).toHaveLength(1);
+  });
+
+  it("destroy deletes nothing when any resource is unproven", async () => {
+    await deploy(filesCtx(), { kind: "prod" });
+    ports.cloudflare.workers.add("demo-pr-4");
+    await expect(destroy(filesCtx(), { data: true })).rejects.toThrow(/Worker demo-pr-4/);
+    expect(ports.cloudflare.workers.has("demo")).toBe(true);
+    expect(ports.migrator.dropped).toEqual([]);
   });
 });

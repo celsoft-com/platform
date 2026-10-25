@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
@@ -10,9 +10,10 @@ import { NeonApi } from "./adapters/neon.js";
 import { ResendApi } from "./adapters/resend.js";
 import { DrizzleMigrator } from "./adapters/drizzle.js";
 import { WranglerCli } from "./adapters/process.js";
-import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
+import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
 import { cleanup, deploy, destroy, dev, PreflightError, type Context } from "./lifecycle.js";
+import { UnprovenError } from "./ownership.js";
 import { Run } from "./run.js";
 import { loadSecrets, loadVars } from "./secrets.js";
 
@@ -22,13 +23,14 @@ commands:
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
+  upgrade          rewrite an older platform.jsonc to the current shape
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "db generate" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "db generate" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -47,6 +49,14 @@ async function main(argv: string[]): Promise<void> {
   const command = inCi ? await commandForGitHubEvent() : parseCommand(positionals);
   if (!command) {
     console.log("nothing to do for this event");
+    return;
+  }
+
+  if (command.name === "upgrade") {
+    const { text, changes } = upgradeConfigText(await readConfigText(appDir));
+    if (changes.length === 0) return console.log(`✓ ${CONFIG_FILE} already has the current shape`);
+    await writeFile(join(appDir, CONFIG_FILE), text);
+    console.log(`updated ${CONFIG_FILE}: ${changes.join(", ")}; review and commit it`);
     return;
   }
 
@@ -102,6 +112,7 @@ async function main(argv: string[]): Promise<void> {
 
 function parseCommand([name, pr]: string[]): Command {
   if (name === "db" && pr === "generate") return { name: "db generate" };
+  if (name === "upgrade") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);
@@ -205,7 +216,7 @@ function maskInCi(values: string[]): void {
 class UsageError extends Error {}
 
 main(process.argv.slice(2)).catch((error: unknown) => {
-  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError;
+  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UnprovenError || error instanceof UsageError;
   console.error(`✗ ${known ? (error as Error).message : error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
   process.exit(1);
 });

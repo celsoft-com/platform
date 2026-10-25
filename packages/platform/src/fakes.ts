@@ -1,4 +1,5 @@
 import type { Branch, Cloudflare, DnsRecord, Hyperdrive, Mail, MailDomain, Migrator, Neon, Ports, Wrangler, Zone, ZoneRecord } from "./ports.js";
+import { appTag, PLATFORM_TAG } from "./ownership.js";
 import { originOf } from "./target.js";
 
 export class FakeNeon implements Neon {
@@ -8,6 +9,9 @@ export class FakeNeon implements Neon {
 
   async postgresVersion() {
     return this.pgVersion;
+  }
+  async endpointHosts() {
+    return this.branches.map((b) => `${b.id}.neon.test`);
   }
 
   async defaultBranch() {
@@ -69,12 +73,25 @@ export class FakeCloudflare implements Cloudflare {
   async findWorker(name: string) {
     return this.workers.has(name);
   }
+  workerTags = new Map<string, string[]>();
+  workerHyperdrives = new Map<string, string[]>();
+  async workerOwner(name: string) {
+    if (!this.workers.has(name)) return undefined;
+    const tags = this.workerTags.get(name) ?? [];
+    const app = tags.includes(PLATFORM_TAG) ? (tags.find((t) => t.startsWith("app:"))?.slice(4) ?? null) : null;
+    return { app, hyperdriveIds: this.workerHyperdrives.get(name) ?? [] };
+  }
+  async tagWorker(name: string, app: string) {
+    this.workerTags.set(name, [PLATFORM_TAG, appTag(app)]);
+  }
   async listWorkers(namePrefix: string) {
     return [...this.workers].filter((w) => w.startsWith(namePrefix));
   }
   async deleteWorker(name: string) {
     this.workers.delete(name);
     this.workerSecrets.delete(name);
+    this.workerTags.delete(name);
+    this.workerHyperdrives.delete(name);
   }
   async workerSecretNames(worker: string) {
     return [...(this.workerSecrets.get(worker) ?? [])];
@@ -82,12 +99,16 @@ export class FakeCloudflare implements Cloudflare {
   async dnsRecords(_zoneId: string, name: string) {
     return this.records.filter((r) => r.name === name);
   }
-  buckets = new Map<string, { expiryDays?: number; keys: string[] }>();
+  buckets = new Map<string, { expiryDays?: number; keys: string[]; owner?: string }>();
+  async bucketOwner(name: string) {
+    const bucket = this.buckets.get(name);
+    return bucket && (bucket.owner ?? null);
+  }
   async findBucket(name: string) {
     return this.buckets.has(name);
   }
-  async createBucket(name: string) {
-    this.buckets.set(name, { keys: [] });
+  async createBucket(name: string, app: string) {
+    this.buckets.set(name, { keys: [], owner: app });
   }
   async deleteBucket(name: string) {
     if (this.buckets.get(name)?.keys.length) throw new Error(`bucket ${name} is not empty`);
@@ -172,6 +193,9 @@ export class FakeWrangler implements Wrangler {
     const name = c.name as string;
     this.deploys.push({ config: c, secrets });
     this.cloudflare.workers.add(name);
+    // Like the real upload, a deploy carries no tags; the platform applies them afterwards.
+    this.cloudflare.workerTags.delete(name);
+    this.cloudflare.workerHyperdrives.set(name, ((c.hyperdrive as { id: string }[] | undefined) ?? []).map((h) => h.id));
     const stored = this.cloudflare.workerSecrets.get(name) ?? new Set<string>();
     for (const key of Object.keys(secrets)) stored.add(key);
     this.cloudflare.workerSecrets.set(name, stored);

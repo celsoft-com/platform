@@ -8,6 +8,11 @@ export class NeonApi implements Neon {
     this.api = createApiClient({ apiKey });
   }
 
+  async endpointHosts(project: string): Promise<string[]> {
+    const { data } = await this.api.listProjectEndpoints(project);
+    return data.endpoints.map((e) => e.host);
+  }
+
   async postgresVersion(project: string): Promise<number> {
     const { data } = await this.api.getProject(project);
     return Number(data.project.pg_version);

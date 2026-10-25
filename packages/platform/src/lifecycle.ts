@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
 import type { Branch, MailDomain, Ports, Zone } from "./ports.js";
 import type { Run } from "./run.js";
+import { ownedBucket, ownedWorker, requireOwnedHyperdrive, type OwnedWorker } from "./ownership.js";
 import { names, originOf, previewHostname, type Target } from "./target.js";
 import { wranglerConfig } from "./wrangler-config.js";
 
@@ -37,6 +38,12 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const zone = await ports.cloudflare.findZone(config.hostname);
   if (!zone) throw new PreflightError(`no Cloudflare zone for ${config.hostname}; add the apex domain to this account, or check the token's zone access`);
   const hostname = target.kind === "prod" ? config.hostname : previewHostname(n.worker, zone.name);
+
+  // Proof of ownership comes before any change, so a name clash never touches someone else's resource.
+  const worker = await ownedWorker(ports, config, n.worker);
+  const existingHyperdrive = config.database ? await ports.cloudflare.findHyperdrive(n.hyperdrive) : undefined;
+  if (existingHyperdrive) await requireOwnedHyperdrive(ports, config, existingHyperdrive, worker?.hyperdriveIds ?? []);
+  if (config.files) await ownedBucket(ports, config, n.bucket);
 
   let hyperdriveId: string | undefined;
   if (config.database) {
@@ -92,16 +99,19 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
   const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined });
-  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
+  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, async () => {
+    await ports.wrangler.deploy(wrangler, { ...secrets, ...generated });
+    await ports.cloudflare.tagWorker(n.worker, config.name);
+  }, undefined);
   return { hostname };
 }
 
 export const PREVIEW_FILES_DAYS = 14;
 
 // The shared preview bucket expires files after two weeks, a backstop for cleanups that never ran.
-async function ensureBucket({ ports, run }: Context, bucket: string, preview: boolean): Promise<void> {
-  await run.ensure(`R2 bucket ${bucket}`, async () => ((await ports.cloudflare.findBucket(bucket)) ? true : undefined), async () => {
-    await ports.cloudflare.createBucket(bucket);
+async function ensureBucket({ config, ports, run }: Context, bucket: string, preview: boolean): Promise<void> {
+  await run.ensure(`R2 bucket ${bucket}`, async () => ((await ownedBucket(ports, config, bucket)) ? true : undefined), async () => {
+    await ports.cloudflare.createBucket(bucket, config.name);
     return true;
   }, true);
   if (preview && (run.dryRun || (await ports.cloudflare.bucketExpiryDays(bucket)) !== PREVIEW_FILES_DAYS)) {
@@ -208,14 +218,14 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
   const { config, ports, run } = ctx;
   const n = names(config, { kind: "preview", pr });
 
-  if (await ports.cloudflare.findWorker(n.worker)) {
-    await run.mutate(`delete Worker ${n.worker}`, () => ports.cloudflare.deleteWorker(n.worker), undefined);
-  }
-
+  // Everything is checked before anything is deleted.
+  const worker = await ownedWorker(ports, config, n.worker);
   const hyperdrive = await ports.cloudflare.findHyperdrive(n.hyperdrive);
-  if (hyperdrive) {
-    await run.mutate(`delete Hyperdrive config ${n.hyperdrive}`, () => ports.cloudflare.deleteHyperdrive(hyperdrive.id), undefined);
-  }
+  if (hyperdrive) await requireOwnedHyperdrive(ports, config, hyperdrive, worker?.hyperdriveIds ?? []);
+  const bucket = config.files && (await ownedBucket(ports, config, n.bucket));
+
+  if (worker) await run.mutate(`delete Worker ${n.worker}`, () => ports.cloudflare.deleteWorker(n.worker), undefined);
+  if (hyperdrive) await run.mutate(`delete Hyperdrive config ${n.hyperdrive}`, () => ports.cloudflare.deleteHyperdrive(hyperdrive.id), undefined);
 
   if (config.database) {
     const project = config.database.neonProject;
@@ -225,13 +235,14 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
     }
   }
 
-  if (config.files && (await ports.cloudflare.findBucket(n.bucket))) {
+  if (bucket) {
     await run.mutate(`delete files under ${n.filesPrefix} in ${n.bucket}`, () => ports.cloudflare.deleteObjects(n.bucket, n.filesPrefix), 0);
   }
 }
 
 // Deletes everything the platform made for the app. Without `data` it keeps what holds the app's
-// data: prod tables, backups, the dev branch and the prod file bucket.
+// data: prod tables, backups, the dev branch and the prod file bucket. Every Cloudflare resource
+// is proven to be the app's before the first deletion.
 export async function destroy(ctx: Context, { data }: { data: boolean }): Promise<void> {
   const { config, ports, run } = ctx;
   const prod = names(config, { kind: "prod" });
@@ -240,16 +251,24 @@ export async function destroy(ctx: Context, { data }: { data: boolean }): Promis
   const preview = new RegExp(`^${config.name}-pr-\\d+$`);
   const previews = `${config.name}-pr-`;
 
-  const workers = [
-    ...((await ports.cloudflare.findWorker(prod.worker)) ? [prod.worker] : []),
-    ...(await ports.cloudflare.listWorkers(previews)).filter((name) => preview.test(name)),
-  ];
-  for (const worker of workers) await run.mutate(`delete Worker ${worker}`, () => ports.cloudflare.deleteWorker(worker), undefined);
-
-  const prodHyperdrive = await ports.cloudflare.findHyperdrive(prod.hyperdrive);
-  for (const h of [...(prodHyperdrive ? [prodHyperdrive] : []), ...(await ports.cloudflare.listHyperdrives(previews)).filter((h) => preview.test(h.name))]) {
-    await run.mutate(`delete Hyperdrive config ${h.name}`, () => ports.cloudflare.deleteHyperdrive(h.id), undefined);
+  const workers: OwnedWorker[] = [];
+  for (const name of [prod.worker, ...(await ports.cloudflare.listWorkers(previews)).filter((w) => preview.test(w))]) {
+    const worker = await ownedWorker(ports, config, name);
+    if (worker) workers.push(worker);
   }
+  const bound = workers.flatMap((w) => w.hyperdriveIds);
+  const prodHyperdrive = await ports.cloudflare.findHyperdrive(prod.hyperdrive);
+  const hyperdrives = [...(prodHyperdrive ? [prodHyperdrive] : []), ...(await ports.cloudflare.listHyperdrives(previews)).filter((h) => preview.test(h.name))];
+  for (const h of hyperdrives) await requireOwnedHyperdrive(ports, config, h, bound);
+  const buckets: string[] = [];
+  if (config.files) {
+    for (const bucket of [names(config, { kind: "preview", pr: 0 }).bucket, ...(data ? [prod.bucket] : [])]) {
+      if (await ownedBucket(ports, config, bucket)) buckets.push(bucket);
+    }
+  }
+
+  for (const w of workers) await run.mutate(`delete Worker ${w.name}`, () => ports.cloudflare.deleteWorker(w.name), undefined);
+  for (const h of hyperdrives) await run.mutate(`delete Hyperdrive config ${h.name}`, () => ports.cloudflare.deleteHyperdrive(h.id), undefined);
 
   if (config.database) {
     const project = config.database.neonProject;
@@ -263,14 +282,11 @@ export async function destroy(ctx: Context, { data }: { data: boolean }): Promis
     }
   }
 
-  if (config.files) {
-    for (const bucket of [names(config, { kind: "preview", pr: 0 }).bucket, ...(data ? [prod.bucket] : [])]) {
-      if (!(await ports.cloudflare.findBucket(bucket))) continue;
-      await run.mutate(`empty and delete R2 bucket ${bucket}`, async () => {
-        await ports.cloudflare.deleteObjects(bucket, "");
-        await ports.cloudflare.deleteBucket(bucket);
-      }, undefined);
-    }
+  for (const bucket of buckets) {
+    await run.mutate(`empty and delete R2 bucket ${bucket}`, async () => {
+      await ports.cloudflare.deleteObjects(bucket, "");
+      await ports.cloudflare.deleteBucket(bucket);
+    }, undefined);
   }
 
   if (config.email) {
