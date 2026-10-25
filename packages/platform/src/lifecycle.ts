@@ -330,22 +330,44 @@ async function legacyHyperdriveIsOurs({ config, ports }: Context, hyperdrive: Hy
   return Boolean(config.database && host && (await ports.neon.endpointHosts(config.database.neonProject)).includes(host));
 }
 
+export interface PreviewPieces {
+  pr: number;
+  pieces: string[];
+}
+
+// Every preview that exists in Cloudflare and Neon, whatever made it, with the pieces found.
+export async function findPreviews(ctx: Context): Promise<PreviewPieces[]> {
+  const { config, ports } = ctx;
+  const legacy = legacyNames(config.name);
+  const found = new Map<number, string[]>();
+  const add = (pattern: RegExp, name: string, piece: string) => {
+    const pr = pattern.exec(name)?.[1];
+    if (pr !== undefined) found.set(Number(pr), [...(found.get(Number(pr)) ?? []), piece]);
+  };
+  const folders = async (bucket: string) => new Set((await ports.cloudflare.listObjects(bucket, "pr-")).map((key) => key.split("/")[0]!));
+
+  for (const [prefix, pattern, old] of [[`${config.name}--pr-`, previewPattern(config.name), ""], [legacy.previewPrefix, legacy.previewPattern, "old "]] as const) {
+    for (const worker of await ports.cloudflare.listWorkers(prefix)) add(pattern, worker, `${old}Worker`);
+    for (const hyperdrive of await ports.cloudflare.listHyperdrives(prefix)) add(pattern, hyperdrive.name, `${old}Hyperdrive config`);
+  }
+  if (config.database) {
+    for (const branch of await ports.neon.listBranches(config.database.neonProject, "pr-")) add(/^pr-(\d+)$/, branch.name, "Neon branch");
+  }
+  const bucket = names(config, { kind: "preview", pr: 0 }).bucket;
+  if (await ports.cloudflare.findBucket(bucket)) {
+    for (const folder of await folders(bucket)) add(/^pr-(\d+)$/, folder, "files");
+  }
+  if ((await ports.cloudflare.legacyBucketApp(legacy.previewsBucket)) === config.name) {
+    for (const folder of await folders(legacy.previewsBucket)) add(/^pr-(\d+)$/, folder, "old files");
+  }
+  return [...found].map(([pr, pieces]) => ({ pr, pieces })).sort((a, b) => a.pr - b.pr);
+}
+
 // Removes every preview whose pull request is no longer open: the backstop for a close whose
 // cleanup never ran. Previews are found by what exists in Cloudflare and Neon.
 export async function sweep(ctx: Context, open: number[]): Promise<number[]> {
-  const { config, ports, run } = ctx;
-  const legacy = legacyNames(config.name);
-  const found = new Set<number>();
-  const add = (match: RegExpExecArray | null) => match && found.add(Number(match[1]));
-  for (const [prefix, pattern] of [[`${config.name}--pr-`, previewPattern(config.name)], [legacy.previewPrefix, legacy.previewPattern]] as const) {
-    for (const worker of await ports.cloudflare.listWorkers(prefix)) add(pattern.exec(worker));
-    for (const hyperdrive of await ports.cloudflare.listHyperdrives(prefix)) add(pattern.exec(hyperdrive.name));
-  }
-  if (config.database) {
-    for (const branch of await ports.neon.listBranches(config.database.neonProject, "pr-")) add(/^pr-(\d+)$/.exec(branch.name));
-  }
-
-  const stale = [...found].filter((pr) => !open.includes(pr)).sort((a, b) => a - b);
+  const { run } = ctx;
+  const stale = (await findPreviews(ctx)).map((p) => p.pr).filter((pr) => !open.includes(pr));
   if (stale.length === 0) run.note("✓ no previews left behind");
   for (const pr of stale) {
     run.note(`pull request ${pr} is closed; cleaning up its preview`);
