@@ -51,11 +51,11 @@ A published CLI, runtime library and app template that create and reuse each app
 
 ## 6. Domains
 
-1. **Split**: resources are named after the app, and hostnames after the prod hostname; a preview hostname takes its first label from the app name and the rest from the zone.
+1. **Split**: resources are named after the app, and hostnames after the prod hostname; a preview hostname is the prod hostname with `pr-<n>.` in front.
 2. **One zone, many apps**: the project adds its apex domain, such as `example.com`, to Cloudflare once; every app in that account can live in it.
 3. **Prod hostname**: each app picks its own as `hostname` in `platform.jsonc`, either the apex itself or any name below it.
 4. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; that zone is the one it works in.
-5. **Previews**: always one label directly under the zone, `<app>--pr-<n>.<zone>`, whatever the prod hostname is.
+5. **Previews**: `pr-<n>.<hostname>`, directly under the app's prod hostname, so changing the prod hostname moves its previews too.
 6. **Email**: prod sends from `noreply@<hostname>`, with Resend's records below that hostname, so the zone's own mail records are never touched; previews never send.
 7. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
 8. **Hidden values**: `hostname` may be written as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI, to keep it out of a public repo.
@@ -63,10 +63,10 @@ A published CLI, runtime library and app template that create and reuse each app
 
 | Setup | `name` | `hostname` | Zone | Preview for PR 3 | Email from |
 | --- | --- | --- | --- | --- | --- |
-| **App on the apex** | `shop` | `shop.dev` | `shop.dev` | `shop--pr-3.shop.dev` | `noreply@shop.dev` |
-| **App on a subdomain** | `notes` | `notes.example.com` | `example.com` | `notes--pr-3.example.com` | `noreply@notes.example.com` |
-| **Second app, same zone** | `blog` | `blog.example.com` | `example.com` | `blog--pr-3.example.com` | `noreply@blog.example.com` |
-| **Deeper subdomain** | `api` | `api.tools.example.com` | `example.com` | `api--pr-3.example.com` | `noreply@api.tools.example.com` |
+| **App on the apex** | `shop` | `shop.dev` | `shop.dev` | `pr-3.shop.dev` | `noreply@shop.dev` |
+| **App on a subdomain** | `notes` | `notes.example.com` | `example.com` | `pr-3.notes.example.com` | `noreply@notes.example.com` |
+| **Second app, same zone** | `blog` | `blog.example.com` | `example.com` | `pr-3.blog.example.com` | `noreply@blog.example.com` |
+| **Deeper subdomain** | `api` | `api.tools.example.com` | `example.com` | `pr-3.api.tools.example.com` | `noreply@api.tools.example.com` |
 
 ## 7. Resource Identity
 
@@ -77,7 +77,7 @@ A published CLI, runtime library and app template that create and reuse each app
 5. **Three or more**: a hostname label with `--` in positions 3 and 4 is reserved for internationalized names, such as `xn--`, so `ab--pr-1` is never made.
 6. **Reserved**: anything in the account named `<app>` or `<app>--…` belongs to the platform; never create one by hand.
 7. **Unique apps**: an app name is used by one repo only within a Cloudflare account, since two repos with the same name share every resource.
-8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` and `<zone>` are described under Domains.
+8. **Placeholders**: `<app>` is `name` in `platform.jsonc`, `<n>` is the PR number, and `<hostname>` is described under Domains.
 9. **Nothing written on resources**: identity is never stored on a resource, so Workers carry no platform tags and buckets no marker object; email DNS records are the one exception, since Resend chooses their names.
 10. **Destroy**: removes every resource the app's names produce that exists, whatever `platform.jsonc` turns on now; a provider whose key is missing is skipped with a warning.
 11. **Earlier names**: versions before the `--` namespace used `-pr-<n>`, `-files` and `-previews`, with tags and a bucket marker as proof.
@@ -93,7 +93,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tbody>
 <tr><td colspan="5"><strong>Cloudflare</strong>. Scope is an account ID, the one account <code>CLOUDFLARE_API_TOKEN</code> reaches, shared by every app in it.</td></tr>
 <tr><td><strong>Worker</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
-<tr><td><strong>Hostname</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;.&lt;zone&gt;</code></td><td><code>&lt;hostname&gt;</code></td><td>A custom domain of the Worker with the same name</td><td>Deleted with its Worker</td></tr>
+<tr><td><strong>Hostname</strong></td><td><code>pr-&lt;n&gt;.&lt;hostname&gt;</code></td><td><code>&lt;hostname&gt;</code></td><td>A custom domain of the app's Worker for that PR</td><td>Deleted with its Worker</td></tr>
 <tr><td><strong>Hyperdrive config</strong></td><td><code>&lt;app&gt;--pr-&lt;n&gt;</code></td><td><code>&lt;app&gt;</code></td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>R2 bucket</strong></td><td><code>&lt;app&gt;--previews</code></td><td><code>&lt;app&gt;--files</code></td><td>Exact name; one preview bucket is shared by every PR</td><td>Destroy; the prod bucket only with <code>--data</code></td></tr>
 <tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
