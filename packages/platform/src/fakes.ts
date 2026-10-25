@@ -5,8 +5,12 @@ import { originOf } from "./target.js";
 export class FakeNeon implements Neon {
   branches: Branch[] = [{ id: "br-prod", name: "production" }];
   pgVersion = 18;
+  projectScoped = true;
   private next = 1;
 
+  async listsProjects() {
+    return !this.projectScoped;
+  }
   async postgresVersion() {
     return this.pgVersion;
   }

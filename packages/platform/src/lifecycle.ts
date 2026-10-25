@@ -22,6 +22,16 @@ export class PreflightError extends Error {}
 
 export const MIN_POSTGRES = 18;
 
+// A key that reaches more than the app's project could change another project if the id were
+// wrong, so only a project-scoped key is accepted.
+export async function requireProjectKey(neon: Ports["neon"]): Promise<void> {
+  if (await neon.listsProjects()) {
+    throw new PreflightError(
+      "NEON_API_KEY can reach more than one Neon project; replace it with a project-scoped key: in the Neon console open your organization's Settings, then API keys, then Create new API key, and choose Project-scoped",
+    );
+  }
+}
+
 // uuidv7(), the default for every id, arrived in Postgres 18.
 export async function requirePostgres(neon: Ports["neon"], project: string): Promise<void> {
   const version = await neon.postgresVersion(project);

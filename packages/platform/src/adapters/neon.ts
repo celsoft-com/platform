@@ -8,6 +8,14 @@ export class NeonApi implements Neon {
     this.api = createApiClient({ apiKey });
   }
 
+  // A project-scoped key gets 404 here; any failure counts as not listing, so an outage never blocks a run.
+  async listsProjects(): Promise<boolean> {
+    return this.api.listProjects({ limit: 1 }).then(
+      () => true,
+      () => false,
+    );
+  }
+
   async endpointHosts(project: string): Promise<string[]> {
     const { data } = await this.api.listProjectEndpoints(project);
     return data.endpoints.map((e) => e.host);

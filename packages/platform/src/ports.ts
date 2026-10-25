@@ -4,6 +4,8 @@ export interface Branch {
 }
 
 export interface Neon {
+  // True when the key can list projects, which a project-scoped key cannot.
+  listsProjects(): Promise<boolean>;
   endpointHosts(project: string): Promise<string[]>;
   postgresVersion(project: string): Promise<number>;
   defaultBranch(project: string): Promise<Branch>;
