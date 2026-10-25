@@ -259,6 +259,7 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Errors**: a handler fails by throwing one typed error; over HTTP it is that status with `{ error }`, over MCP a tool result with `isError: true` and the message, input check failures included, as MCP asks so a model can correct itself.
     6. **Access**: the existing path rule; `/api/public/` needs no user, every other `/api/` path needs one, and MCP calls always carry a signed-in user.
     7. **Hand-written routes**: the `defineApp` handler stays for uploads, downloads, streaming and webhooks; both live in the package's request handling, so the app only writes its functions.
+    8. **MCP sign-in**: AI clients connect with OAuth 2.1 served by Better Auth's MCP plugin; a person approves a client once, its calls run as that person, and its registered clients, tokens and consents add auth tables and a consent screen.
 
 ## 14. Upgrades
 
@@ -316,12 +317,13 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Joining**: browsers open `/api/live/<room>`; the app's `canJoin` decides who may join and refuses by default.
     4. **Sending**: the app's server sends with `app.live.publish(room, message)`; a browser may send to its room when the app's `canSend` allows, refused by default, with each message stamped with the sender's user id, and the app's optional `onMessage` sees every browser message on the server.
     5. **Messages**: any JSON up to 64 KB, delivered unchanged; no save hooks or merge library are built in.
-    6. **Catch up**: each room numbers its announcements and keeps the last 500 in its own storage; a reconnecting browser gets what it missed, or is told to reload.
-    7. **Presence**: each room tracks who is connected and tells everyone on join and leave; quiet connections hibernate at no cost.
-    8. **Client**: a small dependency-free browser client, served at `/api/live/client.js` for plain pages and exported from the package for bundled apps such as Svelte, which handles reconnecting and catching up.
-    9. **Previews**: each preview Worker has its own rooms, deleted with it.
-    10. **Entry file**: deploy generates a hidden entry module exporting the app's handler and the room class, so apps never export platform code.
-    11. **Demo**: team notes inside an organization, changing live with presence.
+    6. **Message schema**: an optional Zod schema, `live: { message }`, checks every browser message before `onMessage` and types `onMessage` and `app.live.publish`; rooms with several kinds of message use a discriminated union on a `type` field, which the docs show.
+    7. **Catch up**: each room numbers its announcements and keeps the last 500 in its own storage; a reconnecting browser gets what it missed, or is told to reload.
+    8. **Presence**: each room tracks who is connected and tells everyone on join and leave; quiet connections hibernate at no cost.
+    9. **Client**: a small dependency-free browser client, served at `/api/live/client.js` for plain pages and exported from the package for bundled apps such as Svelte, which handles reconnecting and catching up.
+    10. **Previews**: each preview Worker has its own rooms, deleted with it.
+    11. **Entry file**: deploy generates a hidden entry module exporting the app's handler and the room class, so apps never export platform code.
+    12. **Demo**: team notes inside an organization, changing live with presence.
 6. **MCP**: an MCP server in the runtime library, behind auth.
 7. **Observability**: Sentry wired in by the runtime library.
 8. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
