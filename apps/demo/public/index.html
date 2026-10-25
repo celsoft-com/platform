@@ -33,9 +33,32 @@
       <button>Add</button>
     </form>
     <ul id="notes"></ul>
+
+    <h2>Teams</h2>
+    <form id="new-team">
+      <input name="name" placeholder="New team name" required maxlength="60">
+      <button>Create team</button>
+    </form>
+    <ul id="team-list"></ul>
+    <div id="team" hidden>
+      <h3 id="team-name"></h3>
+      <p id="here"></p>
+      <form id="invite">
+        <input name="email" type="email" placeholder="Invite someone by email" required>
+        <button>Invite</button>
+      </form>
+      <form id="new-team-note">
+        <textarea name="body" placeholder="Write a team note" required maxlength="10000"></textarea>
+        <button>Add</button>
+      </form>
+      <p id="typing"></p>
+      <ul id="team-notes"></ul>
+    </div>
   </section>
 
   <script type="module">
+    import { live } from "/api/live/client.js";
+
     const $ = (id) => document.getElementById(id);
     const say = (text) => ($("message").textContent = text);
     const show = (id) => ["signed-out", "signed-in"].forEach((s) => ($(s).hidden = s !== id));
@@ -75,6 +98,97 @@
       }));
     }
 
+    // Team notes: saved through the API, announced to the team's room, with who is here and who is typing.
+    let room;
+    let team;
+    let typingTimer;
+    let lastTyping = 0;
+
+    function teamNote(note) {
+      const li = document.createElement("li");
+      const meta = document.createElement("time");
+      meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
+      li.append(note.body, meta);
+      return li;
+    }
+
+    async function loadTeamNotes() {
+      const list = await call(`/api/teams/${team.id}/notes`);
+      $("team-notes").replaceChildren(...list.map(teamNote));
+    }
+
+    async function loadTeams() {
+      const teams = (await call("/api/auth/organization/list")) ?? [];
+      $("team-list").replaceChildren(...teams.map((t) => {
+        const li = document.createElement("li");
+        const open = document.createElement("button");
+        open.textContent = t.name;
+        open.onclick = () => openTeam(t);
+        li.append(open);
+        return li;
+      }));
+    }
+
+    async function openTeam(next) {
+      room?.close();
+      team = next;
+      $("team").hidden = false;
+      $("team-name").textContent = team.name;
+      $("here").textContent = "";
+      await loadTeamNotes();
+      room = live(`team:${team.id}`, {
+        onMessage(data, { from }) {
+          if (data.type === "note") $("team-notes").prepend(teamNote(data.note));
+          if (data.type === "typing" && from) {
+            $("typing").textContent = `${from.name} is typing`;
+            clearTimeout(typingTimer);
+            typingTimer = setTimeout(() => ($("typing").textContent = ""), 3000);
+          }
+        },
+        onPresence(people, anonymous) {
+          $("here").textContent = `Here now: ${people.map((p) => p.name).join(", ")}`;
+        },
+        onReload: loadTeamNotes,
+      });
+    }
+
+    $("new-team").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = new FormData($("new-team")).get("name").trim();
+      const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        await call("/api/auth/organization/create", { name, slug });
+        $("new-team").reset();
+        await loadTeams();
+      } catch (error) { say(error.message); }
+    });
+
+    $("invite").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = new FormData($("invite")).get("email");
+      try {
+        await call("/api/auth/organization/invite-member", { email, role: "member", organizationId: team.id });
+        $("invite").reset();
+        say(`Invited ${email}; they get an email with a link to join.`);
+      } catch (error) { say(error.message); }
+    });
+
+    $("new-team-note").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const body = new FormData($("new-team-note")).get("body");
+      try {
+        const note = await call(`/api/teams/${team.id}/notes`, { body });
+        $("team-notes").prepend(teamNote(note));
+        $("new-team-note").reset();
+      } catch (error) { say(error.message); }
+    });
+
+    $("new-team-note").body.addEventListener("input", () => {
+      if (Date.now() - lastTyping < 2000) return;
+      lastTyping = Date.now();
+      room?.send({ type: "typing" });
+    });
+
     async function start() {
       const session = await call("/api/auth/get-session");
       if (!session) {
@@ -87,6 +201,7 @@
       $("who").replaceChildren(`${session.user.email} `, out);
       show("signed-in");
       await loadNotes();
+      await loadTeams();
     }
 
     start().catch((error) => say(error.message));
