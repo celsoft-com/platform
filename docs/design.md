@@ -43,14 +43,36 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
-    1. **Named resources**: everything it creates, found by names derived from the app, and nothing else.
-    2. **Proof of ownership**: a matching name is never enough to change or delete a Cloudflare resource, since Cloudflare has no project scope inside an account; Workers carry the tags `celsoft-platform` and `app:<name>`, R2 buckets hold a `.celsoft-platform` file naming the app, a Hyperdrive config counts only when one of the app's Workers binds it or it points at the app's own Neon project, and DNS records carry the platform's comment. A resource with the right name but no proof stops the run untouched.
-    3. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
-    4. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
-    5. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
+    1. **Own resources only**: it changes or deletes only what it can prove it made for the app; see Resource Identity.
+    2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.
+    3. **Lifecycle**: creates, updates and deletes its own resources, previews included.
+    4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
 3. **Line in app code**: see App Code.
 
-## 6. Bootstrap
+## 6. Resource Identity
+
+1. **Why**: Cloudflare has no project scope inside an account, so a matching name never proves the platform made a resource for this app.
+2. **Rule**: every resource is found by a name derived from the app, then proven before any change; a resource with the right name but no proof stops the run untouched.
+3. **Previews**: preview names are matched exactly against `<app>-pr-<n>`, never by prefix alone, so an app named `demo` never matches one named `demo-pr`.
+4. **Checked first**: every proof is checked before the first change or deletion, so a failed proof leaves everything as it was.
+5. **Resources**:
+
+| Resource | Prod name | Preview name | Proof | Removed by |
+| --- | --- | --- | --- | --- |
+| **Worker** | `<app>` | `<app>-pr-<n>` | Tags `celsoft-platform` and `app:<app>`; previews also `pr:<n>` | Cleanup, sweep, destroy |
+| **Hostname** | `hostname` in `platform.jsonc` | `<app>-pr-<n>.<zone>` | A custom domain of the Worker | Deleted with its Worker |
+| **Hyperdrive config** | `<app>` | `<app>-pr-<n>` | Bound by one of the app's Workers, or its origin is in the app's Neon project | Cleanup, sweep, destroy |
+| **Neon branch** | The project's default branch | `pr-<n>` | Inside the app's own Neon project, which the key is scoped to | Cleanup, sweep, destroy |
+| **Backup branch** | `backup-<time>` | None | Inside the app's own Neon project | Deploy keeps the newest 3; `destroy --data` |
+| **Dev branch** | `dev` | None | Inside the app's own Neon project | `destroy --data` |
+| **R2 bucket** | `<app>-files` | `<app>-previews`, shared | A `.celsoft-platform` object naming the app | `destroy`; prod bucket only with `--data` |
+| **Preview files** | None | Folder `pr-<n>/` in the preview bucket | The bucket's proof | Cleanup, sweep, and 14-day expiry |
+| **Mail DNS records** | Below `hostname` | None | Comment `managed by @celsoft/platform` | Destroy |
+| **Resend domain** | `hostname` | None | Name only | Destroy |
+| **Resend key** | `platform <hostname>` | None | Name only | Replaced when a Worker lacks it; destroy |
+| **PR comment** | None | The PR's comment starting `<!-- platform-preview -->` | The marker | Never; updated in place |
+
+## 7. Bootstrap
 
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
@@ -63,7 +85,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Wire**: writes the deploy workflow to the repo.
 3. **Handoff**: after `init`, the next push to the main branch deploys prod, and every PR gets a preview.
 
-## 7. Project Configuration
+## 8. Project Configuration
 
 1. **One file**: `platform.jsonc` at the repo root, validated by a published JSON schema, is everything a project tells the platform.
     1. **App name**: unique within the Cloudflare account; every resource name derives from it.
@@ -80,7 +102,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Preview hostnames**: one per PR, under the zone.
     3. **Wrangler config**: generated at deploy with the real ids and bindings.
 
-## 8. Deployment Methods
+## 9. Deployment Methods
 
 1. **GitHub Actions**: the default; deploys happen without anyone running anything.
     1. **Triggers**: a push to main deploys prod; PR events create, update or delete previews.
@@ -91,7 +113,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Secrets and tokens**: both come from a local `.env.secrets` file.
 3. **Same result**: both methods run the same CLI commands, so a deploy behaves identically either way.
 
-## 9. Lifecycle
+## 10. Lifecycle
 
 1. **Push to main**: deploys prod.
     1. **Backup**: takes a Neon backup branch of prod, with no compute, keeping only the newest 3.
@@ -109,7 +131,7 @@ A published CLI, runtime library and app template that create and reuse each app
 3. **PR closed**: deletes that PR's preview.
     1. **Trigger**: `pull_request_target`, because GitHub can skip a `pull_request` run for a close when the PR's test merge commit is missing; it still runs only for the repo's own PRs.
     2. **Code**: the job checks out the PR's last commit, so the version that made the preview, and its `platform.jsonc`, clean it up.
-    3. **By what exists**: preview Workers carry a `pr:<n>` tag, and cleanup removes whatever it finds for that PR, not only what the config says it made.
+    3. **By what exists**: cleanup removes whatever it finds for that PR, not only what the config says it made; see Resource Identity.
     4. **Worker**: deletes the preview Worker, its hostname with it.
     5. **Connect**: deletes its Hyperdrive config.
     6. **Branch**: deletes its Neon branch.
@@ -121,7 +143,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Fail early**: a failed migration stops the run before deploy, leaving the running version in place.
     4. **Fork PRs**: get no secrets, so no preview.
 
-## 10. Platform Components
+## 11. Platform Components
 
 1. **CLI**: holds all platform logic.
     1. **`init`**: the bootstrap's platform steps; rerunning it rewrites the workflow.
@@ -142,7 +164,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.
 
-## 11. App Code
+## 12. App Code
 
 1. **Rule**: the platform writes the plumbing for anything it sets up; the app writes everything about what it does.
 2. **Conventions over settings**: where a fixed name or path does the job, the platform uses it instead of a setting.
@@ -182,7 +204,7 @@ A published CLI, runtime library and app template that create and reuse each app
 9. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
 10. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
 
-## 12. Upgrades
+## 13. Upgrades
 
 1. **Versioning**: the CLI and runtime library release together under one version.
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
@@ -203,7 +225,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Latest major**: the only version that gets fixes.
 5. **Compatibility date**: set by the project in `platform.jsonc`, never changed by the platform.
 
-## 13. Testing
+## 14. Testing
 
 1. **Dogfood**: the platform repo is itself a project, deploying a demo app with the platform as far as it can.
     1. **Demo app**: a real, usable app (proposed: shared notes) living in the repo with its own `platform.jsonc`, in an account and zone the maintainer owns.
@@ -222,7 +244,7 @@ A published CLI, runtime library and app template that create and reuse each app
 4. **Template test**: scaffolds an app from the template and builds it.
 5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
 
-## 14. Roadmap
+## 15. Roadmap
 
 1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
 2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.
