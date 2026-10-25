@@ -51,14 +51,15 @@ A published CLI, runtime library and app template that create and reuse each app
 
 ## 6. Domains
 
-1. **One zone, many apps**: the project adds its apex domain, such as `example.com`, to Cloudflare once; every app in that account can live in it.
-2. **Prod hostname**: each app picks its own as `hostname` in `platform.jsonc`, either the apex itself or any name below it.
-3. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; that zone is the one it works in.
-4. **Previews**: always one label directly under the zone, `<app>--pr-<n>.<zone>`, whatever the prod hostname is.
-5. **Email**: prod sends from `noreply@<hostname>`, with Resend's records below that hostname, so the zone's own mail records are never touched; previews never send.
-6. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
-7. **Hidden values**: `hostname` may be written as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI, to keep it out of a public repo.
-8. **Examples**:
+1. **Split**: resources are named after the app, and hostnames after the prod hostname; a preview hostname takes its first label from the app name and the rest from the zone.
+2. **One zone, many apps**: the project adds its apex domain, such as `example.com`, to Cloudflare once; every app in that account can live in it.
+3. **Prod hostname**: each app picks its own as `hostname` in `platform.jsonc`, either the apex itself or any name below it.
+4. **Zone**: the platform tries the hostname, then each parent name, until one is a zone in the account; that zone is the one it works in.
+5. **Previews**: always one label directly under the zone, `<app>--pr-<n>.<zone>`, whatever the prod hostname is.
+6. **Email**: prod sends from `noreply@<hostname>`, with Resend's records below that hostname, so the zone's own mail records are never touched; previews never send.
+7. **Attached**: each hostname is a custom domain on its Worker, so Cloudflare makes its DNS record and certificate.
+8. **Hidden values**: `hostname` may be written as `${NAME}`, filled from a gitignored `.env` locally and a GitHub secret in CI, to keep it out of a public repo.
+9. **Examples**:
 
 | Setup | `name` | `hostname` | Zone | Preview for PR 3 | Email from |
 | --- | --- | --- | --- | --- | --- |
