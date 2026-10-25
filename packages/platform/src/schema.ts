@@ -156,14 +156,4 @@ export const teamMember = pgTable(
   (t) => [index("team_member_team_id_idx").on(t.teamId), index("team_member_user_id_idx").on(t.userId)],
 );
 
-// The owner's one-time recovery code, stored hashed; using it deletes the row, and the next
-// sign-in issues a fresh one.
-export const ownerRecovery = pgTable("owner_recovery", {
-  userId: uuid("user_id")
-    .primaryKey()
-    .references(() => user.id, { onDelete: "cascade" }),
-  codeHash: text("code_hash").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
 export const authSchema = { user, session, account, verification, organization, member, invitation, team, teamMember };

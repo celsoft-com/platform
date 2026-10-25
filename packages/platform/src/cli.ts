@@ -3,12 +3,14 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import { CloudflareApi } from "./adapters/cloudflare.js";
 import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { ResendApi } from "./adapters/resend.js";
 import { DrizzleMigrator } from "./adapters/drizzle.js";
+import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
@@ -28,16 +30,18 @@ commands:
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
   sweep            delete previews whose pull request is closed
+  owner reset <email> [--pr <n>]
+                   make that account the owner and set its password, for an owner locked out
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "db generate" } | { name: "sweep" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, data: { type: "boolean", default: false }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, data: { type: "boolean", default: false }, pr: { type: "string" }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -95,6 +99,10 @@ async function main(argv: string[]): Promise<void> {
     await dev(ctx);
     return;
   }
+  if (command.name === "owner reset") {
+    await ownerReset(ctx, app.config, command.email, values.pr === undefined ? undefined : prNumber(values.pr));
+    return;
+  }
   if (command.name === "sweep") {
     await sweep(ctx, await new GhCli(repoRoot(appDir)).openPullRequests());
     return;
@@ -115,7 +123,11 @@ async function main(argv: string[]): Promise<void> {
   }
 }
 
-function parseCommand([name, pr]: string[]): Command {
+function parseCommand([name, pr, extra]: string[]): Command {
+  if (name === "owner" && pr === "reset") {
+    if (!extra?.includes("@")) throw new UsageError(`expected the owner's email\n\n${usage}`);
+    return { name: "owner reset", email: extra };
+  }
   if (name === "db" && pr === "generate") return { name: "db generate" };
   if (name === "upgrade" || name === "sweep") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
@@ -161,6 +173,51 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
       migrator: new DrizzleMigrator(appDir, config),
     },
   };
+}
+
+// Recovery for an owner who lost their password or email: whoever holds the project's tokens can
+// already reach everything, so the new password is typed here, never passed as an argument.
+async function ownerReset(ctx: Context, config: Config, email: string, pr: number | undefined): Promise<void> {
+  if (!config.auth || !config.database) throw new UsageError("this app has no auth");
+  const project = config.database.neonProject;
+  const branch = pr === undefined ? await ctx.ports.neon.defaultBranch(project) : await ctx.ports.neon.findBranch(project, `pr-${pr}`);
+  if (!branch) throw new PreflightError(`pull request ${pr} has no preview database`);
+  const password = await newPassword();
+  if (ctx.run.dryRun) return console.log(`~ would make ${email} the owner on ${branch.name} and set its password`);
+  if (!(await resetOwner(await ctx.ports.neon.connectionUri(project, branch.id), email, password))) {
+    throw new PreflightError(`no account uses ${email} on ${branch.name}; sign up with it first`);
+  }
+  console.log(`+ ${email} is the owner on ${branch.name}, with the new password; its sessions are signed out`);
+}
+
+// Typed twice in a terminal with nothing echoed; read from standard input otherwise.
+async function newPassword(): Promise<string> {
+  let password: string;
+  if (process.stdin.isTTY) {
+    let muted = false;
+    const output = new Writable({ write: (chunk, _encoding, done) => (muted || process.stdout.write(chunk), done()) });
+    const rl = createInterface({ input: process.stdin, output, terminal: true });
+    const ask = async (prompt: string) => {
+      process.stdout.write(prompt);
+      muted = true;
+      const answer = await rl.question("");
+      muted = false;
+      process.stdout.write("\n");
+      return answer;
+    };
+    try {
+      password = await ask("New password: ");
+      if ((await ask("Same password again: ")) !== password) throw new UsageError("the passwords did not match");
+    } finally {
+      rl.close();
+    }
+  } else {
+    let input = "";
+    for await (const chunk of process.stdin) input += chunk;
+    password = input.split(/\r?\n/)[0] ?? "";
+  }
+  if (password.length < 8) throw new UsageError("the password needs at least 8 characters");
+  return password;
 }
 
 // Destroy lists what it will delete, then needs the app's name typed and a final yes, so a

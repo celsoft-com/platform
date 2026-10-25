@@ -3,8 +3,7 @@ import { Pool } from "pg";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
-import { isCrossSiteForm, needsSession, PLATFORM_API, rateLimited, type RateLimiter } from "./guard.js";
-import { issueRecoveryCode, recoverOwner } from "./owner.js";
+import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import { isScreen, renderScreen } from "./screens.js";
 
 export type { Auth } from "./auth.js";
@@ -119,8 +118,8 @@ export function defineApp<Secrets extends object = object, Schema extends Record
   };
 }
 
-// What the platform answers itself for an app with auth: screens, auth routes, owner recovery,
-// and the sign-in check in front of every private /api route.
+// What the platform answers itself for an app with auth: screens, auth routes, and the sign-in
+// check in front of every private /api route.
 async function platformRoute<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
   request: Request,
   url: URL,
@@ -134,19 +133,6 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   if (path.startsWith(`${AUTH_PATH}/organization/`) && env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
   if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
 
-  const db = app.db as NodePgDatabase<Record<string, unknown>>;
-  if (path === `${PLATFORM_API}recovery-code` && request.method === "POST") {
-    const user = await app.requireUser();
-    return json({ code: await issueRecoveryCode(db, user.id) });
-  }
-  if (path === `${PLATFORM_API}recover` && request.method === "POST") {
-    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-    const { email, code, password } = body;
-    if (typeof email !== "string" || typeof code !== "string" || typeof password !== "string" || password.length < 8) {
-      return json({ error: "email, code and a password of at least 8 characters are required" }, 400);
-    }
-    return json({ ok: await recoverOwner(db, app.auth, { email, code, password }) });
-  }
   if (needsSession(path)) await app.requireUser();
   return undefined;
 }

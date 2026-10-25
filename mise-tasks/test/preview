@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="Exercise a deployed demo preview end to end: mise run test:preview -- <preview url>; it signs up a test owner, so never point it at prod"
+#MISE description="Exercise a deployed demo preview end to end: mise run test:preview -- <preview url> <pr>; it signs up a test owner, so never point it at prod"
 set -uo pipefail
-base=${1:?usage: mise run test:preview -- <preview url>}
+base=${1:?usage: mise run test:preview -- <preview url> <pr>}
+pr=${2:?usage: mise run test:preview -- <preview url> <pr>}
 jar=$(mktemp)
 email="owner-$RANDOM@example.com"
 check() { printf '%-44s %s\n' "$1" "$2"; }
@@ -14,10 +15,6 @@ check "cross-site form post" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -
 body='{"name":"Owner","email":"'$email'","password":"first-password-1"}'
 signup=$(curl -s -c "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")
 check "sign up returns a session token" "$(echo "$signup" | grep -c '"token":"')"
-code=$(curl -s -b "$jar" -X POST -H 'content-type: application/json' -H "origin: $base" -d '{}' "$base/api/platform/recovery-code" | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
-check "owner gets a recovery code" "$([ -n "$code" ] && echo yes || echo no)"
-check "second ask gets none" "$(curl -s -b "$jar" -X POST -H 'content-type: application/json' -H "origin: $base" -d '{}' "$base/api/platform/recovery-code")"
-
 attachment=$(mktemp)
 printf 'hello' > "$attachment"
 note=$(curl -s -b "$jar" -H "origin: $base" -F body="first note" -F "file=@$attachment;type=text/plain" "$base/api/notes")
@@ -29,11 +26,9 @@ check "download attachment" "$(curl -s -b "$jar" "$base/api/notes/$id/attachment
 org='{"name":"Team","slug":"team-'$RANDOM'"}'
 check "create organization" "$(curl -s -b "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$org" "$base/api/auth/organization/create" | grep -c '"slug":"team-')"
 
-recover='{"email":"'$email'","code":"'$code'","password":"second-password-2"}'
-again='{"email":"'$email'","code":"'$code'","password":"third-password-3"}'
 signin='{"email":"'$email'","password":"second-password-2"}'
-check "recover with the code" "$(curl -s -H 'content-type: application/json' -H "origin: $base" -d "$recover" "$base/api/platform/recover")"
+check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
 check "old session (cached up to 5 minutes)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
-check "sign in with new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
-check "code works only once" "$(curl -s -H 'content-type: application/json' -H "origin: $base" -d "$again" "$base/api/platform/recover")"
+check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
+check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
 rm -f "$jar" "$attachment"

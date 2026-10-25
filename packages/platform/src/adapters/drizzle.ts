@@ -25,7 +25,7 @@ export class DrizzleMigrator implements Migrator {
   async generate(): Promise<void> {
     const schema = await this.schemaFiles();
     if (schema.length === 0) return;
-    await this.drizzleKit(schema, join(this.appDir, MIGRATIONS_DIR), "inherit");
+    await this.drizzleKit(schema, this.appDir, "inherit");
   }
 
   // Generates into a scratch copy of drizzle/; any new file means the schema changed without one.
@@ -35,14 +35,15 @@ export class DrizzleMigrator implements Migrator {
     const scratch = await mkdtemp(join(tmpdir(), "platform-drizzle-"));
     try {
       const committed = join(this.appDir, MIGRATIONS_DIR);
-      if (await exists(committed)) await cp(committed, scratch, { recursive: true });
-      const before = await sqlFiles(scratch);
+      const copy = join(scratch, MIGRATIONS_DIR);
+      if (await exists(committed)) await cp(committed, copy, { recursive: true });
+      const before = await sqlFiles(copy);
       try {
         await this.drizzleKit(schema, scratch, "pipe");
       } catch {
         return false;
       }
-      return (await sqlFiles(scratch)).length === before.length;
+      return (await sqlFiles(copy)).length === before.length;
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
@@ -77,11 +78,13 @@ export class DrizzleMigrator implements Migrator {
     return [...(this.config.auth ? [PLATFORM_SCHEMA] : []), ...((await exists(app)) ? [app] : [])];
   }
 
-  private async drizzleKit(schema: string[], out: string, stdio: "inherit" | "pipe"): Promise<void> {
-    const configFile = join(this.appDir, ".platform-drizzle.json");
-    await writeFile(configFile, JSON.stringify({ dialect: "postgresql", schema, out, migrations: { prefix: "timestamp" } }, null, 2));
+  // drizzle-kit reads its earlier snapshots back through a path built from `out`, which only
+  // works when `out` is relative, so it runs from the folder that holds drizzle/.
+  private async drizzleKit(schema: string[], root: string, stdio: "inherit" | "pipe"): Promise<void> {
+    const configFile = join(root, ".platform-drizzle.json");
+    await writeFile(configFile, JSON.stringify({ dialect: "postgresql", schema, out: `./${MIGRATIONS_DIR}`, migrations: { prefix: "timestamp" } }, null, 2));
     try {
-      await run(process.execPath, [drizzleKitBin(), "generate", "--config", configFile], this.appDir, stdio);
+      await run(process.execPath, [drizzleKitBin(), "generate", "--config", configFile], root, stdio);
     } finally {
       await rm(configFile, { force: true });
     }

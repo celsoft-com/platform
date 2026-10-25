@@ -1,7 +1,7 @@
 // Sign-in, sign-up and password screens every app with auth gets. Class names are part of the
 // public interface: an app restyles them with its own stylesheet, loaded after this one.
 
-export const SCREEN_PATHS = ["/login", "/signup", "/forgot", "/reset", "/recover"] as const;
+export const SCREEN_PATHS = ["/login", "/signup", "/forgot", "/reset"] as const;
 export type ScreenPath = (typeof SCREEN_PATHS)[number];
 
 interface Field {
@@ -19,7 +19,8 @@ interface Screen {
   links: [string, string][];
 }
 
-const email: Field = { name: "email", label: "Email", type: "email", autocomplete: "email" };
+// Password managers pair a saved password with the field marked "username", even when it holds an email.
+const email: Field = { name: "email", label: "Email", type: "email", autocomplete: "username" };
 const password = (autocomplete: string, label = "Password"): Field => ({ name: "password", label, type: "password", autocomplete });
 
 const SCREENS: Record<ScreenPath, Screen> = {
@@ -48,13 +49,6 @@ const SCREENS: Record<ScreenPath, Screen> = {
     button: "Change password",
     links: [["/login", "Back to sign in"]],
   },
-  "/recover": {
-    title: "Recover the owner account",
-    intro: "Use the recovery code you saved when you first signed in. It works once.",
-    fields: [email, { name: "code", label: "Recovery code", type: "text", autocomplete: "one-time-code" }, password("new-password", "New password")],
-    button: "Reset owner password",
-    links: [["/login", "Back to sign in"]],
-  },
 };
 
 export function isScreen(pathname: string): pathname is ScreenPath {
@@ -66,7 +60,7 @@ export function renderScreen(path: ScreenPath, appName: string, stylesheet: stri
   const fields = screen.fields
     .map(
       (f) => `<label class="platform-field"><span class="platform-label">${f.label}</span>` +
-        `<input class="platform-input" name="${f.name}" type="${f.type}" autocomplete="${f.autocomplete}" required${f.type === "password" ? ' minlength="8"' : ""}></label>`,
+        `<input class="platform-input" id="${f.name}" name="${f.name}" type="${f.type}" autocomplete="${f.autocomplete}" required${f.type === "password" ? ' minlength="8"' : ""}></label>`,
     )
     .join("");
   const links = screen.links.map(([href, text]) => `<a href="${href}" data-carry>${text}</a>`).join("");
@@ -79,7 +73,7 @@ export function renderScreen(path: ScreenPath, appName: string, stylesheet: stri
 <p class="platform-app">${escape(appName)}</p>
 <h1 class="platform-title">${screen.title}</h1>
 ${screen.intro ? `<p class="platform-intro">${screen.intro}</p>` : ""}
-<form class="platform-form" novalidate>${fields}
+<form class="platform-form" method="post" action="${path}" novalidate>${path === "/reset" ? '<input id="email" name="email" type="email" autocomplete="username" hidden>' : ""}${fields}
 <p class="platform-error" role="alert" hidden></p>
 <button class="platform-button" type="submit">${screen.button}</button></form>
 <div class="platform-message" role="status" hidden></div>
@@ -98,6 +92,7 @@ const STYLE = `
 :root{--platform-bg:#f4f6f8;--platform-card:#fff;--platform-fg:#1b2430;--platform-muted:#5d6a78;--platform-line:#d5dce3;--platform-accent:#2554c7;--platform-on-accent:#fff;--platform-error:#b42318;color-scheme:light dark}
 @media (prefers-color-scheme:dark){:root{--platform-bg:#11161c;--platform-card:#19212a;--platform-fg:#e6ebf0;--platform-muted:#9aa7b4;--platform-line:#2c3742;--platform-accent:#7aa2ff;--platform-on-accent:#0b1220;--platform-error:#ff8a80}}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body.platform-screen{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:var(--platform-bg);color:var(--platform-fg);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 .platform-card{width:100%;max-width:380px;background:var(--platform-card);border:1px solid var(--platform-line);border-radius:12px;padding:28px 24px;display:flex;flex-direction:column;gap:16px}
 .platform-app{margin:0;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--platform-muted)}
@@ -143,12 +138,7 @@ function say(...parts) {
 async function finish() {
   const invitation = params.get("invitation");
   if (invitation) await post("/api/auth/organization/accept-invitation", { invitationId: invitation }).catch(() => {});
-  const { code } = await post("/api/platform/recovery-code", {}).catch(() => ({}));
-  if (!code) return location.assign(next);
-  const box = Object.assign(document.createElement("p"), { className: "platform-code", textContent: code });
-  const go = Object.assign(document.createElement("button"), { className: "platform-button", type: "button", textContent: "I saved it, continue" });
-  go.onclick = () => location.assign(next);
-  say("You're the owner of this app. Save this recovery code somewhere safe: it resets your password if you ever lose access to your email, and it is shown only once.", box, go);
+  location.assign(next);
 }
 
 const actions = {
@@ -158,13 +148,8 @@ const actions = {
     if (data.token) return finish();
     say("Check your email for a link to confirm your address. It signs you in.");
   },
-  forgot: async v => { await post("/api/auth/request-password-reset", { email: v.email, redirectTo: "/reset" }); say("If that address has an account, a reset link is on its way."); },
+  forgot: async v => { await post("/api/auth/request-password-reset", { email: v.email, redirectTo: "/reset?email=" + encodeURIComponent(v.email) }); say("If that address has an account, a reset link is on its way."); },
   reset: async v => { await post("/api/auth/reset-password", { newPassword: v.password, token: params.get("token") }); say("Your password is changed. Sign in with it now."); },
-  recover: async v => {
-    const { ok } = await post("/api/platform/recover", { email: v.email, code: v.code, password: v.password });
-    if (!ok) throw new Error("That email and recovery code don't match.");
-    say("The owner password is changed and every session is signed out. Sign in with the new password; you'll get a new recovery code.");
-  },
 };
 
 form.addEventListener("submit", async e => {
@@ -178,6 +163,8 @@ form.addEventListener("submit", async e => {
   finally { button.disabled = false; }
 });
 
+// The reset link carries the email, so a password manager knows which saved login to update.
+if (page === "reset") document.getElementById("email").value = params.get("email") || "";
 if (page === "reset" && (params.get("error") || !params.get("token"))) say("That reset link has expired or was already used. Ask for a new one from the sign-in page.");
 if (page === "login") fetch("/api/auth/get-session", { credentials: "same-origin" }).then(r => r.json()).then(s => s && s.session && finish()).catch(() => {});
 `;
