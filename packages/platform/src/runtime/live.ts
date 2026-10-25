@@ -48,12 +48,14 @@ export const clientScript = () =>
 
 const roomStub = (namespace: LiveNamespace, room: string) => namespace.get(namespace.idFromName(room));
 
-export function createLive(namespace: LiveNamespace | undefined, enabled: boolean): Live {
+export function createLive(namespace: LiveNamespace | undefined, enabled: boolean, check: MessageCheck = anyMessage): Live {
   return {
     async publish(room, message) {
       if (!enabled || !namespace) throw new Error("this app has no live rooms; set `live: true` in platform.jsonc");
       if (!ROOM_NAME.test(room)) throw new Error(`invalid room name ${room}`);
-      const body = JSON.stringify(message);
+      const checked = check(message);
+      if (!checked.ok) throw new Error(`live message for ${room} does not match the app's message schema: ${checked.error}`);
+      const body = JSON.stringify(checked.value);
       if (body.length > MAX_MESSAGE) throw new Error(`live messages are limited to ${MAX_MESSAGE} bytes`);
       const response = await roomStub(namespace, room).fetch(new Request("https://room/publish", { method: "POST", headers: { "x-room": room }, body }));
       if (!response.ok) throw new Error(`publishing to ${room} failed: ${response.status}`);
@@ -100,7 +102,12 @@ export interface LiveRoomClass {
   new (state: unknown, env: unknown): { fetch(request: Request): Promise<Response> };
 }
 
-export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined): LiveRoomClass {
+// Checks a message against the app's schema, when it gave one; the parsed value, or why not.
+export type MessageCheck = (message: unknown) => { ok: true; value: unknown } | { ok: false; error: string };
+
+export const anyMessage: MessageCheck = (value) => ({ ok: true, value });
+
+export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined, check: MessageCheck = anyMessage): LiveRoomClass {
   return class LiveRoom {
     readonly state: RoomState;
 
@@ -141,6 +148,9 @@ export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined): Li
       } catch {
         return socket.send(JSON.stringify({ type: "error", error: "messages are JSON" }));
       }
+      const checked = check(data ?? null);
+      if (!checked.ok) return socket.send(JSON.stringify({ type: "error", error: checked.error }));
+      data = checked.value;
       const seq = this.deliver(JSON.stringify(data ?? null), attachment.user, socket);
       socket.send(JSON.stringify({ type: "ack", seq }));
       const hook = onMessage(this.env);

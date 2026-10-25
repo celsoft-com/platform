@@ -14,6 +14,7 @@ import { DrizzleMigrator } from "./adapters/drizzle.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
+import { generate } from "./generate.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
 import { cleanup, deploy, destroy, dev, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
@@ -26,6 +27,7 @@ commands:
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
+  generate         write the .platform/ files the app's code imports, such as the browser client
   upgrade          rewrite an older platform.jsonc to the current shape
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
@@ -38,7 +40,7 @@ commands:
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "previews" } | { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -91,6 +93,12 @@ async function main(argv: string[]): Promise<void> {
     await new DrizzleMigrator(appDir, app.config).generate();
     return;
   }
+  if (command.name === "generate") {
+    for (const file of await generate(appDir, app.config)) console.log(`✓ ${file}`);
+    return;
+  }
+  // The app's code imports these, so they are fresh for every run that builds or serves it.
+  if (command.name === "dev" || command.name === "deploy" || command.name === "preview") await generate(appDir, app.config);
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
   const ctx = await context(appDir, app.config, dryRun);
   if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
@@ -142,7 +150,7 @@ function parseCommand([name, pr, extra]: string[]): Command {
   }
   if (name === "db" && pr === "generate") return { name: "db generate" };
   if (name === "apps" && pr === "move") return { name: "apps move" };
-  if (name === "upgrade" || name === "sweep" || name === "previews") return { name };
+  if (name === "upgrade" || name === "sweep" || name === "previews" || name === "generate") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
   throw new UsageError(`unknown command ${name}\n\n${usage}`);

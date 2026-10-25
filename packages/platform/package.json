@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -19,7 +19,8 @@
   "exports": {
     ".": "./dist/runtime/index.js",
     "./schema": "./dist/schema.js",
-    "./live": "./dist/runtime/live-client.js"
+    "./live": "./dist/runtime/live-client.js",
+    "./client": "./dist/runtime/client.js"
   },
   "files": [
     "dist",
@@ -30,9 +31,16 @@
   },
   "dependencies": {
     "@neondatabase/api-client": "^2.7.3",
+    "@orpc/client": "1.16.1",
+    "@orpc/contract": "1.16.1",
+    "@orpc/openapi": "1.16.1",
+    "@orpc/openapi-client": "1.16.1",
+    "@orpc/server": "1.16.1",
+    "@orpc/zod": "1.16.1",
     "better-auth": "^1.7.12",
     "cloudflare": "^7.3.0",
     "drizzle-kit": "^0",
+    "esbuild": "^0.28.2",
     "jsonc-parser": "^3.3.1",
     "pg": "^8.23.1",
     "wrangler": "^4.152.0",
@@ -41,8 +49,8 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261023.1",
     "@types/pg": "^8.23.1",
-    "typescript": "7.0.2",
-    "drizzle-orm": "^0.45.4"
+    "drizzle-orm": "^0.45.4",
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "drizzle-orm": "^0"

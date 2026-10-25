@@ -117,6 +117,17 @@ describe("live room", () => {
     expect(heard).toEqual([{ message: { cursor: 4 }, from: ann }]);
   });
 
+  it("refuses a browser message that does not match the app's schema", async () => {
+    const Room = liveRoom(() => undefined, (m) => (typeof m === "object" && m !== null && "type" in m ? { ok: true, value: m } : { ok: false, error: "type: Required" }));
+    const r = new Room(state, {}) as unknown as typeof room;
+    await r.fetch(joinRequest(ann, true));
+    const a = state.sockets.at(-1)!;
+    await r.webSocketMessage(a, JSON.stringify({ data: { nope: 1 } }));
+    expect(a.of("error")).toEqual([{ type: "error", error: "type: Required" }]);
+    await r.webSocketMessage(a, JSON.stringify({ data: { type: "typing" } }));
+    expect(a.of("ack")).toHaveLength(1);
+  });
+
   it("refuses messages over the size limit", async () => {
     const a = await join(ann, true);
     await room.webSocketMessage(a, JSON.stringify({ data: "x".repeat(70_000) }));
@@ -179,6 +190,6 @@ describe("live routes", () => {
 
 describe("entryModule", () => {
   it("exports the app's handler and its room class", () => {
-    expect(entryModule("src/worker.ts")).toContain('import app from "./src/worker.ts";\nexport default app;\nexport const LiveRoom = app.LiveRoom;');
+    expect(entryModule("src/worker.ts")).toContain('import app from "../src/worker.ts";\nexport default app;\nexport const LiveRoom = app.LiveRoom;');
   });
 });
