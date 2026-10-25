@@ -44,9 +44,10 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
 2. **Platform**: owns only what it creates.
     1. **Named resources**: everything it creates, found by names derived from the app, and nothing else.
-    2. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
-    3. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
-    4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
+    2. **Proof of ownership**: a matching name is never enough to change or delete a Cloudflare resource, since Cloudflare has no project scope inside an account; Workers carry the tags `celsoft-platform` and `app:<name>`, R2 buckets hold a `.celsoft-platform` file naming the app, a Hyperdrive config counts only when it points at the app's own Neon project, and DNS records carry the platform's comment. A resource with the right name but no proof stops the run untouched.
+    3. **Hostnames**: attaches app and preview hostnames in the zone, tagging every record it creates.
+    4. **Lifecycle**: creates, updates and deletes its own resources, previews included, and never touches untagged records.
+    5. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
 3. **Line in app code**: see App Code.
 
 ## 6. Bootstrap
@@ -73,7 +74,6 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Auth**: on or off, and whether organizations are on; either can change at any time.
     7. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
     8. **Compatibility date**: the Workers runtime date the app runs against.
-    9. **Config version**: the platform major version the file's shape matches.
 2. **Variables**: any value may be `${NAME}`, filled from a gitignored `.env` locally and from GitHub secrets in CI, so values the project would rather not publish stay out of the repo and its logs; `init` copies them to GitHub as secrets, because GitHub prints Actions variables in public logs.
 3. **Derived**: everything else comes from that file and the environment, never written by the project.
     1. **Resource names**: Worker, Neon branch and Hyperdrive config, for prod and each PR.
@@ -127,9 +127,9 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
     7. **`db generate`**: writes new migrations from the platform's tables and the app's schema.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
-    9. **`upgrade`**: rewrites `platform.jsonc` to the next major's shape.
+    9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape.
     10. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
-    11. **Alignment checks**: every run stops with a fix if `platform.jsonc` is an older major, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
+    11. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
     12. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
@@ -187,7 +187,7 @@ A published CLI, runtime library and app template that create and reuse each app
 3. **Detection**: the platform acts on what exists, not on version numbers.
     1. **Converge**: every run compares the cloud to what the version wants and fixes the difference.
     2. **Structural changes**: a resource module also finds a resource's old form and converts it.
-    3. **Config shape**: `platform.jsonc` records its major version; the CLI stops if it is older, and `upgrade` rewrites it one major at a time.
+    3. **Config shape**: the CLI recognizes an older `platform.jsonc` by its fields, with no version number for anyone to write; other commands stop and point to `upgrade`, which rewrites it for the project to review and commit.
 4. **Release rules**: what each kind of release may do.
     1. **Minor and patch**: never require project changes beyond committing the migration `db generate` writes when the platform's tables change.
     2. **Compatible within a major**: resource changes only add, so mixed versions and rollbacks keep working.
