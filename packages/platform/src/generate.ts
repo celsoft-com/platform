@@ -32,7 +32,38 @@ export async function generate(appDir: string): Promise<string[]> {
   ].join("\n");
   const file = generatedPath(appDir, "client.ts");
   await writeFile(file, client);
-  return [relative(appDir, file)];
+  return [relative(appDir, file), ...((await writeAgentsBlock(appDir)) ? ["AGENTS.md"] : [])];
+}
+
+const BLOCK_START = "<!-- @celsoft/platform:start -->";
+const BLOCK_END = "<!-- @celsoft/platform:end -->";
+
+// Points the app's agents at the skills the installed package ships, read from node_modules, so
+// they always match the installed version. Only this block of AGENTS.md is the platform's.
+export const AGENTS_BLOCK = `${BLOCK_START}
+## @celsoft/platform
+
+This app is built on @celsoft/platform. Before changing it, read the skills the installed version
+ships, starting with \`node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md\`; every
+skill is a \`SKILL.md\` under \`node_modules/@celsoft/platform/skills/\`. They match the installed
+version, so read them again after an upgrade. This block is rewritten on install; edit outside it.
+${BLOCK_END}`;
+
+// True when AGENTS.md changed.
+export async function writeAgentsBlock(appDir: string): Promise<boolean> {
+  const file = join(appDir, "AGENTS.md");
+  const text = await readFile(file, "utf8").catch(() => "");
+  const start = text.indexOf(BLOCK_START);
+  const end = text.indexOf(BLOCK_END);
+  const next =
+    start >= 0 && end > start
+      ? text.slice(0, start) + AGENTS_BLOCK + text.slice(end + BLOCK_END.length)
+      : text
+        ? `${text.replace(/\n*$/, "")}\n\n${AGENTS_BLOCK}\n`
+        : `${AGENTS_BLOCK}\n`;
+  if (next === text) return false;
+  await writeFile(file, next);
+  return true;
 }
 
 // Bundles the Worker for Node with its packages left as imports, then reads the endpoints its

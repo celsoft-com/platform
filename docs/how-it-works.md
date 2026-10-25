@@ -22,6 +22,7 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Written by you** | `platform.jsonc`, `src/`, `public/`, `package.json` | Yes | You |
 | **Generated, committed** | `drizzle/`, `.github/workflows/platform.yml` | Yes | Nobody; regenerate instead |
 | **Generated, ignored** | `.platform/`: the browser client, and the deploy's temporary files | No | Nobody; written on install, `dev` and deploy |
+| **Generated block** | The `@celsoft/platform` block in `AGENTS.md`, pointing agents at the package's skills | Yes | You, outside the block; the platform rewrites the block on install |
 | **From the package** | Runtime, auth tables, sign-in screens, live client | No, in `node_modules` | Nobody; upgrade the package |
 
 ## How the pieces fit

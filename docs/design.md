@@ -207,7 +207,11 @@ A published CLI, runtime library and app template that create and reuse each app
     14. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
-4. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
+4. **Agent skills**: the package ships `skills/`, each a `SKILL.md`, describing how to work on an app at that version.
+    1. **Version-matched**: they live in `node_modules/@celsoft/platform/skills/`, so upgrading the package upgrades them; nothing is copied into the app.
+    2. **Found through AGENTS.md**: `generate`, which runs on install, writes a marked block into the app's `AGENTS.md` pointing agents at them, and rewrites only that block.
+    3. **Kept current**: every change to what apps write or run updates the skills in the same pull request.
+5. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.
 
