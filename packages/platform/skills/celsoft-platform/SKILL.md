@@ -94,7 +94,7 @@ With `"access": true`, the platform keeps who may do what to the app's items:
 ## Features in `platform.jsonc`
 
 1. **`database`:** a Neon project id; prod, each preview and `dev` get their own branch.
-2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending.
+2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
 3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds teams. Needs `database` and `email`.
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.

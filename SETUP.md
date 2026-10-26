@@ -72,7 +72,7 @@ The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each
 
 ## 7. Resend API key
 
-Only if `platform.jsonc` turns on `email` or `auth`. Apps send from their own hostname, so your existing email setup is never touched.
+Only if `platform.jsonc` turns on `email` or `auth`. Apps send from their own hostname, so your existing email setup is never touched. Previews only log email, except to the addresses you list in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so your testers can confirm accounts there.
 
 1. **Open:** [API Keys](https://resend.com/api-keys), then **Create API Key**.
 2. **Permission:** **Full access**, since the platform adds each app's hostname as a sending domain.

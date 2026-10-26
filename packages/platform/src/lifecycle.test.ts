@@ -218,6 +218,27 @@ describe("auth and email", () => {
     await expect(deploy(authCtx(), { kind: "prod" })).rejects.toThrow(/did not create/);
   });
 
+  it("lets a preview email only the listed addresses, from prod's domain, with its own key that cleanup deletes", async () => {
+    const listed: Config = { ...authConfig, previews: { sendEmailTo: ["*@team.example"] } };
+    const c = (): Context => ({ ...ctx(), config: listed });
+    await deploy(c(), { kind: "preview", pr: 7 });
+    expect(ports.wrangler.deploys[0]!.secrets.EMAIL_API_KEY).toBeUndefined();
+    expect(log.join("\n")).toMatch(/email nobody until prod has deployed/);
+
+    await deploy(c(), { kind: "prod" });
+    await deploy(c(), { kind: "preview", pr: 7 });
+    const preview = ports.wrangler.deploys.at(-1)!;
+    expect(preview.secrets.EMAIL_API_KEY).toMatch(/^re_/);
+    expect(preview.config.vars).toMatchObject({ EMAIL_MODE: "capture", EMAIL_FROM: "noreply@demo.example.com", EMAIL_SEND_TO: "*@team.example" });
+    expect(ports.mail.keys.map((k) => k.name)).toEqual(["platform demo.example.com", "platform pr-7.demo.example.com"]);
+    expect(ports.mail.keys[1]!.domainId).toBe(ports.mail.domains[0]!.id);
+
+    await deploy(c(), { kind: "preview", pr: 7 });
+    expect(ports.mail.keys).toHaveLength(2);
+    await cleanup(c(), 7);
+    expect(ports.mail.keys.map((k) => k.name)).toEqual(["platform demo.example.com"]);
+  });
+
   it("captures email in previews and never touches Resend", async () => {
     await deploy(authCtx(), { kind: "preview", pr: 7 });
     expect(ports.mail.domains).toEqual([]);

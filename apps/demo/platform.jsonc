@@ -13,5 +13,6 @@
   "files": true,
   "live": true,
   "mcp": true,
-  "access": true
+  "access": true,
+  "previews": { "sendEmailTo": ["*@celsoft.com"] }
 }

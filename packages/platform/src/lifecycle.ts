@@ -100,6 +100,21 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
       if (key) generated.EMAIL_API_KEY = key;
     }
   }
+  // A preview emails only the addresses platform.jsonc lists, from prod's verified domain, with a
+  // key of its own that cleanup deletes.
+  const allowed = config.email && target.kind === "preview" ? config.previews.sendEmailTo : [];
+  let previewSending = false;
+  if (allowed.length > 0) {
+    const domain = await ports.mail.findDomain(config.hostname);
+    if (!domain) run.note(`! previews email nobody until prod has deployed and created the Resend sending domain ${config.hostname}`);
+    else {
+      previewSending = true;
+      if (!existingSecrets.includes("EMAIL_API_KEY")) {
+        const key = await sendKey(ctx, hostname, domain.id);
+        if (key) generated.EMAIL_API_KEY = key;
+      }
+    }
+  }
 
   if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
@@ -107,7 +122,8 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
   const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
   if (config.email) {
-    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${hostname}` });
+    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
+    if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
   }
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
@@ -324,6 +340,10 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
 
   if (await ports.cloudflare.findBucket(n.bucket)) {
     await run.mutate(`delete files under ${n.filesPrefix} in ${n.bucket}`, () => ports.cloudflare.deleteObjects(n.bucket, n.filesPrefix), 0);
+  }
+  if (ctx.providers?.mail ?? true) {
+    const key = await ports.mail.findApiKey(sendKeyName(previewHostname(pr, config.hostname)));
+    if (key) await run.mutate(`delete Resend sending key for preview ${pr}`, () => ports.mail.deleteApiKey(key), undefined);
   }
   await cleanupLegacyPreview(ctx, pr);
 }

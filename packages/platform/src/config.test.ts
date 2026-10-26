@@ -25,6 +25,16 @@ describe("parseConfig", () => {
     expect(() => withAccess(`"access": true,`)).toThrow(/access needs auth/);
   });
 
+  it("lists the addresses previews may email, only with email on", () => {
+    const withPreviews = (fields: string) => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", ${fields}`)).previews;
+    expect(parseConfig(valid).previews).toEqual({ sendEmailTo: [] });
+    expect(withPreviews(`"email": true, "previews": { "sendEmailTo": ["*@team.example", "sam@example.com"] },`)).toEqual({ sendEmailTo: ["*@team.example", "sam@example.com"] });
+    expect(() => withPreviews(`"previews": { "sendEmailTo": ["*@team.example"] },`)).toThrow(/needs email/);
+    for (const bad of ["*", "Sam@example.com", "*.example.com", "@example.com", "a@b"]) {
+      expect(() => withPreviews(`"email": true, "previews": { "sendEmailTo": ["${bad}"] },`), bad).toThrow(/sendEmailTo/);
+    }
+  });
+
   it("rejects a Neon branch id with a hint", () => {
     expect(() => parseConfig(valid.replace("quiet-meadow-12345678", "br-quiet-meadow-abcdefgh"))).toThrow(/not a branch id/);
   });

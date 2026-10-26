@@ -22,6 +22,24 @@ describe("createEmail", () => {
     log.mockRestore();
   });
 
+  it("in capture mode, really sends only to the listed addresses and domains", async () => {
+    const fetcher = vi.fn(async () => new Response("{}"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const email = createEmail({ EMAIL_MODE: "capture", EMAIL_FROM: "noreply@app.example.com", EMAIL_API_KEY: "k", EMAIL_SEND_TO: "*@team.example,sam@example.com" }, fetcher);
+    for (const to of ["ada@team.example", "Sam@Example.com", "x@other.example", "ada@team.example.evil", "ada@notteam.example", "sam@example.com.evil"]) await email.send({ ...message, to });
+    expect(fetcher.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).to)).toEqual(["ada@team.example", "Sam@Example.com"]);
+    expect(log).toHaveBeenCalledTimes(4);
+    log.mockRestore();
+  });
+
+  it("captures everything without a key, whatever is listed", async () => {
+    const fetcher = vi.fn();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    await createEmail({ EMAIL_MODE: "capture", EMAIL_SEND_TO: "*@team.example" }, fetcher).send({ ...message, to: "ada@team.example" });
+    expect(fetcher).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
   it("explains a missing email setup", async () => {
     await expect(createEmail({}).send(message)).rejects.toThrow(/platform\.jsonc/);
   });
