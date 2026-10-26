@@ -36,6 +36,8 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, step by step, in the app
 - **Design:** design and change code following the `codebase-design` skill. If it is not
   available, install it with `npx -y skills add mattpocock/skills --skill codebase-design -g -y`.
 - **Commits:** auto-commit and push every change, so any step can be rolled back
+- **Pull requests:** after opening one, give the user the PR link and its preview link, and
+  merge only when the user says to; the user tests the preview first.
 - **Tools:** pin every tool version in this project's `mise.toml` and run tools through
   mise, following the `seanodell-mise-usage` skill. Install nothing globally (`brew`,
   `npm -g`, `pip --user`, `uv tool`, `go install`) unless mise cannot provide the tool, and
