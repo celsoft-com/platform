@@ -18,6 +18,9 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, step by step, in the app
   changes.
 - **Dogfood:** this repo is set up and run exactly as SETUP.md tells adopters, with
   `apps/demo` as the app; never build repo-only tooling that stands in for a user command.
+- **No workarounds in the demo:** the demo exists to prove the platform, so it uses every
+  feature the platform's own way; when it cannot, stop and fix or track the platform gap,
+  never hand-write around it in the demo.
 - **Secrets:** `platform init` (here `mise run platform -- init`) writes a blank entry in
   `.env.secrets` for each token and reports which are empty. Never read `.env.secrets`.
 
