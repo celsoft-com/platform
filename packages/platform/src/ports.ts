@@ -113,10 +113,11 @@ export interface Wrangler {
 }
 
 export interface Migrator {
-  generate(): Promise<void>;
+  generate(custom?: string): Promise<void>;
   upToDate(): Promise<boolean>;
   migrate(databaseUrl: string): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
+  forgetSigningKeys(databaseUrl: string): Promise<void>;
 }
 
 export interface GitHub {

@@ -22,10 +22,11 @@ export class DrizzleMigrator implements Migrator {
     private readonly config: Config,
   ) {}
 
-  async generate(): Promise<void> {
+  // With `custom`, an empty migration of that name for the app's own SQL, such as moving data.
+  async generate(custom?: string): Promise<void> {
     const schema = await this.schemaFiles();
     if (schema.length === 0) return;
-    await this.drizzleKit(schema, this.appDir, "inherit");
+    await this.drizzleKit(schema, this.appDir, "inherit", custom ? ["--custom", "--name", custom] : []);
   }
 
   // Generates into a scratch copy of drizzle/; any new file means the schema changed without one.
@@ -73,6 +74,16 @@ export class DrizzleMigrator implements Migrator {
     }
   }
 
+  async forgetSigningKeys(databaseUrl: string): Promise<void> {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query("delete from jwks");
+    } finally {
+      await client.end();
+    }
+  }
+
   private async schemaFiles(): Promise<string[]> {
     const app = join(this.appDir, APP_SCHEMA);
     return [...(this.config.auth ? [PLATFORM_SCHEMA] : []), ...((await exists(app)) ? [app] : [])];
@@ -80,11 +91,11 @@ export class DrizzleMigrator implements Migrator {
 
   // drizzle-kit reads its earlier snapshots back through a path built from `out`, which only
   // works when `out` is relative, so it runs from the folder that holds drizzle/.
-  private async drizzleKit(schema: string[], root: string, stdio: "inherit" | "pipe"): Promise<void> {
+  private async drizzleKit(schema: string[], root: string, stdio: "inherit" | "pipe", extra: string[] = []): Promise<void> {
     const configFile = join(root, ".platform-drizzle.json");
     await writeFile(configFile, JSON.stringify({ dialect: "postgresql", schema, out: `./${MIGRATIONS_DIR}`, migrations: { prefix: "timestamp" } }, null, 2));
     try {
-      await run(process.execPath, [drizzleKitBin(), "generate", "--config", configFile], root, stdio);
+      await run(process.execPath, [drizzleKitBin(), "generate", "--config", configFile, ...extra], root, stdio);
     } finally {
       await rm(configFile, { force: true });
     }

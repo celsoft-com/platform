@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { Pool } from "pg";
 import { freshDatabase, world } from "../../test/database.js";
-import { MAX_DEPTH, type Access, type Level } from "./access.js";
+import { createAccess, MAX_DEPTH, shareMessage, type Access, type Level, type ShareNotice } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
 import { apiHandler, endpoint } from "./endpoints.js";
 import { defineApp } from "./index.js";
@@ -425,6 +425,69 @@ describe("Grants", () => {
     expect((await w.as(friend).sharedWithMe("page")).sort()).toEqual([a, b].sort());
     expect(await w.as(friend).sharedWithMe("folder")).toEqual([]);
     expect(await w.as(null).sharedWithMe("page")).toEqual([]);
+  });
+});
+
+describe("Sharing email", () => {
+  const sending = (userId: string) => {
+    const sent: ShareNotice[] = [];
+    return { sent, as: createAccess(db, async () => ({ userId, link: null }), async (notice) => void sent.push(notice)) };
+  };
+
+  it("emails a person given a new grant, with the app's path", async () => {
+    const { owner, page } = await personal();
+    await w.query(`update "user" set name = 'Ada' where id = $1`, [owner]);
+    const friend = await w.user({ email: "friend@example.com" });
+    const { sent, as } = sending(owner);
+    await as.share("page", page, { user: friend }, "write", { email: { path: `/pages/${page}` } });
+    expect(sent).toEqual([{ to: "friend@example.com", sharedBy: "Ada", level: "write", path: `/pages/${page}`, subject: undefined, text: undefined }]);
+  });
+
+  it("emails an address nobody has signed up with yet", async () => {
+    const { owner, page } = await personal();
+    const { sent, as } = sending(owner);
+    await as.share("page", page, { email: "New@Example.com" }, "read");
+    expect(sent.map((n) => [n.to, n.path])).toEqual([["new@example.com", "/"]]);
+  });
+
+  it("sends nothing for a team or an organization, a changed level, or when turned off", async () => {
+    const c = await company();
+    const team = await w.team(c.org);
+    const { sent, as } = sending(c.owner);
+    await as.share("page", c.page, { team }, "write");
+    await as.share("page", c.page, { organization: c.org }, "read");
+    await as.share("page", c.page, { user: c.member }, "read", { email: false });
+    await as.share("page", c.page, { user: c.member }, "write");
+    expect(sent).toEqual([]);
+  });
+
+  it("sends nothing when sharing is refused", async () => {
+    const { page } = await personal();
+    const { sent, as } = sending(await w.user());
+    await refused(as.share("page", page, { email: "x@example.com" }, "read"));
+    expect(sent).toEqual([]);
+  });
+
+  it("refuses a path that could lead off the app", async () => {
+    const { owner, page } = await personal();
+    const { sent, as } = sending(owner);
+    for (const path of ["https://evil.example", "//evil.example/x", "/\\evil.example", "pages/7"]) await appError(as.share("page", page, { email: "x@example.com" }, "read", { email: { path } }));
+    expect(sent).toEqual([]);
+    expect(await as.grants("page", page)).toEqual([]);
+  });
+
+  it("words the email from the notice, or as the app asks, always linking into the app", () => {
+    const notice = { to: "a@example.com", sharedBy: "Ada", level: "write" as Level, path: "/pages/7" };
+    expect(shareMessage(notice, "Notes", "https://notes.example")).toEqual({
+      to: "a@example.com",
+      subject: "Ada shared something with you on Notes",
+      text: "Ada gave you write access on Notes.\n\nhttps://notes.example/pages/7\n",
+    });
+    expect(shareMessage({ ...notice, sharedBy: null, subject: "A page for you", text: "Have a look." }, "Notes", "https://notes.example")).toEqual({
+      to: "a@example.com",
+      subject: "A page for you",
+      text: "Have a look.\n\nhttps://notes.example/pages/7\n",
+    });
   });
 });
 

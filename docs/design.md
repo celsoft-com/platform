@@ -167,7 +167,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Secrets**: loads `production` Environment secrets onto the Worker.
     5. **Deploy**: deploys the Worker and attaches the prod hostname.
 2. **PR opened or pushed**: creates or updates that PR's preview.
-    1. **Branch**: ensures a Neon branch for the PR, copied from prod.
+    1. **Branch**: ensures a Neon branch for the PR, copied from prod; a new copy drops prod's auth signing keys, which only prod's secret can decrypt, and Better Auth makes the preview its own. A newly generated auth secret does the same anywhere, and so does a new `dev` branch.
     2. **Migrate**: runs migrations against that branch.
     3. **Connect**: ensures a Hyperdrive config for that branch.
     4. **Secrets**: loads `preview` Environment secrets onto the preview Worker.
@@ -197,7 +197,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **`preview`**: creates or updates a PR's preview.
     5. **`cleanup`**: deletes a PR's preview.
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
-    7. **`db generate`**: writes new migrations from the platform's tables and the app's schema.
+    7. **`db generate`**: writes new migrations from the platform's tables and the app's schema; `--custom <name>` writes an empty one the app fills with its own SQL, such as moving data.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
     9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape.
     10. **`previews`**: lists every preview that exists, with its pull request's state and the pieces found; changes nothing.
@@ -261,8 +261,8 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Levels**: one fixed ladder, each level including the ones below it: `read`, `create` (add things inside, such as pages in a folder), `write`, `delete`, `manage` (share and revoke). Apps declare no permissions; an unusual action is mapped onto a level or checked by the app.
     5. **From ownership**: a user has `manage` on what they own; in an organization, `member` has `read`, `admin` has `delete` and `owner` has `manage` on everything placed under it; anything more for members comes from grants, such as sharing a team space with its team at `write`.
     6. **Grants**: `app.access.share(kind, id, to, level)` gives a user, a team, an organization, or an email address a level on one item; a grant to an email waits until someone signs up and confirms that address. `grants`, `revoke` and `sharedWithMe(kind)` read and remove them. Sharing needs `manage`, a grant can carry any level up to `manage`, and grants never remove an owner's `manage` or an organization role.
-    7. **Sharing email**: `share` sends an email from `noreply@` the app's hostname with a link the app gives, such as `/pages/7`; the app may reword it or turn it off; previews and local dev capture it.
-    8. **Links**: `app.access.link(kind, id, level, { expires? })` makes a link carrying a secret token; anyone opening it gets that level on that item, signed in or not, until it expires or is revoked; a link carries `read`, `create` or `write`, never `delete` or `manage`. A request carries the token in its `x-access-link` header, and only a hash of it is stored; `links` and `revokeLink` list and remove them.
+    7. **Sharing email**: a new grant to a user or an email address sends them an email from `noreply@` the app's hostname with a link to the path the app gives, such as `share(..., { email: { path: "/pages/7" } })`; the app may give its own `subject` and `text`, or pass `email: false`; teams, organizations and changed levels get none; it is sent after the answer, so a failed email never fails the share; previews and local dev capture it.
+    8. **Links**: `app.access.link(kind, id, level, { expires? })` makes a link carrying a secret token; anyone opening it gets that level on that item, signed in or not, until it expires or is revoked; a link carries `read`, `create` or `write`, never `delete` or `manage`. A request carries the token in its `x-access-link` header, which the generated browser client fills from the page's `#link=<token>` fragment, so tokens never reach server logs; only a hash of each is stored; `links` and `revokeLink` list and remove them.
     9. **Inheritance**: a level on an item applies to everything inside it, so a team with `write` on a folder can change its pages and add new ones; a grant on an inner item raises access there without any other step.
     10. **Restricted items**: `app.access.restrict(kind, id, restricted?)` makes an item ignore every level from above, so only its own grants count for it and everything inside it; it is how access is lowered or one person shut out, such as a read-only folder shared with the organization at `read`. An organization `owner`'s `manage` and an `admin`'s `delete` still reach restricted items, so no item is ever left with nobody able to fix its access.
     11. **Highest wins**: when someone has access several ways, as owner, as an organization member, through a team, a personal grant or a link, the highest level applies.

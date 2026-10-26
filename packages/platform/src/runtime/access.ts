@@ -1,6 +1,9 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { EndpointError } from "./endpoint-error.js";
+import { LINK_HEADER } from "./link-header.js";
+
+export { LINK_HEADER };
 
 // Who may do what to an app's items; see docs/design.md, App Code, Access, and the cases in
 // docs/access-rules.md. Every check is one query against the app's own Postgres, never cached.
@@ -13,6 +16,19 @@ export interface Grant {
   to: Grantee;
   level: Level;
   grantedBy: string | null;
+}
+
+// How a new grant to a person is announced: an email with a link to `path` in the app, worded by
+// the platform unless the app gives its own subject and text; `false` sends nothing.
+export type ShareEmail = { path?: string; subject?: string; text?: string } | false;
+
+export interface ShareNotice {
+  to: string;
+  sharedBy: string | null;
+  level: Level;
+  path: string;
+  subject?: string;
+  text?: string;
 }
 
 export interface Link {
@@ -31,7 +47,8 @@ export interface Access {
   place(kind: string, id: string, parentKind: string, parentId: string): Promise<void>;
   remove(kind: string, id: string): Promise<void>;
   restrict(kind: string, id: string, restricted?: boolean): Promise<void>;
-  share(kind: string, id: string, to: Grantee, level: Level): Promise<void>;
+  // A new grant to a user or an email address sends them an email; teams and organizations get none.
+  share(kind: string, id: string, to: Grantee, level: Level, options?: { email?: ShareEmail }): Promise<void>;
   revoke(kind: string, id: string, to: Grantee): Promise<void>;
   grants(kind: string, id: string): Promise<Grant[]>;
   sharedWithMe(kind: string): Promise<string[]>;
@@ -50,8 +67,6 @@ export interface Caller {
   // A link token the request carries, as the `x-access-link` header.
   link: string | null;
 }
-
-export const LINK_HEADER = "x-access-link";
 
 // The longest chain from an item up to its user or organization, counting the item itself.
 export const MAX_DEPTH = 64;
@@ -81,6 +96,16 @@ function checkId(id: string): void {
 }
 
 const notFound = () => new EndpointError(404, "not found");
+
+export function shareMessage(notice: ShareNotice, appName: string, origin: string): { to: string; subject: string; text: string } {
+  const who = notice.sharedBy || "Someone";
+  const url = new URL(notice.path, origin).toString();
+  return {
+    to: notice.to,
+    subject: notice.subject ?? `${who} shared something with you on ${appName}`,
+    text: `${notice.text ?? `${who} gave you ${notice.level} access on ${appName}.`}\n\n${url}\n`,
+  };
+}
 
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
@@ -180,7 +205,7 @@ async function missingAsNotFound<T>(work: Promise<T>): Promise<T> {
   }
 }
 
-export function createAccess(db: Db, caller: () => Promise<Caller>): Access {
+export function createAccess(db: Db, caller: () => Promise<Caller>, notify?: (notice: ShareNotice) => Promise<void>): Access {
   let who: Promise<Who> | undefined;
   const me = () =>
     (who ??= caller().then(async ({ userId, link }) => ({ userId, linkHash: link ? await hashToken(link) : null })));
@@ -279,17 +304,28 @@ export function createAccess(db: Db, caller: () => Promise<Caller>): Access {
         await on.execute(sql`update access_item set restricted = ${restricted}, updated_at = now() where kind = ${kind} and id = ${id}`);
       },
 
-      async share(kind, id, to, level) {
+      async share(kind, id, to, level, options = {}) {
         const n = rank(level);
         const g = granteeColumns(to);
+        const email = options.email ?? {};
+        if (email && email.path !== undefined && !/^\/(?![/\\])/.test(email.path)) throw new Error(`a sharing email's path must start with one /, such as /pages/7; got ${JSON.stringify(email.path)}`);
         await need(on, kind, id, MANAGE);
         const { userId } = await me();
-        await missingAsNotFound(
-          on.execute(sql`
+        // xmax is 0 only for a row this statement inserted, so a changed grant sends no second email.
+        const [row] = await missingAsNotFound(
+          rows<{ inserted: boolean; recipient: string | null; shared_by: string | null }>(
+            on,
+            sql`
             insert into access_grant (item_kind, item_id, user_id, team_id, organization_id, email, level, granted_by)
             values (${kind}, ${id}, ${g.user}::uuid, ${g.team}::uuid, ${g.organization}::uuid, ${g.email}, ${n}, ${userId}::uuid)
-            on conflict on constraint access_grant_once do update set level = excluded.level, granted_by = excluded.granted_by, updated_at = now()`),
+            on conflict on constraint access_grant_once do update set level = excluded.level, granted_by = excluded.granted_by, updated_at = now()
+            returning xmax = 0 as inserted,
+              coalesce(email, (select u.email from "user" u where u.id = access_grant.user_id)) as recipient,
+              (select u.name from "user" u where u.id = ${userId}::uuid) as shared_by`,
+          ),
         );
+        if (!notify || email === false || !row?.inserted || !row.recipient) return;
+        await notify({ to: row.recipient, sharedBy: row.shared_by, level, path: email.path ?? "/", subject: email.subject, text: email.text });
       },
 
       async revoke(kind, id, to) {

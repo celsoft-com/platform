@@ -1,6 +1,6 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { createAccess, LINK_HEADER, type Access } from "./access.js";
+import { createAccess, LINK_HEADER, shareMessage, type Access } from "./access.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { apiHandler, type Endpoint } from "./endpoints.js";
@@ -12,7 +12,7 @@ import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { isScreen, renderScreen } from "./screens.js";
 
-export { LEVELS, LINK_HEADER, MAX_DEPTH, type Access, type Grant, type Grantee, type Level, type Link } from "./access.js";
+export { LEVELS, LINK_HEADER, MAX_DEPTH, type Access, type Grant, type Grantee, type Level, type Link, type ShareEmail } from "./access.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
 export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
@@ -202,10 +202,13 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     get access() {
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
-      return (access ??= createAccess(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({
-        userId: (await app.session())?.user.id ?? null,
-        link: request.headers.get(LINK_HEADER),
-      })));
+      const origin = env.APP_URL ?? new URL(request.url).origin;
+      return (access ??= createAccess(
+        app.db as NodePgDatabase<Record<string, unknown>>,
+        async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER) }),
+        // Sent after the answer, so a slow or failing email never fails the share itself.
+        async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
+      ));
     },
     session() {
       return (session ??= knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));

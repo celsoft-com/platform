@@ -16,11 +16,22 @@
     time { display: block; font-size: .8rem; opacity: .7; }
     #message { min-height: 1.5rem; }
     [hidden] { display: none !important; }
+    .actions { display: flex; gap: .5rem; margin-top: .4rem; }
+    .actions button { font-size: .8rem; padding: .2rem .5rem; }
+    #opened { border: 1px solid #8886; border-radius: .4rem; padding: .75rem; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
   <header><h1>Notes</h1><span id="who"></span></header>
   <p id="message" role="status"></p>
+  <section id="opened" hidden>
+    <p id="opened-meta"></p>
+    <form id="edit-opened">
+      <textarea name="body" required maxlength="10000"></textarea>
+      <button>Save</button>
+    </form>
+    <p id="opened-body"></p>
+  </section>
 
   <section id="signed-out" hidden>
     <p><a href="/login">Sign in</a> or <a href="/signup">create an account</a> to keep notes.</p>
@@ -33,6 +44,9 @@
       <button>Add</button>
     </form>
     <ul id="notes"></ul>
+
+    <h2>Shared with me</h2>
+    <ul id="shared"></ul>
 
     <h2>Teams</h2>
     <form id="new-team">
@@ -95,10 +109,82 @@
           link.style.display = "block";
           li.append(link);
         }
-        li.append(time);
+        li.append(time, noteActions(note));
+        return li;
+      }));
+      const shared = await call("sharedNotes", {});
+      $("shared").replaceChildren(...shared.map((note) => {
+        const li = document.createElement("li");
+        const open = document.createElement("a");
+        open.href = `#note=${note.id}`;
+        open.textContent = note.body;
+        const meta = document.createElement("time");
+        meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
+        li.append(open, meta);
         return li;
       }));
     }
+
+    // Sharing a note with someone by email, or making a link anyone holding it can open.
+    function noteActions(note) {
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const share = document.createElement("button");
+      share.textContent = "Share";
+      share.onclick = async () => {
+        const email = prompt("Share with which email address?");
+        if (!email) return;
+        const level = confirm("Let them edit it? Cancel shares it read-only.") ? "write" : "read";
+        try {
+          await call("shareNote", { id: note.id, email, level });
+          say(`Shared with ${email}; they can open it once they sign in with a confirmed address.`);
+        } catch (error) { say(error.message); }
+      };
+      const link = document.createElement("button");
+      link.textContent = "Copy link";
+      link.onclick = async () => {
+        const level = confirm("Let link holders edit it? Cancel makes a read-only link.") ? "write" : "read";
+        try {
+          const { path } = await call("linkNote", { id: note.id, level });
+          const url = new URL(path, location.origin).toString();
+          await navigator.clipboard?.writeText(url).catch(() => {});
+          say(`Link: ${url}`);
+        } catch (error) { say(error.message); }
+      };
+      actions.append(share, link);
+      return actions;
+    }
+
+    // A note opened from an address such as /#note=<id>&link=<token>; the generated client sends the
+    // link token with every call, so this works signed out too.
+    async function openFromAddress() {
+      const id = new URLSearchParams(location.hash.slice(1)).get("note");
+      $("opened").hidden = !id;
+      if (!id) return;
+      try {
+        const note = await call("getNote", { id });
+        const editable = ["write", "delete", "manage"].includes(note.level);
+        $("opened-meta").textContent = `${note.author}'s note, ${new Date(note.createdAt).toLocaleString()} (you can ${editable ? "edit" : "read"} it)`;
+        $("edit-opened").hidden = !editable;
+        $("opened-body").hidden = editable;
+        $("edit-opened").body.value = note.body;
+        $("opened-body").textContent = note.body;
+      } catch {
+        $("opened-meta").textContent = "This note does not exist or is not shared with you.";
+        $("edit-opened").hidden = $("opened-body").hidden = true;
+      }
+    }
+
+    $("edit-opened").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const id = new URLSearchParams(location.hash.slice(1)).get("note");
+      try {
+        await call("editNote", { id, body: $("edit-opened").body.value });
+        say("Saved.");
+      } catch (error) { say(error.message); }
+    });
+
+    addEventListener("hashchange", openFromAddress);
 
     // Team notes: saved through the API, announced to the team's room, with who is here and who is typing.
     let room;
@@ -192,6 +278,7 @@
     });
 
     async function start() {
+      await openFromAddress();
       const session = await request("/api/auth/get-session");
       if (!session) {
         $("who").replaceChildren();

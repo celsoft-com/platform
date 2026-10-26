@@ -117,7 +117,7 @@ flowchart LR
 2. **Platform tables:** user, session, account, verification and the team tables, from `@celsoft/platform/schema`, included when `auth` is on.
 3. **Linking:** app tables may reference platform ones, such as `user.id`.
 4. **Helpers:** `id()` gives a `uuidv7()` primary key and `timestamps()` gives `created_at` and `updated_at`.
-5. **Generate:** `npx @celsoft/platform db generate` compares both sets of tables with the last migration and writes the difference to `drizzle/`.
+5. **Generate:** `npx @celsoft/platform db generate` compares both sets of tables with the last migration and writes the difference to `drizzle/`; `--custom <name>` writes an empty migration for the app's own SQL, such as moving data, the one `drizzle/` file the app edits.
 6. **Apply:** deploy applies new migrations under a lock, and stops before any change if `db generate` was not run.
 7. **Previews:** each PR gets its own copy of the prod database, so migrations are tried there first.
 
@@ -135,7 +135,8 @@ flowchart LR
 2. **Items:** the app tells the platform where each item sits with `app.access.place(kind, id, parentKind, parentId)`, under another item or at the top under a user or organization.
 3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from owning the item, an organization role, grants to people, teams, organizations or emails, and links.
 4. **Checks:** an endpoint declares `access: { kind, id, level }`, hand-written routes call `app.access.can`, and lists filter with `app.access.accessible`; anything short is a 404.
-5. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
+5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`.
+6. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
 
 ### Live rooms
 

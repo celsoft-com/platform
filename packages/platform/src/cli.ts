@@ -28,6 +28,7 @@ commands:
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
+                   --custom <name> writes an empty one for SQL of your own, such as moving data
   generate         write the .platform/ files the app's code imports, such as the browser client
   upgrade          rewrite an older platform.jsonc to the current shape
   deploy           deploy prod
@@ -41,13 +42,13 @@ commands:
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate" } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, data: { type: "boolean", default: false }, pr: { type: "string" }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -96,7 +97,9 @@ async function main(argv: string[]): Promise<void> {
 
   const app = await loadApp(appDir);
   if (command.name === "db generate") {
-    await new DrizzleMigrator(appDir, app.config).generate();
+    const custom = values.custom;
+    if (custom !== undefined && !/^[a-z0-9][a-z0-9_-]*$/.test(custom)) throw new UsageError("--custom takes a name of lowercase letters, digits, - and _, such as place-notes");
+    await new DrizzleMigrator(appDir, app.config).generate(custom);
     return;
   }
   // The app's code imports these, so they are fresh for every run that builds or serves it.

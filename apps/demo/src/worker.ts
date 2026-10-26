@@ -1,6 +1,6 @@
 import { defineApp, endpoint, EndpointError, type AppContext, type PlatformBindings } from "@celsoft/platform";
 import { member, organization, user as users } from "@celsoft/platform/schema";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
 
@@ -11,6 +11,16 @@ const teamColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt
 const TEAM_ROOM = /^team:([0-9a-f-]{36})$/;
 
 type App = AppContext<PlatformBindings, typeof schema>;
+
+// A personal note as anyone it is shared with sees it, with the level they have on it.
+const SharedNote = z.object({ id: z.uuid(), body: z.string(), attachmentName: z.string().nullable(), createdAt: z.date(), author: z.string(), level: z.string() });
+const NoteId = z.object({ id: z.uuid() });
+
+async function sharedNote(app: App, id: string) {
+  const [note] = await app.db.select({ ...columns, author: users.name }).from(notes).innerJoin(users, eq(users.id, notes.userId)).where(eq(notes.id, id));
+  if (!note) throw new EndpointError(404, "not found");
+  return { ...note, level: (await app.access.level("note", id))! };
+}
 
 const TeamNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
 
@@ -28,7 +38,8 @@ async function inTeamRoom(room: string, user: { id: string } | null, app: App): 
   return Boolean(team && user && (await isMember(app, team, user.id)));
 }
 
-// Every /api route here is private, so the platform has already checked the session.
+// Every hand-written /api route here is private, so the platform has already checked the session.
+// Personal notes are access items placed under their author, so they can be shared and linked.
 export default defineApp(
   async (request, app) => {
     const { db, files, live, requireUser } = app;
@@ -53,19 +64,24 @@ export default defineApp(
         return Response.json({ error: "attachments are limited to 10 MB" }, { status: 400 });
       }
 
-      const [note] = await db
-        .insert(notes)
-        .values({ body: body.trim(), userId: user.id, attachmentName: attachment?.name ?? null, attachmentType: attachment?.type || null })
-        .returning(columns);
+      const note = await db.transaction(async (tx) => {
+        const [inserted] = await tx
+          .insert(notes)
+          .values({ body: body.trim(), userId: user.id, attachmentName: attachment?.name ?? null, attachmentType: attachment?.type || null })
+          .returning(columns);
+        await app.access.in(tx).place("note", inserted!.id, "user", user.id);
+        return inserted;
+      });
       if (attachment) await files.put(`${folder(note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
       return Response.json(note, { status: 201 });
     }
 
     const download = /^\/api\/notes\/([0-9a-f-]{36})\/attachment$/.exec(url.pathname);
     if (download && request.method === "GET") {
-      const [note] = await db.select(columns).from(notes).where(and(eq(notes.id, download[1]!), eq(notes.userId, user.id)));
+      if (!(await app.access.can("note", download[1]!, "read"))) return new Response("not found", { status: 404 });
+      const [note] = await db.select({ ...columns, userId: notes.userId }).from(notes).where(eq(notes.id, download[1]!));
       if (!note?.attachmentName) return new Response("not found", { status: 404 });
-      return files.response(`${folder(note.id)}/${note.attachmentName}`);
+      return files.response(`notes/${note.userId}/${note.id}/${note.attachmentName}`);
     }
 
     return new Response("not found", { status: 404 });
@@ -74,6 +90,64 @@ export default defineApp(
     schema,
     live: { message: TeamMessage, canJoin: inTeamRoom, canSend: inTeamRoom },
     endpoints: {
+      // Public paths, so a signed-out visitor holding a link can read or edit the note it opens.
+      getNote: endpoint(
+        { method: "GET", path: "/api/public/notes/:id", input: NoteId, output: SharedNote, access: { kind: "note", id: "id", level: "read" } },
+        ({ id }, app) => sharedNote(app, id),
+      ),
+      editNote: endpoint(
+        {
+          method: "PUT",
+          path: "/api/public/notes/:id",
+          input: NoteId.extend({ body: z.string().trim().min(1).max(10000) }),
+          output: SharedNote,
+          access: { kind: "note", id: "id", level: "write" },
+        },
+        async ({ id, body }, app) => {
+          await app.db.update(notes).set({ body, updatedAt: new Date() }).where(eq(notes.id, id));
+          return sharedNote(app, id);
+        },
+      ),
+      shareNote: endpoint(
+        {
+          method: "POST",
+          path: "/api/notes/:id/shares",
+          input: NoteId.extend({ email: z.email(), level: z.enum(["read", "write"]) }),
+          output: z.object({}),
+          access: { kind: "note", id: "id", level: "manage" },
+        },
+        async ({ id, email, level }, app) => {
+          await app.access.share("note", id, { email }, level, { email: { path: `/#note=${id}` } });
+          return {};
+        },
+      ),
+      linkNote: endpoint(
+        {
+          method: "POST",
+          path: "/api/notes/:id/links",
+          input: NoteId.extend({ level: z.enum(["read", "write"]) }),
+          output: z.object({ path: z.string() }),
+          access: { kind: "note", id: "id", level: "manage" },
+        },
+        async ({ id, level }, app) => {
+          const { token } = await app.access.link("note", id, level);
+          return { path: `/#note=${id}&link=${token}` };
+        },
+      ),
+      // Notes other people have shared with the signed-in user, filtered by access in the query itself.
+      sharedNotes: endpoint(
+        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })) },
+        async (_, app) => {
+          const user = await app.requireUser();
+          return app.db
+            .select({ ...columns, author: users.name })
+            .from(notes)
+            .innerJoin(users, eq(users.id, notes.userId))
+            .where(and(ne(notes.userId, user.id), await app.access.accessible("note", "read", notes.id)))
+            .orderBy(desc(notes.createdAt))
+            .limit(100);
+        },
+      ),
       // For AI clients only: which teams they can read and add notes to.
       listMyTeams: endpoint(
         {

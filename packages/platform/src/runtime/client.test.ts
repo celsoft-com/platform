@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createCall, EndpointError } from "./client.js";
+import { createCall, EndpointError, linkFromPage } from "./client.js";
 import { defineApp, endpoint } from "./index.js";
 
 const app = defineApp(undefined, {
@@ -20,11 +20,19 @@ const app = defineApp(undefined, {
 });
 
 const seen: string[] = [];
-vi.stubGlobal("fetch", async (request: Request) => {
+const links: (string | null)[] = [];
+const fetcher = async (request: Request) => {
   seen.push(`${request.method} ${new URL(request.url).pathname}${new URL(request.url).search}`);
+  links.push(request.headers.get("x-access-link"));
   return app.fetch(new Request(request, { headers: { ...Object.fromEntries(request.headers), origin: "https://app.test" } }), {}, { waitUntil: () => {} });
+};
+vi.stubGlobal("fetch", fetcher);
+afterEach(() => {
+  seen.length = 0;
+  links.length = 0;
+  vi.unstubAllGlobals();
+  vi.stubGlobal("fetch", fetcher);
 });
-afterEach(() => void (seen.length = 0));
 
 const call = createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"], addNote: ["POST", "/api/public/folders/{folder}/notes"] }, { url: "https://app.test" });
 
@@ -38,5 +46,20 @@ describe("call", () => {
   it("throws EndpointError with the server's status and message", async () => {
     await expect(call("addNote", { folder: "work", body: "" })).rejects.toMatchObject({ status: 400, name: "EndpointError" });
     await expect(call("addNote", { folder: "work", body: "" })).rejects.toBeInstanceOf(EndpointError);
+  });
+
+  it("sends the page's #link= token with every call, and none without one", async () => {
+    vi.stubGlobal("location", { origin: "https://app.test", hash: "#note=7&link=tok_en-1" });
+    expect(linkFromPage()).toBe("tok_en-1");
+    await createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"] })("getNote", { id: 1 });
+    vi.stubGlobal("location", { origin: "https://app.test", hash: "" });
+    await createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"] })("getNote", { id: 1 });
+    await call("getNote", { id: 1 });
+    expect(links).toEqual(["tok_en-1", null, null]);
+  });
+
+  it("sends the token an app's own link option returns", async () => {
+    await createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"] }, { url: "https://app.test", link: () => "mine" })("getNote", { id: 1 });
+    expect(links).toEqual(["mine"]);
   });
 });

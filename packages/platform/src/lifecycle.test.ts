@@ -167,6 +167,22 @@ describe("auth and email", () => {
     expect(ports.cloudflare.records).toHaveLength(2);
   });
 
+  it("drops copied signing keys from a new preview branch, and never again", async () => {
+    await deploy(authCtx(), { kind: "prod" });
+    expect(ports.migrator.forgotKeys).toEqual(["postgresql://owner:secret@br-prod.neon.test/app"]);
+    await deploy(authCtx(), { kind: "prod" });
+    await deploy(authCtx(), { kind: "preview", pr: 7 });
+    expect(ports.migrator.forgotKeys).toHaveLength(2);
+    expect(ports.migrator.forgotKeys[1]).not.toBe(ports.migrator.forgotKeys[0]);
+    await deploy(authCtx(), { kind: "preview", pr: 7 });
+    expect(ports.migrator.forgotKeys).toHaveLength(2);
+  });
+
+  it("leaves signing keys alone without auth", async () => {
+    await deploy(ctx(), { kind: "preview", pr: 7 });
+    expect(ports.migrator.forgotKeys).toEqual([]);
+  });
+
   it("comments each record with the app's name", async () => {
     await deploy(authCtx(), { kind: "prod" });
     expect(ports.cloudflare.records.map((r) => r.comment)).toEqual([dnsComment("demo"), dnsComment("demo")]);

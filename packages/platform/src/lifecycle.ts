@@ -54,19 +54,27 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const hostname = target.kind === "prod" ? config.hostname : previewHostname(target.pr, config.hostname);
   await checkClaim(ctx, true);
 
+  const existingSecrets = await ports.cloudflare.workerSecretNames(n.worker);
+  const generated: Record<string, string> = {};
+  if (config.auth && !existingSecrets.includes("BETTER_AUTH_SECRET")) {
+    generated.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url");
+    run.note(`generate BETTER_AUTH_SECRET for ${n.worker}`);
+  }
+
   let hyperdriveId: string | undefined;
   if (config.database) {
     const project = config.database.neonProject;
     await requirePostgres(ports.neon, project);
     const prod = await ports.neon.defaultBranch(project);
 
+    let copied = false;
     const branch =
       target.kind === "prod"
         ? prod
         : await run.ensure<Branch>(
             `Neon branch ${n.neonBranch}`,
             () => ports.neon.findBranch(project, n.neonBranch!),
-            () => ports.neon.createBranch(project, n.neonBranch!, prod.id, true),
+            () => ((copied = true), ports.neon.createBranch(project, n.neonBranch!, prod.id, true)),
             { id: "(new)", name: n.neonBranch! },
           );
 
@@ -76,18 +84,12 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
     if (uri) {
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
+      if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
     } else {
       run.note(`would run migrations on ${branch.name}`);
     }
 
     hyperdriveId = await ensureHyperdrive(ctx, n.hyperdrive, uri);
-  }
-
-  const existingSecrets = await ports.cloudflare.workerSecretNames(n.worker);
-  const generated: Record<string, string> = {};
-  if (config.auth && !existingSecrets.includes("BETTER_AUTH_SECRET")) {
-    generated.BETTER_AUTH_SECRET = randomBytes(32).toString("base64url");
-    run.note(`generate BETTER_AUTH_SECRET for ${n.worker}`);
   }
 
   const sending = config.email && target.kind === "prod";
@@ -184,6 +186,13 @@ async function ensureBucket({ ports, run }: Context, bucket: string, preview: bo
   }
 }
 
+// Better Auth encrypts its JWT signing keys with BETTER_AUTH_SECRET. A branch copied from prod, or a
+// database meeting a newly generated secret, holds keys this Worker cannot decrypt, and every
+// request reading a session would fail; dropping them lets Better Auth make its own.
+async function forgetSigningKeys({ ports, run }: Context, uri: string, branch: string): Promise<void> {
+  await run.mutate(`forget the signing keys ${branch} cannot decrypt`, () => ports.migrator.forgetSigningKeys(uri), undefined);
+}
+
 export const DEV_BRANCH = "dev";
 export const DEV_URL = "http://localhost:8787";
 
@@ -198,15 +207,17 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     const project = config.database.neonProject;
     await requirePostgres(ports.neon, project);
     const prod = await ports.neon.defaultBranch(project);
+    let copied = false;
     const branch = await run.ensure<Branch>(
       `Neon branch ${DEV_BRANCH}`,
       () => ports.neon.findBranch(project, DEV_BRANCH),
-      () => ports.neon.createBranch(project, DEV_BRANCH, prod.id, true),
+      () => ((copied = true), ports.neon.createBranch(project, DEV_BRANCH, prod.id, true)),
       { id: "(new)", name: DEV_BRANCH },
     );
     uri = await ports.neon.connectionUri(project, branch.id);
     await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
+    if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
   const vars: Record<string, string> = { APP_URL: appUrl, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };

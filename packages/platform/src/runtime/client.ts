@@ -3,10 +3,11 @@ import { oc } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
+import { LINK_HEADER } from "./link-header.js";
 
 export { EndpointError };
 
-declare const location: { origin: string } | undefined;
+declare const location: { origin: string; hash: string } | undefined;
 
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -19,13 +20,27 @@ type OutputOf<E> = E extends { output: infer O extends z.ZodType } ? Jsonified<z
 
 export type Call<App> = <Name extends keyof EndpointsOf<App> & string>(name: Name, input: InputOf<EndpointsOf<App>[Name]>) => Promise<OutputOf<EndpointsOf<App>[Name]>>;
 
+// The access link token in the page's address, written `#link=<token>`; a fragment never reaches
+// the server, so tokens stay out of its logs and Referer headers.
+export function linkFromPage(): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.hash.replace(/^#/, "")).get("link");
+}
+
 // Calls the app's endpoints by name over its REST API; the generated .platform/client.ts passes
-// each endpoint's method and path, and the app's own type for the inputs and outputs.
-export function createCall<App>(routes: Record<string, readonly [Method, string]>, options: { url?: string } = {}): Call<App> {
+// each endpoint's method and path, and the app's own type for the inputs and outputs. Every call
+// carries the page's access link token, or the one `link` returns.
+export function createCall<App>(routes: Record<string, readonly [Method, string]>, options: { url?: string; link?: () => string | null } = {}): Call<App> {
   const contract = Object.fromEntries(Object.entries(routes).map(([name, [method, path]]) => [name, oc.route({ method, path: path as `/${string}` })]));
   const url = options.url ?? (typeof location === "undefined" ? undefined : location.origin);
   if (!url) throw new Error("createCall needs a url outside a browser");
-  const client = createORPCClient<Record<string, (input: unknown) => Promise<unknown>>>(new OpenAPILink(contract, { url }));
+  const client = createORPCClient<Record<string, (input: unknown) => Promise<unknown>>>(new OpenAPILink(contract, {
+      url,
+      headers: (): Record<string, string> => {
+        const token = (options.link ?? linkFromPage)();
+        return token ? { [LINK_HEADER]: token } : {};
+      },
+    }));
 
   return (async (name: string, input: unknown) => {
     const fn = routes[name] && client[name];

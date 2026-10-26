@@ -23,6 +23,29 @@ check "create note with attachment" "$([ -n "$id" ] && echo "id $id" || echo "$n
 check "list notes" "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
 check "download attachment" "$(curl -s -b "$jar" "$base/api/notes/$id/attachment")"
 
+# Access: the note is an item under its author, shared and linked through the demo's endpoints.
+json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
+status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" "$@"; }
+level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
+note_url="$base/api/public/notes/$id"
+check "owner's level on own note" "$(json -b "$jar" "$note_url" | level)"
+jar2=$(mktemp)
+friend="friend-$RANDOM@example.com"
+json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null
+check "someone else's note refused (404)" "$(status -b "$jar2" "$note_url")"
+check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/notes/$id/attachment")"
+check "share by email" "$(status -b "$jar" -d '{"email":"'$friend'","level":"write"}' "$base/api/notes/$id/shares")"
+check "unconfirmed address still refused (404)" "$(status -b "$jar2" "$note_url")"
+check "nothing shared with them yet" "$(json -b "$jar2" "$base/api/shared-notes")"
+check "making a link needs manage (404)" "$(status -b "$jar2" -d '{"level":"read"}' "$base/api/notes/$id/links")"
+read_token=$(json -b "$jar" -d '{"level":"read"}' "$base/api/notes/$id/links" | sed -n 's/.*link=\([^"]*\)".*/\1/p')
+write_token=$(json -b "$jar" -d '{"level":"write"}' "$base/api/notes/$id/links" | sed -n 's/.*link=\([^"]*\)".*/\1/p')
+check "read link opens it signed out" "$(json -H "x-access-link: $read_token" "$note_url" | level)"
+check "read link cannot edit (404)" "$(status -X PUT -H "x-access-link: $read_token" -d '{"body":"by a reader"}' "$note_url")"
+check "write link edits signed out" "$(json -X PUT -H "x-access-link: $write_token" -d '{"body":"edited by link"}' "$note_url" | grep -c 'edited by link')"
+check "altered link refused (404)" "$(status -H "x-access-link: x$write_token" "$note_url")"
+check "no link, no note (404)" "$(status "$note_url")"
+
 org='{"name":"Team","slug":"team-'$RANDOM'"}'
 check "create organization" "$(curl -s -b "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$org" "$base/api/auth/organization/create" | grep -c '"slug":"team-')"
 
@@ -35,4 +58,4 @@ check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run plat
 check "old session (cached up to 5 minutes)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
 check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
 check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
-rm -f "$jar" "$attachment"
+rm -f "$jar" "$jar2" "$attachment"

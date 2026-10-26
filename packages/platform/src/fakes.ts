@@ -255,6 +255,10 @@ export class FakeMigrator implements Migrator {
   async dropAll(databaseUrl: string) {
     this.dropped.push(databaseUrl);
   }
+  forgotKeys: string[] = [];
+  async forgetSigningKeys(databaseUrl: string) {
+    this.forgotKeys.push(databaseUrl);
+  }
 }
 
 export function fakePorts() {
