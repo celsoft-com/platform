@@ -205,7 +205,7 @@ A published CLI, runtime library and app template that create and reuse each app
     12. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
     13. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
     14. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
-2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code. Each roadmap stage adds its helper here.
+2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code.
 3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
 4. **Agent skills**: the package ships `skills/`, each a `SKILL.md`, describing how to work on an app at that version.
     1. **Version-matched**: they live in `node_modules/@celsoft/platform/skills/`, so upgrading the package upgrades them; nothing is copied into the app.
@@ -233,8 +233,21 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Auth routes**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset, organizations when on).
     3. **Session**: `app.session()`, looked up once per request, and `app.requireUser()`, which returns the user or answers 401.
     4. **Screens**: login, sign-up, forgot-password and reset pages with a default stylesheet and documented class names; `defineApp({ screens: { stylesheet } })` adds the app's own stylesheet after it.
-    5. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev. A preview really emails only the addresses in `previews.sendEmailTo` in `platform.jsonc`, such as `*@yourcompany.com`, sending from prod's domain with a Resend key of its own that only sends, made when the preview is and deleted by its cleanup; every other address stays captured, since a preview's database is a copy of prod.
-    6. **Files**: `app.files`, storing, reading, listing, deleting and serving objects by path, with a preview's folder added out of sight.
+    5. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev. A preview really emails only the addresses in `previews.sendEmailTo` in `platform.jsonc`, such as `*@yourcompany.com`, sending from prod's domain with a Resend key of its own that only sends, made when the preview is and deleted by its cleanup; every other address stays captured, since a preview's database is a copy of prod. Each app sends from its own hostname, so the project's existing email setup is never touched: the platform registers the hostname in Resend and writes its DKIM and bounce records in the zone, tagged as its own. Mail comes from `noreply@`, with no receiving and no reply-to.
+    6. **Files**: `app.files` in R2, storing, reading, listing, deleting and serving objects by path, `/` making folders, with JSON helpers; prod has a bucket per app, and previews share one bucket under a per-PR folder, added out of sight, which closing a PR deletes and which expires after 14 days as a backstop.
+    7. **Live rooms**: Durable Objects rooms over WebSockets, offered as building blocks with no outside service; rooms carry messages and know nothing about documents or saving, which stay entirely the app's business.
+        1. **Switch**: `"live": true` in `platform.jsonc`; no new token permission or account.
+        2. **Rooms**: one per name the app chooses, such as `note:123`, each reaching one Durable Object; rooms start on first use and go idle when empty, so cost follows activity, not page count.
+        3. **Joining**: browsers open `/api/live/<room>`; the app's `canJoin` decides who may join and refuses by default.
+        4. **Sending**: the app's server sends with `app.live.publish(room, message)`; a browser may send to its room when the app's `canSend` allows, refused by default, with each message stamped with the sender's user id, and the app's optional `onMessage` sees every browser message on the server.
+        5. **Messages**: any JSON up to 64 KB, delivered unchanged; no save hooks or merge library are built in.
+        6. **Message schema**: an optional Zod schema, `live: { message }`, checks every browser message before `onMessage` and types `onMessage` and `app.live.publish`; rooms with several kinds of message use a discriminated union on a `type` field, which the docs show.
+        7. **Catch up**: each room numbers its announcements and keeps the last 500 in its own storage; a reconnecting browser gets what it missed, or is told to reload.
+        8. **Presence**: each room tracks who is connected and tells everyone on join and leave; quiet connections hibernate at no cost.
+        9. **Client**: a small dependency-free browser client, served at `/api/live/client.js` for plain pages and exported from the package for bundled apps such as Svelte, which handles reconnecting and catching up.
+        10. **Previews**: each preview Worker has its own rooms, deleted with it.
+        11. **Entry file**: deploy generates a hidden entry module exporting the app's handler and the room class, so apps never export platform code.
+    8. **Logs**: every Worker has Cloudflare's Workers Logs on; the platform adds no other observability.
 6. **Auth behavior**: set by the platform for every app with auth on.
     1. **Private by default**: every `/api/*` route needs a signed-in user except those under `/api/public/`.
     2. **Cross-site forms**: POST, PUT, PATCH and DELETE requests sent as forms are refused unless their Origin is the app's own.
@@ -277,7 +290,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
 10. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions beyond roles live in app tables keyed to `user.id`.
-11. **Deferred**: GitHub sign-in stays out; MCP access and API tokens wait for the MCP stage and use Better Auth's plugins.
+11. **Left out**: GitHub sign-in, and API tokens other than MCP's.
 12. **Endpoints**: typed functions an app declares once and serves over its API, MCP, or both; some choices are still open.
     1. **Zod only**: every type an app writes is a Zod schema; whatever the API and MCP need beyond that is the package's wrapping, never the app's.
     2. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.
@@ -292,6 +305,12 @@ A published CLI, runtime library and app template that create and reuse each app
     11. **MCP sign-in**: AI clients connect with OAuth 2.1 served by Better Auth's MCP plugin; a person approves a client once, its calls run as that person, and its registered clients, tokens and consents add auth tables and a consent screen.
     12. **Frontend calls**: frontends call `call("getNote", { id: 42 })` from the package, which builds the URL from the endpoint's path and input and returns the output typed from its Zod schemas; oRPC's client does the URL building underneath, hidden; the paths come from a generated file the frontend imports.
     13. **Generated folder**: the package writes generated files into a gitignored `.platform/` folder in the app, such as the endpoint path list, generated on install, when `dev` starts and at deploy; the deploy's temporary files move there too.
+13. **MCP**: the app's MCP endpoints served to AI clients, behind auth.
+    1. **Switch**: `"mcp": true` in `platform.jsonc`, which needs auth; off by default, and while off `/mcp`, the OAuth routes and the consent screen do not exist.
+    2. **Route**: the app's Worker answers `/mcp` and OAuth discovery under `/.well-known/`; each call is one stateless request, run as the user the token was issued to.
+    3. **Tokens**: JWTs bound to the app's `/mcp`, checked against signing keys read from the app's own database, since a Worker cannot fetch its own hostname.
+    4. **Screens**: AI clients sign in through the built-in `/login`, which carries the OAuth request through, then approve on a built-in `/consent` screen.
+    5. **Tables**: the JWT and MCP plugins' tables are installed for every app with auth, so turning MCP on never needs a migration.
 
 ## 14. Upgrades
 
@@ -312,19 +331,19 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **Preflight**: every run checks tokens and secrets first and stops with exact fix instructions.
     5. **One major at a time**: projects never skip a major.
     6. **Latest major**: the only version that gets fixes.
+    7. **Additive**: a new feature ships in a minor release, off until a project turns it on in `platform.jsonc`.
 5. **Compatibility date**: set by the project in `platform.jsonc`, never changed by the platform.
 
 ## 15. Testing
 
 1. **Dogfood**: the platform repo is itself a project, deploying a demo app with the platform as far as it can.
     1. **Demo app**: a real, usable app (proposed: shared notes) living in the repo with its own `platform.jsonc`, in an account and zone the maintainer owns.
-    2. **Grows with the platform**: every roadmap stage adds its feature to the demo, so the running app always uses everything the platform offers.
-        1. **Auth and email**: sign-up, login, verification and reset emails, and share notifications.
+    2. **Demo first**: no feature ships until the demo uses it, so the running app always uses everything the platform offers.
+        1. **Auth and email**: sign-up, login, verification and reset emails.
         2. **Files**: attachments on notes.
-        3. **Background work**: emails and cleanup sent from jobs, plus a daily digest.
-        4. **Realtime**: live co-editing and presence.
-        5. **MCP**: AI clients read and write notes.
-        6. **Observability**: errors and traces from the running demo.
+        3. **Live rooms**: team notes inside an organization, changing live with presence.
+        4. **MCP**: team notes are tools, plus an MCP-only tool listing the user's teams; the preview smoke test signs in as an AI client and calls them.
+        5. **Access**: personal notes shared by email and by link, with a list of notes shared with you.
     3. **Platform PRs**: each gets a demo preview deployed by that PR's CLI build.
     4. **Main**: a merge deploys the demo's prod.
     5. **Release**: publishes to npm only after the main deploy succeeds, using npm trusted publishing. Deferred until an outside project adopts the platform; the first version is published by hand, since trusted publishing needs the package to exist.
@@ -332,38 +351,3 @@ A published CLI, runtime library and app template that create and reuse each app
 3. **Upgrade test**: deploys the demo with the last published version, then the new build, proving the new one converges.
 4. **Template test**: scaffolds an app from the template and builds it.
 5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
-
-## 16. Roadmap
-
-1. **Foundation**: everything in this plan: prod and previews, Worker with static assets, Neon through Hyperdrive, secrets, `init`, template and upgrades.
-2. **Auth and email**: Better Auth run inside the runtime library, not a hosted auth service, with Resend for its email, and previews capturing email instead of sending it.
-    1. **Sender**: each app sends from its own hostname, so the project's existing email setup is never touched; the platform registers the hostname in Resend and writes its DKIM and bounce records in the zone, tagged as its own.
-    2. **Send only**: mail comes from `noreply@` the app's hostname, with no receiving and no reply-to.
-3. **Files**: R2, with a prod bucket per app and previews under a per-PR prefix.
-    1. **Helper**: `app.files` stores objects by path, `/` making folders, with JSON helpers and folder listing; a preview's prefix is added for it.
-    2. **Cleanup**: closing a PR deletes its folder; the preview bucket also expires files after 14 days as a backstop.
-4. **Background work**: Queues and Cron Triggers.
-5. **Realtime**: Durable Objects rooms over WebSockets, offered as building blocks with no outside service; rooms carry messages and know nothing about documents or saving, which stay entirely the app's business.
-    1. **Switch**: `"live": true` in `platform.jsonc`; no new token permission or account.
-    2. **Rooms**: one per name the app chooses, such as `note:123`, each reaching one Durable Object; rooms start on first use and go idle when empty, so cost follows activity, not page count.
-    3. **Joining**: browsers open `/api/live/<room>`; the app's `canJoin` decides who may join and refuses by default.
-    4. **Sending**: the app's server sends with `app.live.publish(room, message)`; a browser may send to its room when the app's `canSend` allows, refused by default, with each message stamped with the sender's user id, and the app's optional `onMessage` sees every browser message on the server.
-    5. **Messages**: any JSON up to 64 KB, delivered unchanged; no save hooks or merge library are built in.
-    6. **Message schema**: an optional Zod schema, `live: { message }`, checks every browser message before `onMessage` and types `onMessage` and `app.live.publish`; rooms with several kinds of message use a discriminated union on a `type` field, which the docs show.
-    7. **Catch up**: each room numbers its announcements and keeps the last 500 in its own storage; a reconnecting browser gets what it missed, or is told to reload.
-    8. **Presence**: each room tracks who is connected and tells everyone on join and leave; quiet connections hibernate at no cost.
-    9. **Client**: a small dependency-free browser client, served at `/api/live/client.js` for plain pages and exported from the package for bundled apps such as Svelte, which handles reconnecting and catching up.
-    10. **Previews**: each preview Worker has its own rooms, deleted with it.
-    11. **Entry file**: deploy generates a hidden entry module exporting the app's handler and the room class, so apps never export platform code.
-    12. **Demo**: team notes inside an organization, changing live with presence.
-6. **MCP**: the app's MCP endpoints served to AI clients, behind auth; designed in App Code, Endpoints.
-    1. **Switch**: `"mcp": true` in `platform.jsonc`, which needs auth; off by default, and while off `/mcp`, the OAuth routes and the consent screen do not exist.
-    2. **Route**: the app's Worker answers `/mcp` and OAuth discovery under `/.well-known/`; each call is one stateless request, run as the user the token was issued to.
-    3. **Tokens**: JWTs bound to the app's `/mcp`, checked against signing keys read from the app's own database, since a Worker cannot fetch its own hostname.
-    4. **Screens**: AI clients sign in through the built-in `/login`, which carries the OAuth request through, then approve on a built-in `/consent` screen.
-    5. **Tables**: the JWT and MCP plugins' tables are installed for every app with auth, so turning MCP on never needs a migration.
-    6. **Demo**: team notes are tools, plus an MCP-only tool listing the user's teams; the preview smoke test signs in as an AI client and calls them.
-7. **Observability**: deferred until needed; every Worker has Cloudflare's Workers Logs on.
-8. **Additive**: each stage after Foundation ships as a minor release, off by default until a project enables it in `platform.jsonc`.
-9. **Demo first**: no stage ships until the demo app uses it.
-
