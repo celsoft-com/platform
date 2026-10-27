@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { and, eq, sql as drizzleSql } from "drizzle-orm";
+import { apikey, user } from "../schema.js";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
@@ -387,15 +389,37 @@ function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boo
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 
-// The token's owner and cap, or null for a token that is unknown, expired, revoked, capped at
-// no known level, or whose owner is gone.
+// How often a token's last use is written, at most; the tokens screen shows it to this accuracy.
+const TOKEN_USE_EVERY_MS = 60 * 60 * 1000;
+
+// The token's owner and cap, or null for a token that is unknown, disabled, expired, revoked,
+// capped at no known level, or whose owner is gone or banned. One query reads the key and its
+// owner together, where Better Auth's own check would read and write the key's row on every call;
+// the last use is written at most hourly.
 async function tokenHolder<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, token: string): Promise<{ session: Session; cap: Level } | null> {
-  const result = await app.auth.api.verifyApiKey({ body: { key: token } }).catch(() => null);
-  if (!result?.valid || !result.key) return null;
-  const cap = (result.key.metadata as { cap?: unknown } | null)?.cap;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
+  const hashed = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const db = app.db as unknown as NodePgDatabase<Record<string, unknown>>;
+  const [row] = await db
+    .select({ id: apikey.id, metadata: apikey.metadata, lastRequest: apikey.lastRequest, owner: user })
+    .from(apikey)
+    .innerJoin(user, eq(user.id, apikey.referenceId))
+    .where(
+      and(
+        eq(apikey.key, hashed),
+        drizzleSql`${apikey.enabled} is not false`,
+        drizzleSql`(${apikey.expiresAt} is null or ${apikey.expiresAt} > now())`,
+        drizzleSql`(${apikey.remaining} is null or ${apikey.remaining} > 0)`,
+        drizzleSql`(${user.banned} is not true or (${user.banExpires} is not null and ${user.banExpires} <= now()))`,
+      ),
+    );
+  if (!row) return null;
+  const cap = (JSON.parse(row.metadata ?? "null") as { cap?: unknown } | null)?.cap;
   if (!LEVELS.includes(cap as Level)) return null;
-  const session = await sessionAs(app, result.key.referenceId, `api-token ${result.key.id}`);
-  return session ? { session, cap: cap as Level } : null;
+  if (!row.lastRequest || Date.now() - row.lastRequest.getTime() > TOKEN_USE_EVERY_MS) await db.update(apikey).set({ lastRequest: new Date() }).where(eq(apikey.id, row.id));
+  const now = new Date();
+  const session = { id: `api-token ${row.id}`, userId: row.owner.id, token: "", expiresAt: new Date(now.getTime() + 60_000), createdAt: now, updatedAt: now };
+  return { session: { user: row.owner, session } as unknown as Session, cap: cap as Level };
 }
 
 // What a person may send when making a token: a name, a lifetime and a cap, and nothing else,
