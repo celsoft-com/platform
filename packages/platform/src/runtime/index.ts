@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { applyStaticPoints, createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
@@ -101,7 +102,27 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
 // What one Worker instance does once: applying the app's static points before the first check.
 interface Once {
   staticPoints?: Promise<void>;
+  // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
+  auth?: Map<string, Auth>;
 }
+
+type Db = NodePgDatabase<Record<string, unknown>>;
+
+// The database the request being served uses. Better Auth is built once per Worker instance, so
+// it reaches the database through requestDb, which hands each call to that request's own
+// connection; a Worker cannot share a connection between requests.
+interface DbSlot {
+  db?: () => Db;
+}
+const dbSlot = new AsyncLocalStorage<DbSlot>();
+const requestDb = new Proxy({} as Db, {
+  get(_target, key) {
+    const db = dbSlot.getStore()?.db?.();
+    if (!db) throw new Error("the auth database was used outside a request");
+    const value = Reflect.get(db, key);
+    return typeof value === "function" ? value.bind(db) : value;
+  },
+});
 
 const defaultPool = (connectionString: string) => new Pool({ connectionString, max: 5 });
 
@@ -189,7 +210,7 @@ export function defineApp<
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const trace = env.TRACE === "on" ? new Trace() : undefined;
-      return withTiming(await serve(request, env, ctx, trace), trace);
+      return dbSlot.run({}, async () => withTiming(await serve(request, env, ctx, trace), trace));
     },
 
     // The Durable Object class behind live rooms, exported by the deploy's generated entry module.
@@ -201,8 +222,10 @@ export function defineApp<
         const pending: Promise<unknown>[] = [];
         const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options, once);
         try {
-          await onMessage(room, message as z.output<Message>, from, app);
-          await Promise.allSettled(pending);
+          await dbSlot.run({}, async () => {
+            await onMessage(room, message as z.output<Message>, from, app);
+            await Promise.allSettled(pending);
+          });
         } finally {
           close();
         }
@@ -232,6 +255,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let live: Live | undefined;
   let access: Access | undefined;
   let organizations: Organizations | undefined;
+  const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
   const app: AppContext<Env, Schema> = {
@@ -248,13 +272,20 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     get auth() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      return (auth ??= createAuth({
-        db: app.db as NodePgDatabase<Record<string, unknown>>,
-        secret: env.BETTER_AUTH_SECRET,
-        baseURL: env.APP_URL ?? new URL(request.url).origin,
-        email: app.email,
-        requireVerification: env.EMAIL_MODE === "send",
-      }));
+      const slot = dbSlot.getStore();
+      if (slot && !slot.db) slot.db = () => app.db as Db;
+      const baseURL = env.APP_URL ?? new URL(request.url).origin;
+      const requireVerification = env.EMAIL_MODE === "send";
+      const key = `${env.BETTER_AUTH_SECRET}\n${baseURL}\n${requireVerification}`;
+      const built = (once.auth ??= new Map());
+      if (!auth) {
+        auth = built.get(key);
+        if (!auth) {
+          auth = createAuth({ db: slot ? requestDb : (app.db as Db), secret: env.BETTER_AUTH_SECRET, baseURL, email: app.email, requireVerification });
+          if (slot) built.set(key, auth);
+        }
+      }
+      return auth;
     },
     get live() {
       return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
@@ -268,6 +299,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
         // Sent after the answer, so a slow or failing email never fails the grant itself.
         notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
+        memo: levels,
         ready: () => (once.staticPoints ??= applyStaticPoints(db, options.access?.points ?? {}).catch((error) => {
           once.staticPoints = undefined;
           throw error;
@@ -278,7 +310,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const appName = env.APP_NAME ?? new URL(origin).hostname;
-      return (organizations ??= createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
+      return (organizations ??= forgetLevelsOnChange(levels, createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
         app.waitUntil(
           app.email
             .send({
@@ -288,7 +320,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
             })
             .catch((error) => console.error("invitation email failed", error)),
         ),
-      ));
+      )));
     },
     session() {
       const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
@@ -307,6 +339,27 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     waitUntil: (promise) => ctx.waitUntil(promise),
   };
   return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
+}
+
+// Organization calls that only read; every other call can change who belongs where, and so any
+// level found earlier in the request.
+const ORGANIZATION_READS = new Set(["list", "get", "requireMember", "members", "invitations", "myInvitations", "team", "teams", "teamMembers"]);
+
+function forgetLevelsOnChange(levels: Map<string, number>, organizations: Organizations): Organizations {
+  return new Proxy(organizations, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      if (typeof value !== "function" || ORGANIZATION_READS.has(String(key))) return value;
+      return async (...args: unknown[]) => {
+        levels.clear();
+        try {
+          return await value.apply(target, args);
+        } finally {
+          levels.clear();
+        }
+      };
+    },
+  });
 }
 
 // A session for a caller proved some other way than a cookie, such as an OAuth or API token.

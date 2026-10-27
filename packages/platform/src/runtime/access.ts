@@ -369,20 +369,32 @@ export interface AccessOptions {
   notify?: (notice: ShareNotice) => Promise<void>;
   // Waited for before the first call, such as applying the app's static points.
   ready?: () => Promise<void>;
+  // The caller's levels already found in this request, by point; any change to access clears it.
+  // Pass one to clear it from outside, as organization changes do.
+  memo?: Map<string, number>;
 }
+
+// The calls that change access, after which no level found earlier can be trusted.
+const WRITES = ["create", "move", "remove", "inherit", "grant", "revoke", "link", "revokeLink"] as const;
 
 export function createAccess(db: Db, caller: () => Promise<Caller>, options: AccessOptions = {}): Access {
   const { notify, ready } = options;
+  const memo = options.memo ?? new Map<string, number>();
   let human: Promise<Who> | undefined;
   const person = () =>
     (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
   const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHashes: [], app: true, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
+    // A request asks about one point once; inside a transaction or as the app, it always asks.
     async function levelOf(at: Db, point: string): Promise<number> {
       checkPointId(point);
+      const remembered = at === db && me === person;
+      if (remembered && memo.has(point)) return memo.get(point)!;
       const [row] = await rows<{ level: number }>(at, sql`select ${levelSql(sql`${point}`, await me())} as level`);
-      return Number(row?.level ?? 0);
+      const level = Number(row?.level ?? 0);
+      if (remembered) memo.set(point, level);
+      return level;
     }
 
     async function need(at: Db, point: string, level: number): Promise<number> {
@@ -431,7 +443,7 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       return { g, n };
     }
 
-    return {
+    const api: Access = {
       async point(point) {
         await need(on, point, READ);
         const row = (await pointRow(on, point))!;
@@ -583,6 +595,18 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       in: (tx) => bound(tx as Db, me),
       asApp: () => bound(on, asApp),
     };
+    for (const name of WRITES) {
+      const write = api[name] as (...args: unknown[]) => Promise<unknown>;
+      (api as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        memo.clear();
+        try {
+          return await write(...args);
+        } finally {
+          memo.clear();
+        }
+      };
+    }
+    return api;
   }
 
   return bound(db, person);

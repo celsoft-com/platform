@@ -372,4 +372,30 @@ describe("Pages: sign-in and access", () => {
       expect(answer.status, path).not.toBe(401);
     }
   });
+
+  it("M10: leaving an organization in a request forgets the levels it found earlier in that request", async () => {
+    const cookie = await signUp();
+    const created = await wired.fetch(
+      new Request("https://app.test/api/platform/organizations", { method: "POST", headers: { "content-type": "application/json", origin: "https://app.test", cookie }, body: JSON.stringify({ name: "Leave" }) }),
+      { ...env, AUTH_ORGANIZATIONS: "on" },
+      ctx,
+    );
+    const org = ((await created.json()) as { id: string }).id;
+    const joiner = await signUp();
+    const session = await wired.fetch(new Request("https://app.test/api/auth/get-session", { headers: { cookie: joiner } }), env, ctx);
+    const { user } = (await session.json()) as { user: { id: string } };
+    const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    await pool.query(`insert into member (organization_id, user_id) values ($1, $2)`, [org, user.id]);
+    await pool.end();
+    const leaving = defineApp(
+      async (_req, app) => {
+        const before = await app.access.level(`organization:${org}`);
+        await app.organizations.removeMember(org, (await app.requireUser()).id);
+        return Response.json({ before, after: await app.access.level(`organization:${org}`) });
+      },
+      { pool: (c) => new Pool({ connectionString: c, max: 2 }) },
+    );
+    const answer = await leaving.fetch(new Request("https://app.test/api/leave", { headers: { cookie: joiner } }), { ...env, AUTH_ORGANIZATIONS: "on" }, ctx);
+    expect(await answer.json()).toEqual({ before: "read", after: null });
+  });
 });
