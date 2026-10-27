@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
+import type { StaticPoint } from "./runtime/access.js";
 import { LEGACY_BUCKET_MARKER, LEGACY_DNS_COMMENT, legacyNames } from "./legacy.js";
 import type { Branch, Hyperdrive, MailDomain, Ports, Repo, Zone } from "./ports.js";
 import type { Run } from "./run.js";
@@ -17,6 +18,8 @@ export interface Context {
   providers?: { neon: boolean; mail: boolean };
   // The paths the app's pages claim, read from its Worker.
   pages?: string[];
+  // The app's static control points, read from its Worker and written after migrations.
+  staticPoints?: Record<string, StaticPoint>;
   now?: () => Date;
 }
 
@@ -86,6 +89,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
     if (uri) {
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
+      await writeStaticPoints(ctx, uri, branch.name);
       if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
     } else {
       run.note(`would run migrations on ${branch.name}`);
@@ -235,6 +239,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     uri = await ports.neon.connectionUri(project, branch.id);
     await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
+    await writeStaticPoints(ctx, uri, DEV_BRANCH);
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
@@ -253,6 +258,13 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${appUrl}; email is captured to this terminal`);
   await ports.wrangler.dev(local, devSecrets, uri);
+}
+
+// Static points change only with code, so they are written when code ships, never by requests.
+async function writeStaticPoints({ config, ports, run, staticPoints = {} }: Context, uri: string, branch: string): Promise<void> {
+  const names = Object.keys(staticPoints);
+  if (!config.auth || names.length === 0) return;
+  await run.mutate(`write static control points ${names.join(", ")} on ${branch}`, () => ports.migrator.applyStaticPoints(uri, staticPoints), undefined);
 }
 
 // Resend chooses these records' names, so the comment is what ties each one to its app.

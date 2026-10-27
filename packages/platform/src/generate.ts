@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { parse } from "jsonc-parser";
 import { readConfigText } from "./config.js";
+import type { StaticPoint } from "./runtime/access.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 
 // Everything the package writes into an app lives here, gitignored: files the app's code may
@@ -16,7 +17,7 @@ export const generatedPath = (appDir: string, file: string) => join(appDir, GENE
 // from the endpoints the Worker declares. It reads only `worker` from platform.jsonc, so it runs
 // on install before any value platform.jsonc takes from the environment is set. Also returns the
 // paths the Worker's pages claim, which the deploy routes to it.
-export async function generate(appDir: string): Promise<{ files: string[]; pages: string[] }> {
+export async function generate(appDir: string): Promise<{ files: string[]; pages: string[]; staticPoints: Record<string, StaticPoint> }> {
   const workerFile = workerPath(await readConfigText(appDir));
   await mkdir(join(appDir, GENERATED_DIR), { recursive: true });
   await ensureIgnored(appDir);
@@ -34,7 +35,7 @@ export async function generate(appDir: string): Promise<{ files: string[]; pages
   ].join("\n");
   const file = generatedPath(appDir, "client.ts");
   await writeFile(file, client);
-  return { files: [relative(appDir, file), ...((await writeAgentsBlock(appDir)) ? ["AGENTS.md"] : [])], pages: declared.pages };
+  return { files: [relative(appDir, file), ...((await writeAgentsBlock(appDir)) ? ["AGENTS.md"] : [])], pages: declared.pages, staticPoints: declared.staticPoints };
 }
 
 const BLOCK_START = "<!-- @celsoft/platform:start -->";
@@ -68,14 +69,16 @@ export async function writeAgentsBlock(appDir: string): Promise<boolean> {
   return true;
 }
 
-// Bundles the Worker for Node with its packages left as imports, then reads the endpoints and
-// pages its default export declares; nothing it would do on a request runs.
-async function readApp(appDir: string, worker: string): Promise<{ endpoints: Record<string, Omit<Endpoint, "handler">>; pages: string[] }> {
+// Bundles the Worker for Node with its packages left as imports, then reads the endpoints, pages
+// and static points its default export declares; nothing it would do on a request runs.
+async function readApp(appDir: string, worker: string): Promise<{ endpoints: Record<string, Omit<Endpoint, "handler">>; pages: string[]; staticPoints: Record<string, StaticPoint> }> {
   const outfile = generatedPath(appDir, "endpoints-probe.mjs");
   await build({ entryPoints: [join(appDir, worker)], outfile, bundle: true, format: "esm", platform: "node", packages: "external", logLevel: "error" });
   try {
-    const module = (await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`)) as { default?: { endpoints?: Record<string, Omit<Endpoint, "handler">>; pages?: string[] } };
-    return { endpoints: module.default?.endpoints ?? {}, pages: module.default?.pages ?? [] };
+    const module = (await import(`${pathToFileURL(outfile).href}?t=${Date.now()}`)) as {
+      default?: { endpoints?: Record<string, Omit<Endpoint, "handler">>; pages?: string[]; staticPoints?: Record<string, StaticPoint> };
+    };
+    return { endpoints: module.default?.endpoints ?? {}, pages: module.default?.pages ?? [], staticPoints: module.default?.staticPoints ?? {} };
   } finally {
     await rm(outfile, { force: true });
   }

@@ -251,6 +251,10 @@ export class FakeMigrator implements Migrator {
     if (this.failWith) throw this.failWith;
     this.runs.push(databaseUrl);
   }
+  points: { databaseUrl: string; points: Record<string, unknown> }[] = [];
+  async applyStaticPoints(databaseUrl: string, points: Record<string, unknown>) {
+    this.points.push({ databaseUrl, points });
+  }
   dropped: string[] = [];
   async dropAll(databaseUrl: string) {
     this.dropped.push(databaseUrl);

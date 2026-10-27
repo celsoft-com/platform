@@ -1,3 +1,4 @@
+import type { StaticPoint } from "./runtime/access.js";
 export interface Branch {
   id: string;
   name: string;
@@ -116,6 +117,8 @@ export interface Migrator {
   generate(custom?: string): Promise<void>;
   upToDate(): Promise<boolean>;
   migrate(databaseUrl: string): Promise<void>;
+  // Writes the app's static control points, read from its Worker; run after migrations.
+  applyStaticPoints(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
   forgetSigningKeys(databaseUrl: string): Promise<void>;
 }

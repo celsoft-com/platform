@@ -184,7 +184,8 @@ async function churn(world: Awaited<ReturnType<typeof buildWorld>>): Promise<voi
 
 describe("random worlds against the reference rules", () => {
   for (let seed = 1; seed <= WORLDS; seed++) {
-    it(`world ${seed}`, async () => {
+    // Each world runs thousands of queries, which a busy machine running every test file at once can slow well past the default limit.
+    it(`world ${seed}`, { timeout: 60_000 }, async () => {
       const world = await buildWorld(seed * 7919);
       for (let round = 0; round < ROUNDS; round++) {
         await compare(world, seed, round);

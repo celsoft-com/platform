@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { applyStaticPoints, createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
@@ -94,14 +94,13 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   pages?: Page[];
   screens?: { stylesheet?: string };
   live?: LiveOptions<Env, Schema>;
-  // Control points declared in code, applied at every start; see StaticPoint.
+  // Control points declared in code, written by every deploy after migrations; see StaticPoint.
   access?: { points?: Record<string, StaticPoint> };
   pool?: (connectionString: string) => Pool;
 }
 
 // What one Worker instance does once: applying the app's static points before the first check.
 interface Once {
-  staticPoints?: Promise<void>;
   // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
   auth?: Map<string, Auth>;
 }
@@ -207,6 +206,8 @@ export function defineApp<
     endpoints: (options.endpoints ?? {}) as E,
     // Read by the deploy, which routes these paths to the Worker before static files.
     pages: pages?.claims ?? [],
+    // Read by the deploy, which writes them after migrations; requests never do.
+    staticPoints: options.access?.points ?? {},
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const trace = env.TRACE === "on" ? new Trace() : undefined;
@@ -300,10 +301,6 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
         notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
         memo: levels,
-        ready: () => (once.staticPoints ??= applyStaticPoints(db, options.access?.points ?? {}).catch((error) => {
-          once.staticPoints = undefined;
-          throw error;
-        })),
       }));
     },
     get organizations() {

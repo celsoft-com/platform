@@ -367,8 +367,6 @@ async function checkSameOrganization(on: Db, point: PointRow, g: GranteeColumns)
 export interface AccessOptions {
   // Announces a new grant to a person, after the answer.
   notify?: (notice: ShareNotice) => Promise<void>;
-  // Waited for before the first call, such as applying the app's static points.
-  ready?: () => Promise<void>;
   // The caller's levels already found in this request, by point; any change to access clears it.
   // Pass one to clear it from outside, as organization changes do.
   memo?: Map<string, number>;
@@ -378,12 +376,12 @@ export interface AccessOptions {
 const WRITES = ["create", "move", "remove", "inherit", "grant", "revoke", "link", "revokeLink"] as const;
 
 export function createAccess(db: Db, caller: () => Promise<Caller>, options: AccessOptions = {}): Access {
-  const { notify, ready } = options;
+  const { notify } = options;
   const memo = options.memo ?? new Map<string, number>();
   let human: Promise<Who> | undefined;
   const person = () =>
-    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
-  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHashes: [], app: true, cap: null });
+    (human ??= caller().then(async ({ userId, link, cap }) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
+  const asApp: () => Promise<Who> = async () => ({ userId: null, linkHashes: [], app: true, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
     // A request asks about one point once; inside a transaction or as the app, it always asks.
@@ -613,7 +611,8 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
 }
 
 // Writes the app's static points, as declared in code: each is created or updated, and its grants
-// replaced. Points no longer declared are left alone. Run once per Worker start, before any check.
+// replaced. Points no longer declared are left alone. Run by every deploy after migrations, so
+// requests never write them.
 export async function applyStaticPoints(db: Db, points: Record<string, StaticPoint>): Promise<void> {
   const names = Object.keys(points);
   if (names.length === 0) return;

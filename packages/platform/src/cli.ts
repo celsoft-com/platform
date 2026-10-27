@@ -103,9 +103,9 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   // The app's code imports these, so they are fresh for every run that builds or serves it.
-  const pages = command.name === "dev" || command.name === "deploy" || command.name === "preview" ? (await generate(appDir)).pages : [];
+  const declared = command.name === "dev" || command.name === "deploy" || command.name === "preview" ? await generate(appDir) : { pages: [], staticPoints: {} };
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
-  const ctx = { ...(await context(appDir, app.config, dryRun)), pages };
+  const ctx = { ...(await context(appDir, app.config, dryRun)), pages: declared.pages, staticPoints: declared.staticPoints };
   if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
 
   if (command.name === "cleanup") {
