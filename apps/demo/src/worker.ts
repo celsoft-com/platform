@@ -122,11 +122,21 @@ const print = page({
 // Everything said in a room: new notes from the server, typing notices from browsers.
 const RoomMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: GroupNote }), z.object({ type: z.literal("typing") })]);
 
-// Every hand-written /api route here is private, so the platform has already checked the session.
+// Hand-written routes. The download is public so a signed-out link holder can use it, and checks
+// the note's point; every other route here is private, so the platform has already checked the session.
 export default defineApp(
   async (request, app) => {
     const { db, files, requireUser } = app;
     const url = new URL(request.url);
+
+    const download = /^\/api\/public\/notes\/([0-9a-f-]{36})\/attachment$/.exec(url.pathname);
+    if (download && request.method === "GET") {
+      await app.access.check(download[1]!);
+      const [note] = await db.select({ ...columns, userId: notes.userId }).from(notes).where(eq(notes.id, download[1]!));
+      if (!note?.attachmentName) return new Response("not found", { status: 404 });
+      return files.response(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`);
+    }
+
     const user = await requireUser();
 
     if (url.pathname === "/api/notes" && request.method === "GET") {
@@ -156,14 +166,6 @@ export default defineApp(
       });
       if (attachment) await files.put(`${noteFolder(user.id, note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
       return Response.json(note, { status: 201 });
-    }
-
-    const download = /^\/api\/notes\/([0-9a-f-]{36})\/attachment$/.exec(url.pathname);
-    if (download && request.method === "GET") {
-      await app.access.check(download[1]!);
-      const [note] = await db.select({ ...columns, userId: notes.userId }).from(notes).where(eq(notes.id, download[1]!));
-      if (!note?.attachmentName) return new Response("not found", { status: 404 });
-      return files.response(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`);
     }
 
     return new Response("not found", { status: 404 });

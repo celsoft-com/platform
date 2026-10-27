@@ -21,7 +21,7 @@ note=$(curl -s -b "$jar" -H "origin: $base" -F body="first note" -F "file=@$atta
 id=$(echo "$note" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 check "create note with attachment" "$([ -n "$id" ] && echo "id $id" || echo "$note")"
 check "list notes" "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
-check "download attachment" "$(curl -s -b "$jar" "$base/api/notes/$id/attachment")"
+check "download attachment" "$(curl -s -b "$jar" "$base/api/public/notes/$id/attachment")"
 
 # Access: the note is a control point its author manages, shared and linked through the demo's endpoints.
 json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
@@ -33,7 +33,8 @@ jar2=$(mktemp)
 friend="friend-$RANDOM@example.com"
 json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null
 check "someone else's note refused (404)" "$(status -b "$jar2" "$note_url")"
-check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/notes/$id/attachment")"
+check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/public/notes/$id/attachment")"
+check "attachment refused signed out (404)" "$(status "$base/api/public/notes/$id/attachment")"
 check "share by email" "$(status -b "$jar" -d '{"email":"'$friend'","level":"write"}' "$base/api/notes/$id/shares")"
 check "unconfirmed address still refused (404)" "$(status -b "$jar2" "$note_url")"
 check "nothing shared with them yet" "$(json -b "$jar2" "$base/api/shared-notes")"
@@ -64,7 +65,7 @@ jar3=$(mktemp)
 check "link kept as a cookie" "$(status -c "$jar3" -d '{"link":"'$read_token'"}' "$base/api/platform/link")"
 check "altered link not kept (404)" "$(status -d '{"link":"x'$read_token'"}' "$base/api/platform/link")"
 check "link cookie opens the page signed out" "$(curl -s -b "$jar3" "$base/print/$id" | grep -c 'edited by link')"
-check "link cookie downloads the attachment" "$(curl -s -b "$jar3" "$base/api/notes/$id/attachment")"
+check "link cookie downloads the attachment" "$(curl -s -b "$jar3" "$base/api/public/notes/$id/attachment")"
 check "page with a bad id (404)" "$(page -b "$jar" "$base/print/not-a-note")"
 check "page path not routed (404)" "$(page -b "$jar" "$base/print/$id/more")"
 check "page only reads (405)" "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/print")"

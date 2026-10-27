@@ -82,7 +82,7 @@ export async function notePage(call, id, ctx) {
       ),
     );
   } else page.append(section("Note", el("p", { className: "body", textContent: note.body })));
-  if (note.attachmentName) page.append(el("p", {}, link(`Download ${note.attachmentName}`, `/api/notes/${id}/attachment`)));
+  if (note.attachmentName) page.append(el("p", {}, link(`Download ${note.attachmentName}`, `/api/public/notes/${id}/attachment`)));
   // Rendered by the Worker, not this app: a page the platform serves at a claimed path.
   page.append(el("p", {}, link("Printable page", `/print/${id}`)));
 
