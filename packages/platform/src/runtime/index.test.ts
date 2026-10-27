@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
-import { defineApp } from "./index.js";
+import { defineApp, EndpointError } from "./index.js";
 
 function fakePool() {
   const calls: string[] = [];
@@ -58,6 +58,15 @@ describe("defineApp", () => {
       throw new Response("nope", { status: 418 });
     });
     expect((await app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).status).toBe(418);
+  });
+
+  it("answers a thrown EndpointError with its status, as endpoints do", async () => {
+    const app = defineApp(() => {
+      throw new EndpointError(404, "not found");
+    });
+    const response = await app.fetch(new Request("https://x/api/thing"), {}, fakeCtx().ctx);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "not found" });
   });
 
   it("refuses a form posted from another site", async () => {

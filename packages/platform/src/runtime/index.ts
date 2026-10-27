@@ -11,6 +11,7 @@ import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH,
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
+import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen } from "./screens.js";
 
 export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
@@ -149,6 +150,8 @@ export function defineApp<
         return await handle(request, app);
       } catch (thrown) {
         if (thrown instanceof Response) return thrown;
+        // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
+        if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
         throw thrown;
       } finally {
         close();
