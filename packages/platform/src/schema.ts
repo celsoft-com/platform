@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uuid } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
-// Better Auth's tables, with its core, admin and organization fields, transcribed from
+// Better Auth's tables, with its core and admin fields, transcribed from
 // getAuthTables() in the installed version; schema.test.ts fails when they drift apart.
 // Property keys stay camelCase because the Drizzle adapter matches Better Auth's field names
 // against them; column names are snake_case like the rest of an app's tables.
@@ -39,8 +39,6 @@ export const session = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     impersonatedBy: uuid("impersonated_by"),
-    activeOrganizationId: uuid("active_organization_id"),
-    activeTeamId: uuid("active_team_id"),
     ...timestamps(),
   },
   (t) => [index("session_user_id_idx").on(t.userId)],
@@ -77,83 +75,6 @@ export const verification = pgTable(
     ...timestamps(),
   },
   (t) => [index("verification_identifier_idx").on(t.identifier)],
-);
-
-// Organization tables exist whenever auth is on, so turning organizations off and on again
-// only hides and restores routes; no migration ever drops their data.
-export const organization = pgTable("organization", {
-  id: id(),
-  name: text("name").notNull(),
-  slug: text("slug").notNull().unique(),
-  logo: text("logo"),
-  metadata: text("metadata"),
-  ...timestamps(),
-});
-
-export const member = pgTable(
-  "member",
-  {
-    id: id(),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    role: text("role").notNull().default("member"),
-    ...timestamps(),
-  },
-  (t) => [index("member_organization_id_idx").on(t.organizationId), index("member_user_id_idx").on(t.userId)],
-);
-
-export const invitation = pgTable(
-  "invitation",
-  {
-    id: id(),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    email: text("email").notNull(),
-    role: text("role"),
-    teamId: uuid("team_id"),
-    status: text("status").notNull().default("pending"),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    inviterId: uuid("inviter_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    ...timestamps(),
-  },
-  (t) => [index("invitation_organization_id_idx").on(t.organizationId), index("invitation_email_idx").on(t.email)],
-);
-
-export const team = pgTable(
-  "team",
-  {
-    id: id(),
-    name: text("name").notNull(),
-    memberCount: integer("member_count").notNull().default(0),
-    organizationId: uuid("organization_id")
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    ...timestamps(),
-  },
-  (t) => [index("team_organization_id_idx").on(t.organizationId)],
-);
-
-export const teamMember = pgTable(
-  "team_member",
-  {
-    id: id(),
-    teamId: uuid("team_id")
-      .notNull()
-      .references(() => team.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    membershipKey: text("membership_key").unique(),
-    ...timestamps(),
-  },
-  (t) => [index("team_member_team_id_idx").on(t.teamId), index("team_member_user_id_idx").on(t.userId)],
 );
 
 // The JWT and MCP plugins: signing keys, and the OAuth clients, tokens and consents of AI clients
@@ -337,24 +258,112 @@ export const oauthClientAssertion = pgTable("oauth_client_assertion", {
   expiresAt: at("expires_at").notNull(),
 });
 
-// Access: the item tree, grants and links behind app.access; see docs/design.md, App Code, Access.
-// Levels are stored as numbers, 1 read to 5 manage. An item's parent is another item, or the user
-// or organization at the top of its chain, named by the reserved kinds "user" and "organization".
+// The platform's own organizations, replacing Better Auth's organization plugin so no role checks
+// run beside control points; see docs/design.md, Auth behavior, Organizations. Members carry no
+// roles: each organization's built-in Admins team, the one team with `admins` set, does what an
+// admin role would. The tables exist whenever auth is on, so turning organizations off and on
+// again only hides and restores routes.
 
-export const accessItem = pgTable(
-  "access_item",
+export const organization = pgTable("organization", {
+  id: id(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  ...timestamps(),
+});
+
+export const member = pgTable(
+  "member",
   {
-    kind: text("kind").notNull(),
-    id: text("id").notNull(),
-    parentKind: text("parent_kind").notNull(),
-    parentId: text("parent_id").notNull(),
-    restricted: boolean("restricted").notNull().default(false),
+    id: id(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    ...timestamps(),
+  },
+  (t) => [unique("member_once").on(t.organizationId, t.userId), index("member_user_id_idx").on(t.userId)],
+);
+
+export const team = pgTable(
+  "team",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    admins: boolean("admins").notNull().default(false),
+    ...timestamps(),
+  },
+  (t) => [index("team_organization_id_idx").on(t.organizationId), uniqueIndex("team_one_admins").on(t.organizationId).where(sql`${t.admins}`)],
+);
+
+// A team member is also a member of the team's organization; leaving the organization leaves its
+// teams in the same transaction, and checks ignore a team row whose user left anyway.
+export const teamMember = pgTable(
+  "team_member",
+  {
+    id: id(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => team.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    ...timestamps(),
+  },
+  (t) => [unique("team_member_once").on(t.teamId, t.userId), index("team_member_user_id_idx").on(t.userId)],
+);
+
+// Accepted by a signed-in user whose confirmed email matches, so the id in the link is no secret.
+export const invitation = pgTable(
+  "invitation",
+  {
+    id: id(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    teamId: uuid("team_id").references(() => team.id, { onDelete: "cascade" }),
+    expiresAt: at("expires_at").notNull(),
+    inviterId: uuid("inviter_id").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => [unique("invitation_once").on(t.organizationId, t.email), index("invitation_email_idx").on(t.email), check("invitation_email_lower", sql`${t.email} = lower(${t.email})`)],
+);
+
+// Access: control points, their grants and links behind app.access; see docs/design.md, App Code,
+// Access. Levels are stored as numbers, 1 read to 5 manage. A point's id is the resource it gates,
+// any globally unique text the app chooses; ids starting `organization:` and `team:` belong to the
+// points the platform makes for each organization and team. `organization_id` is the organization
+// a point sits under, kept on every point so admins and the across-organization rule need no walk.
+
+export const accessPoint = pgTable(
+  "access_point",
+  {
+    id: text("id").primaryKey(),
+    parentId: text("parent_id").references((): AnyPgColumn => accessPoint.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "cascade" }),
+    forOrganization: uuid("for_organization")
+      .unique()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    forTeam: uuid("for_team")
+      .unique()
+      .references(() => team.id, { onDelete: "cascade" }),
+    inherits: boolean("inherits").notNull().default(false),
+    static: boolean("static").notNull().default(false),
+    createdBy: uuid("created_by").references(() => user.id, { onDelete: "set null" }),
     ...timestamps(),
   },
   (t) => [
-    primaryKey({ columns: [t.kind, t.id] }),
-    index("access_item_parent_idx").on(t.parentKind, t.parentId),
-    check("access_item_kind", sql`${t.kind} not in ('user', 'organization')`),
+    index("access_point_parent_idx").on(t.parentId),
+    index("access_point_organization_idx").on(t.organizationId),
+    check("access_point_id", sql`length(${t.id}) between 1 and 200`),
+    check("access_point_not_own_parent", sql`${t.parentId} is distinct from ${t.id}`),
+    check("access_point_organization_id", sql`(${t.forOrganization} is not null) = (${t.id} like 'organization:%')`),
+    check("access_point_team_id", sql`(${t.forTeam} is not null) = (${t.id} like 'team:%')`),
   ],
 );
 
@@ -362,22 +371,25 @@ export const accessGrant = pgTable(
   "access_grant",
   {
     id: id(),
-    itemKind: text("item_kind").notNull(),
-    itemId: text("item_id").notNull(),
+    pointId: text("point_id")
+      .notNull()
+      .references(() => accessPoint.id, { onDelete: "cascade" }),
     userId: uuid("user_id").references(() => user.id, { onDelete: "cascade" }),
     teamId: uuid("team_id").references(() => team.id, { onDelete: "cascade" }),
     organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "cascade" }),
+    everyone: boolean("everyone"),
     email: text("email"),
     level: smallint("level").notNull(),
     grantedBy: uuid("granted_by").references(() => user.id, { onDelete: "set null" }),
     ...timestamps(),
   },
   (t) => [
-    foreignKey({ columns: [t.itemKind, t.itemId], foreignColumns: [accessItem.kind, accessItem.id], name: "access_grant_item_fk" }).onDelete("cascade"),
-    unique("access_grant_once").on(t.itemKind, t.itemId, t.userId, t.teamId, t.organizationId, t.email).nullsNotDistinct(),
-    check("access_grant_one_grantee", sql`num_nonnulls(${t.userId}, ${t.teamId}, ${t.organizationId}, ${t.email}) = 1`),
+    unique("access_grant_once").on(t.pointId, t.userId, t.teamId, t.organizationId, t.everyone, t.email).nullsNotDistinct(),
+    check("access_grant_one_grantee", sql`num_nonnulls(${t.userId}, ${t.teamId}, ${t.organizationId}, ${t.everyone}, ${t.email}) = 1`),
     check("access_grant_level", sql`${t.level} between 1 and 5`),
+    check("access_grant_everyone", sql`${t.everyone} is null or (${t.everyone} and ${t.level} = 1)`),
     check("access_grant_email_lower", sql`${t.email} = lower(${t.email})`),
+    index("access_grant_point_idx").on(t.pointId),
     index("access_grant_user_idx").on(t.userId),
     index("access_grant_team_idx").on(t.teamId),
     index("access_grant_organization_idx").on(t.organizationId),
@@ -390,19 +402,16 @@ export const accessLink = pgTable(
   "access_link",
   {
     id: id(),
-    itemKind: text("item_kind").notNull(),
-    itemId: text("item_id").notNull(),
+    pointId: text("point_id")
+      .notNull()
+      .references(() => accessPoint.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull().unique(),
     level: smallint("level").notNull(),
     expiresAt: at("expires_at"),
     createdBy: uuid("created_by").references(() => user.id, { onDelete: "set null" }),
     ...timestamps(),
   },
-  (t) => [
-    foreignKey({ columns: [t.itemKind, t.itemId], foreignColumns: [accessItem.kind, accessItem.id], name: "access_link_item_fk" }).onDelete("cascade"),
-    check("access_link_level", sql`${t.level} between 1 and 3`),
-    index("access_link_item_idx").on(t.itemKind, t.itemId),
-  ],
+  (t) => [check("access_link_level", sql`${t.level} between 1 and 3`), index("access_link_point_idx").on(t.pointId)],
 );
 
 export const authSchema = {
@@ -410,11 +419,6 @@ export const authSchema = {
   session,
   account,
   verification,
-  organization,
-  member,
-  invitation,
-  team,
-  teamMember,
   jwks,
   oauthClient,
   oauthResource,
@@ -425,4 +429,6 @@ export const authSchema = {
   oauthClientAssertion,
 };
 
-export const accessSchema = { accessItem, accessGrant, accessLink };
+export const organizationSchema = { organization, member, team, teamMember, invitation };
+
+export const accessSchema = { accessPoint, accessGrant, accessLink };

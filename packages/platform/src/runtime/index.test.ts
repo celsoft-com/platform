@@ -89,7 +89,16 @@ describe("with auth", () => {
   });
 
   it("hides organization routes unless organizations are on", async () => {
-    expect((await call("/api/auth/organization/list", undefined, { AUTH_ORGANIZATIONS: "off" })).status).toBe(404);
+    expect((await call("/api/platform/organizations", undefined, { AUTH_ORGANIZATIONS: "off" })).status).toBe(404);
+  });
+
+  it("asks for sign-in on organization routes", async () => {
+    expect((await call("/api/platform/organizations", undefined, { AUTH_ORGANIZATIONS: "on" })).status).toBe(401);
+  });
+
+  it("leaves Better Auth's own organization routes unserved", async () => {
+    const response = await call("/api/auth/organization/create", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { AUTH_ORGANIZATIONS: "on" });
+    expect(response.status).toBe(404);
   });
 
   it("answers 429 once the rate limit is spent", async () => {

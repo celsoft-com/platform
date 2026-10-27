@@ -1,18 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { Pool } from "pg";
 import { freshDatabase, world } from "../../test/database.js";
-import { createAccess, MAX_DEPTH, shareMessage, type Access, type Level, type ShareNotice } from "./access.js";
+import { applyStaticPoints, MAX_DEPTH, organizationPoint, shareMessage, teamPoint, type Level, type ShareNotice } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
-import { apiHandler, endpoint } from "./endpoints.js";
-import { defineApp } from "./index.js";
-import { serveMcp } from "./mcp.js";
 
 // One test per row of docs/access-rules.md, named by its row, then the stranger cases around them.
+// Organizations, endpoints and attacks have files of their own.
 
-const { db, pool, url } = await freshDatabase();
+const { db, pool } = await freshDatabase();
 const w = world(db, pool);
 const uid = () => randomUUID();
 
@@ -21,1287 +17,1013 @@ const refused = async (work: Promise<unknown>, status = 404) => {
   expect(error, "expected a refusal").toBeInstanceOf(EndpointError);
   expect((error as EndpointError).status).toBe(status);
 };
-const appError = async (work: Promise<unknown>) => {
+const appError = async (work: Promise<unknown>, message?: RegExp) => {
   const error = await work.then(() => undefined, (e: unknown) => e);
   expect(error, "expected an error in the app's code").toBeInstanceOf(Error);
   expect(error).not.toBeInstanceOf(EndpointError);
+  if (message) expect((error as Error).message).toMatch(message);
 };
-const parentOf = async (kind: string, id: string) =>
-  (await w.query(`select parent_kind, parent_id from access_item where kind = $1 and id = $2`, [kind, id])).rows[0] ?? null;
 const count = async (table: string, where: string, values: unknown[]) => Number((await w.query(`select count(*) from ${table} where ${where}`, values)).rows[0].count);
+const pointOf = async (id: string) => (await w.query(`select * from access_point where id = $1`, [id])).rows[0] ?? null;
 
-// A user's own folder holding a page.
+// A person's own folder holding a page that inherits from it.
 async function personal() {
   const owner = await w.user();
-  const folder = uid();
-  const page = uid();
-  await w.item("folder", folder, "user", owner);
-  await w.item("page", page, "folder", folder);
-  return { owner, folder, page, as: w.as(owner) };
+  const as = w.as(owner);
+  const folder = `folder-${uid()}`;
+  const page = `page-${uid()}`;
+  await as.create(folder);
+  await as.create(page, { parent: folder, inherit: true });
+  return { owner, folder, page, as };
 }
 
-// An organization with one person in each role, an outsider, and a folder holding a page.
+// An organization with its creator as admin, a plain member, a team with one member, an
+// outsider, and a team folder under the team's point holding a page.
 async function company() {
-  const org = await w.org();
-  const [owner, admin, member, outsider] = [await w.user(), await w.user(), await w.user(), await w.user()];
-  await w.member(org, owner, "owner");
-  await w.member(org, admin, "admin");
-  await w.member(org, member, "member");
-  const folder = uid();
-  const page = uid();
-  await w.item("folder", folder, "organization", org);
-  await w.item("page", page, "folder", folder);
-  return { org, owner, admin, member, outsider, folder, page };
+  const admin = await w.user();
+  const { id: org, admins } = await w.org(admin);
+  const [member, teammate, outsider] = [await w.user(), await w.user(), await w.user()];
+  await w.member(org, member);
+  await w.member(org, teammate);
+  const team = await w.team(org, admin);
+  await w.join(team, teammate);
+  const folder = `folder-${uid()}`;
+  const page = `page-${uid()}`;
+  await w.as(admin).create(folder, { parent: teamPoint(team), inherit: true });
+  await w.as(admin).create(page, { parent: folder, inherit: true });
+  return { org, admins, admin, member, teammate, outsider, team, folder, page };
 }
 
 describe("Levels", () => {
   it("L1: asked for read, has read: allowed", async () => {
     const { as, page } = await personal();
     const reader = await w.user();
-    await as.share("page", page, { user: reader }, "read");
-    expect(await w.as(reader).can("page", page, "read")).toBe(true);
+    await as.grant(page, { user: reader }, "read");
+    expect(await w.as(reader).can(page, "read")).toBe(true);
+    expect(await w.as(reader).check(page)).toBe("read");
   });
 
-  it("L2: asked for write, has read: refused", async () => {
+  it("L2: asked for write, has read: refused as 404", async () => {
     const { as, page } = await personal();
     const reader = await w.user();
-    await as.share("page", page, { user: reader }, "read");
-    expect(await w.as(reader).can("page", page, "write")).toBe(false);
-    await refused(w.as(reader).require("page", page, "write"));
+    await as.grant(page, { user: reader }, "read");
+    expect(await w.as(reader).can(page, "write")).toBe(false);
+    await refused(w.as(reader).require(page, "write"));
   });
 
-  it("L3: asked for read, has manage: each level includes those below", async () => {
+  it("L3: has manage: every level is included", async () => {
     const { as, page } = await personal();
-    for (const level of ["read", "create", "write", "delete", "manage"] as Level[]) expect(await as.can("page", page, level)).toBe(true);
+    for (const level of ["read", "create", "write", "delete", "manage"] as Level[]) expect(await as.can(page, level)).toBe(true);
+    expect(await as.require(page, "read")).toBe("manage");
   });
 
-  it("L4: no level at all: refused, as 404", async () => {
+  it("L4: no level at all: level is null, check is 404", async () => {
     const { page } = await personal();
     const stranger = w.as(await w.user());
-    expect(await stranger.level("page", page)).toBe(null);
-    expect(await stranger.can("page", page, "read")).toBe(false);
-    await refused(stranger.require("page", page, "read"));
+    expect(await stranger.level(page)).toBe(null);
+    await refused(stranger.check(page));
   });
 
-  it("L5: an unknown level is an error in the app's code, never allowed", async () => {
+  it("L5: an unknown level name is an error in the app's code, never allowed", async () => {
     const { as, page } = await personal();
-    await appError(as.can("page", page, "admin" as Level));
-    await appError(as.require("page", page, "owner" as Level));
-    await appError(as.share("page", page, { user: await w.user() }, "superuser" as Level));
-    await appError(as.link("page", page, "" as Level));
-    await appError(as.accessible("page", "READ" as Level, sql`'x'`));
+    await appError(as.can(page, "admin" as Level));
+    await appError(as.require(page, "" as Level));
+    await appError(as.grant(page, { user: await w.user() }, "owner" as Level));
   });
 
-  it("refuses the same way for a missing item and an item the caller cannot see", async () => {
+  it("L6: a point that does not exist answers exactly like one the caller cannot see", async () => {
     const { page } = await personal();
     const stranger = w.as(await w.user());
-    const hidden = await stranger.require("page", page, "read").catch((e: EndpointError) => [e.status, e.message]);
-    const missing = await stranger.require("page", uid(), "read").catch((e: EndpointError) => [e.status, e.message]);
-    expect(hidden).toEqual(missing);
+    const missing = await stranger.check(`page-${uid()}`).catch((e: EndpointError) => [e.status, e.message]);
+    const hidden = await stranger.check(page).catch((e: EndpointError) => [e.status, e.message]);
+    expect(missing).toEqual(hidden);
+    expect(await stranger.level(`page-${uid()}`)).toBe(null);
   });
 
-  it("refuses reserved and malformed kinds and ids as errors in the app's code", async () => {
-    const { as, owner } = await personal();
-    await appError(as.can("user", owner, "read"));
-    await appError(as.can("organization", uid(), "read"));
-    await appError(as.can("Page", uid(), "read"));
-    await appError(as.can("page", "", "read"));
-    await appError(as.can("page", "x".repeat(201), "read"));
-    await appError(as.place("user", uid(), "user", owner));
-  });
-
-  it("never lets a kind or id smuggle SQL", async () => {
-    const { as, page } = await personal();
-    expect(await as.can("page", `${page}' or '1'='1`, "read")).toBe(false);
-    expect(await w.as(await w.user()).can("page", `x' or 1=1 --`, "read")).toBe(false);
-    expect(await count("access_item", "true", [])).toBeGreaterThan(0);
+  it("signed out with no link: nothing, even on a point that exists", async () => {
+    const { page } = await personal();
+    expect(await w.as(null).level(page)).toBe(null);
   });
 });
 
-describe("Ownership and organizations", () => {
-  it("O1: a user owns an item placed directly under them: manage, and on everything inside", async () => {
-    const { as, folder, page } = await personal();
-    expect(await as.level("folder", folder)).toBe("manage");
-    expect(await as.level("page", page)).toBe("manage");
+describe("Points", () => {
+  it("P1: whoever creates a point gets manage on it", async () => {
+    const owner = await w.user();
+    const id = `note-${uid()}`;
+    await w.as(owner).create(id);
+    expect(await w.as(owner).level(id)).toBe("manage");
+    expect(await w.as(owner).grants(id)).toEqual([{ to: { user: owner }, level: "manage", grantedBy: owner }]);
   });
 
-  it("O2: member: read", async () => {
-    const c = await company();
-    expect(await w.as(c.member).level("folder", c.folder)).toBe("read");
-    expect(await w.as(c.member).level("page", c.page)).toBe("read");
+  it("P2: creating needs a signed-in user", async () => {
+    await refused(w.as(null).create(`note-${uid()}`), 401);
+    await refused(w.as("not-a-uuid").create(`note-${uid()}`), 401);
   });
 
-  it("O3: admin: delete", async () => {
-    const c = await company();
-    expect(await w.as(c.admin).level("page", c.page)).toBe("delete");
+  it("P3: creating under a parent needs create on it; less is a 404 and nothing is made", async () => {
+    const { as, folder } = await personal();
+    const [writer, reader] = [await w.user(), await w.user()];
+    await as.grant(folder, { user: reader }, "read");
+    await as.grant(folder, { user: writer }, "create");
+    const refusedId = `page-${uid()}`;
+    await refused(w.as(reader).create(refusedId, { parent: folder }));
+    expect(await pointOf(refusedId)).toBe(null);
+    const made = `page-${uid()}`;
+    await w.as(writer).create(made, { parent: folder });
+    expect((await pointOf(made)).parent_id).toBe(folder);
   });
 
-  it("O4: owner: manage", async () => {
-    const c = await company();
-    expect(await w.as(c.owner).level("page", c.page)).toBe("manage");
+  it("P4: a parent that does not exist is a 404", async () => {
+    const owner = await w.user();
+    await refused(w.as(owner).create(`page-${uid()}`, { parent: `folder-${uid()}` }));
   });
 
-  it("O5: not in the organization: refused", async () => {
-    const c = await company();
-    expect(await w.as(c.outsider).level("page", c.page)).toBe(null);
+  it("P5: an id already in use is a 409, and the existing point is untouched", async () => {
+    const { as, page, owner } = await personal();
+    const other = await w.user();
+    await refused(w.as(other).create(page), 409);
+    expect(await as.grants(page)).toEqual([{ to: { user: owner }, level: "manage", grantedBy: owner }]);
+    expect(await w.as(other).level(page)).toBe(null);
   });
 
-  it("O6: member removed: refused on the next request", async () => {
-    const c = await company();
-    const as = w.as(c.member);
-    expect(await as.level("page", c.page)).toBe("read");
-    await w.leave(c.org, c.member);
-    expect(await as.level("page", c.page)).toBe(null);
+  it("P6: ids starting organization: or team: belong to the platform", async () => {
+    const owner = await w.user();
+    await appError(w.as(owner).create(`organization:${uid()}`), /platform/);
+    await appError(w.as(owner).create(`team:${uid()}`), /platform/);
+    await w.as(owner).create(`organizations:${uid()}`);
+    await w.as(owner).create(`my-team:${uid()}`);
   });
 
-  it("O7: role changed from admin to member: read from the next request", async () => {
-    const c = await company();
-    const as = w.as(c.admin);
-    expect(await as.level("page", c.page)).toBe("delete");
-    await w.setRole(c.org, c.admin, "member");
-    expect(await as.level("page", c.page)).toBe("read");
+  it("P7: an id must be 1 to 200 characters", async () => {
+    const owner = w.as(await w.user());
+    await appError(owner.create(""));
+    await appError(owner.create("x".repeat(201)));
+    await appError(owner.check(""));
+    await appError(owner.create(42 as unknown as string));
+    await owner.create("y".repeat(200));
   });
 
-  it("O8: owner of a different organization: refused", async () => {
-    const c = await company();
-    const other = await w.org();
-    await w.member(other, c.outsider, "owner");
-    expect(await w.as(c.outsider).level("page", c.page)).toBe(null);
+  it("P8: initial grants are given alongside the creator's manage", async () => {
+    const owner = await w.user();
+    const reader = await w.user();
+    const id = `note-${uid()}`;
+    await w.as(owner).create(id, { grants: [{ to: { user: reader }, level: "write" }, { to: { everyone: true }, level: "read" }] });
+    expect(await w.as(reader).level(id)).toBe("write");
+    expect(await w.as(null).level(id)).toBe("read");
+    expect(await w.as(owner).level(id)).toBe("manage");
   });
 
-  it("O9: leaving an organization keeps manage on items the user owns personally", async () => {
-    const c = await company();
-    const mine = uid();
-    await w.item("folder", mine, "user", c.member);
-    await w.leave(c.org, c.member);
-    expect(await w.as(c.member).level("folder", mine)).toBe("manage");
+  it("P8: a bad initial grant creates nothing", async () => {
+    const owner = await w.user();
+    const id = `note-${uid()}`;
+    await refused(w.as(owner).create(id, { grants: [{ to: { user: uid() }, level: "read" }] }));
+    expect(await pointOf(id)).toBe(null);
+    await appError(w.as(owner).create(id, { grants: [{ to: { everyone: true }, level: "write" }] }));
+    expect(await pointOf(id)).toBe(null);
   });
 
-  it("takes the highest of several roles held at once", async () => {
+  it("P9: a point takes its parent's organization; a personal one has none", async () => {
     const c = await company();
-    await w.setRole(c.org, c.member, "member,admin");
-    expect(await w.as(c.member).level("page", c.page)).toBe("delete");
-    await w.setRole(c.org, c.member, " member , owner ");
-    expect(await w.as(c.member).level("page", c.page)).toBe("manage");
+    const { page } = await personal();
+    expect((await pointOf(c.page)).organization_id).toBe(c.org);
+    expect((await pointOf(page)).organization_id).toBe(null);
   });
 
-  it("gives nothing for a role it does not know", async () => {
-    const c = await company();
-    await w.setRole(c.org, c.member, "guest");
-    expect(await w.as(c.member).level("page", c.page)).toBe(null);
-    await w.setRole(c.org, c.member, "");
-    expect(await w.as(c.member).level("page", c.page)).toBe(null);
+  it(`P10: points sit at most ${MAX_DEPTH} deep`, async () => {
+    const owner = w.as(await w.user());
+    let parent: string | undefined;
+    for (let i = 0; i < MAX_DEPTH; i++) {
+      const id = `deep-${uid()}`;
+      await owner.create(id, { parent, inherit: true });
+      parent = id;
+    }
+    await refused(owner.create(`deep-${uid()}`, { parent }), 409);
+    expect(await owner.level(parent!)).toBe("manage");
   });
 
-  it("does not let a user id stand in for an organization id, or the reverse", async () => {
-    const c = await company();
-    const sneaky = uid();
-    await w.item("folder", sneaky, "user", c.org);
-    expect(await w.as(c.owner).level("folder", sneaky)).toBe(null);
-    const other = uid();
-    await w.item("folder", other, "organization", c.owner);
-    expect(await w.as(c.owner).level("folder", other)).toBe(null);
+  it("P11: the app acting as itself creates with no creator grant", async () => {
+    const id = `job-${uid()}`;
+    const someone = await w.user();
+    await w.as(someone).asApp().create(id);
+    expect(await count("access_grant", "point_id = $1", [id])).toBe(0);
+    expect(await w.as(someone).level(id)).toBe(null);
+    expect(await w.as(someone).asApp().level(id)).toBe("manage");
   });
 
-  it("gives a signed-out caller nothing from ownership", async () => {
-    const c = await company();
-    expect(await w.as(null).level("page", c.page)).toBe(null);
+  it("P12: ids with quotes, wildcards and other scripts are taken literally", async () => {
+    const owner = w.as(await w.user());
+    const stranger = w.as(await w.user());
+    for (const id of [`'; drop table access_point; --${uid()}`, `%${uid()}`, `_${uid()}`, `日本-${uid()}`, `a\\b-${uid()}`, `null-${uid()}`]) {
+      await owner.create(id);
+      expect(await owner.level(id)).toBe("manage");
+      expect(await stranger.level(id)).toBe(null);
+    }
+    expect(await count("access_point", "true", [])).toBeGreaterThan(0);
+  });
+
+  it("P12: a wildcard id never matches another point", async () => {
+    const owner = w.as(await w.user());
+    const stranger = w.as(await w.user());
+    const id = `abc-${uid()}`;
+    await owner.create(id);
+    await owner.grant(id, { everyone: true }, "read");
+    expect(await stranger.level("%")).toBe(null);
+    expect(await stranger.level("abc-%")).toBe(null);
+    expect(await stranger.level(id.replace("abc", "a_c"))).toBe(null);
+  });
+});
+
+describe("Static points", () => {
+  const nonce = uid();
+  const settings = `settings-${nonce}`;
+  const reports = `reports-${nonce}`;
+
+  it("S1: declared points exist after the first start, with their grants", async () => {
+    const boss = await w.user({ email: `boss-${nonce}@example.com` });
+    await applyStaticPoints(db, {
+      [settings]: { grants: [{ to: { email: `BOSS-${nonce}@example.com` }, level: "manage" }] },
+      [reports]: { parent: settings, inherit: true, grants: [{ to: { everyone: true }, level: "read" }] },
+    });
+    expect(await w.as(boss).level(settings)).toBe("manage");
+    expect(await w.as(boss).level(reports)).toBe("manage");
+    expect(await w.as(null).level(reports)).toBe("read");
+    expect(await w.as(null).level(settings)).toBe(null);
+    expect((await pointOf(settings)).static).toBe(true);
+  });
+
+  it("S2: each start replaces their grants with the declared ones", async () => {
+    const id = `static-${uid()}`;
+    const [a, b] = [await w.user(), await w.user()];
+    await applyStaticPoints(db, { [id]: { grants: [{ to: { user: a }, level: "write" }] } });
+    await applyStaticPoints(db, { [id]: { grants: [{ to: { user: b }, level: "read" }] } });
+    expect(await w.as(a).level(id)).toBe(null);
+    expect(await w.as(b).level(id)).toBe("read");
+    await applyStaticPoints(db, { [id]: { grants: [{ to: { user: b }, level: "read" }] } });
+    expect(await count("access_grant", "point_id = $1", [id])).toBe(1);
+  });
+
+  it("S3: a static point's grants, links, inheritance and place change only in code", async () => {
+    const id = `static-${uid()}`;
+    const admin = await w.user();
+    await applyStaticPoints(db, { [id]: { grants: [{ to: { user: admin }, level: "manage" }] } });
+    const as = w.as(admin);
+    await refused(as.grant(id, { user: await w.user() }, "read"), 409);
+    await refused(as.revoke(id, { user: admin }), 409);
+    await refused(as.inherit(id, true), 409);
+    await refused(as.link(id, "read"), 409);
+    await refused(as.move(id, null), 409);
+    await refused(as.remove(id), 409);
+    expect(await as.level(id)).toBe("manage");
+    expect(await as.grants(id)).toHaveLength(1);
+  });
+
+  it("S4: a static parent must be static, with no loops and no platform prefixes", async () => {
+    const [a, b] = [`static-${uid()}`, `static-${uid()}`];
+    await expect(applyStaticPoints(db, { [a]: { parent: `elsewhere-${uid()}` } })).rejects.toThrow(/not a static point/);
+    await expect(applyStaticPoints(db, { [a]: { parent: b }, [b]: { parent: a } })).rejects.toThrow(/under each other/);
+    await expect(applyStaticPoints(db, { [a]: { parent: a } })).rejects.toThrow(/under each other/);
+    await expect(applyStaticPoints(db, { [`organization:${uid()}`]: {} })).rejects.toThrow(/platform/);
+    expect(await pointOf(a)).toBe(null);
+  });
+
+  it("S5: a static id already used by a runtime point is refused, and the runtime point keeps its grants", async () => {
+    const { page, owner } = await personal();
+    await expect(applyStaticPoints(db, { [page]: { grants: [{ to: { everyone: true }, level: "read" }] } })).rejects.toThrow(/runtime/);
+    expect(await w.as(owner).level(page)).toBe("manage");
+    expect(await w.as(null).level(page)).toBe(null);
+  });
+
+  it("S6: runtime points can sit under a static one with create on it", async () => {
+    const id = `static-${uid()}`;
+    const [writer, reader] = [await w.user(), await w.user()];
+    await applyStaticPoints(db, { [id]: { grants: [{ to: { user: writer }, level: "create" }, { to: { user: reader }, level: "read" }] } });
+    await refused(w.as(reader).create(`child-${uid()}`, { parent: id }));
+    const child = `child-${uid()}`;
+    await w.as(writer).create(child, { parent: id, inherit: true });
+    expect(await w.as(reader).level(child)).toBe("read");
+  });
+
+  it("S7: Everyone is granted read only, in code too", async () => {
+    await expect(applyStaticPoints(db, { [`static-${uid()}`]: { grants: [{ to: { everyone: true }, level: "write" }] } })).rejects.toThrow(/read only/);
+  });
+
+  it("S8: two Workers starting at once agree on one set of grants", async () => {
+    const id = `static-${uid()}`;
+    const user = await w.user();
+    const points = { [id]: { grants: [{ to: { user }, level: "write" as Level }] } };
+    await Promise.all(Array.from({ length: 6 }, () => applyStaticPoints(db, points)));
+    expect(await count("access_grant", "point_id = $1", [id])).toBe(1);
+  });
+
+  it("S9: the app's Access waits for static points before its first check, and retries after a failure", async () => {
+    const id = `static-${uid()}`;
+    let calls = 0;
+    const ready = async () => {
+      calls++;
+      if (calls === 1) throw new Error("database away");
+      await applyStaticPoints(db, { [id]: { grants: [{ to: { everyone: true }, level: "read" }] } });
+    };
+    await expect(w.as(null, null, { ready }).level(id)).rejects.toThrow("database away");
+    expect(await w.as(null, null, { ready }).level(id)).toBe("read");
   });
 });
 
 describe("Grants", () => {
-  it("G1: shared with the user at write: write", async () => {
+  it("G1: a grant to a person gives them that level", async () => {
     const { as, page } = await personal();
     const friend = await w.user();
-    await as.share("page", page, { user: friend }, "write");
-    expect(await w.as(friend).level("page", page)).toBe("write");
+    await as.grant(page, { user: friend }, "write");
+    expect(await w.as(friend).level(page)).toBe("write");
   });
 
-  it("G2: shared with a team at write; user in the team: write", async () => {
+  it("G2: a grant to a team reaches its members only", async () => {
     const c = await company();
-    const team = await w.team(c.org);
-    await w.join(team, c.member);
-    await w.as(c.owner).share("folder", c.folder, { team }, "write");
-    expect(await w.as(c.member).level("page", c.page)).toBe("write");
+    const id = `doc-${uid()}`;
+    await w.as(c.admin).create(id, { parent: organizationPoint(c.org) });
+    await w.as(c.admin).grant(id, { team: c.team }, "write");
+    expect(await w.as(c.teammate).level(id)).toBe("write");
+    expect(await w.as(c.member).level(id)).toBe(null);
+    expect(await w.as(c.outsider).level(id)).toBe(null);
   });
 
-  it("G3: removed from the team: refused on the next request", async () => {
-    const { as, page } = await personal();
-    const org = await w.org();
-    const team = await w.team(org);
-    const friend = await w.user();
-    await w.join(team, friend);
-    await as.share("page", page, { team }, "write");
-    const friendAs = w.as(friend);
-    expect(await friendAs.level("page", page)).toBe("write");
-    await w.leaveTeam(team, friend);
-    expect(await friendAs.level("page", page)).toBe(null);
-  });
-
-  it("G4: shared with an organization; a member gets that level, even above their role's", async () => {
+  it("G3: a grant to an organization reaches every member", async () => {
     const c = await company();
-    await w.as(c.owner).share("page", c.page, { organization: c.org }, "write");
-    expect(await w.as(c.member).level("page", c.page)).toBe("write");
-    expect(await w.as(c.member).level("folder", c.folder)).toBe("read");
-  });
-
-  it("G5: shared with an email nobody has yet: nobody gets access", async () => {
     const { as, page } = await personal();
-    await as.share("page", page, { email: `${uid()}@example.com` }, "write");
-    expect(await w.as(await w.user()).level("page", page)).toBe(null);
+    await as.grant(page, { organization: c.org }, "read");
+    for (const user of [c.admin, c.member, c.teammate]) expect(await w.as(user).level(page)).toBe("read");
+    expect(await w.as(c.outsider).level(page)).toBe(null);
   });
 
-  it("G6: someone signs up with that address but has not confirmed it: refused", async () => {
-    const { as, page } = await personal();
-    const email = `${uid()}@example.com`;
-    await as.share("page", page, { email }, "write");
-    const newcomer = await w.user({ email, verified: false });
-    expect(await w.as(newcomer).level("page", page)).toBe(null);
-    expect(await w.as(newcomer).sharedWithMe("page")).toEqual([]);
-  });
-
-  it("G7: they confirm the address: the grant becomes theirs", async () => {
-    const { as, page } = await personal();
-    const email = `${uid()}@example.com`;
-    await as.share("page", page, { email }, "write");
-    const newcomer = await w.user({ email, verified: false });
-    await w.query(`update "user" set email_verified = true where id = $1`, [newcomer]);
-    expect(await w.as(newcomer).level("page", page)).toBe("write");
-    expect(await w.as(newcomer).sharedWithMe("page")).toEqual([page]);
-  });
-
-  it("matches email grants without regard to case or surrounding spaces", async () => {
+  it("G4: a grant to an email reaches the person with that confirmed address, in any case", async () => {
     const { as, page } = await personal();
     const local = uid();
-    await as.share("page", page, { email: `  ${local.toUpperCase()}@Example.COM ` }, "read");
-    const user = await w.user({ email: `${local}@EXAMPLE.com` });
-    expect(await w.as(user).level("page", page)).toBe("read");
-    expect(await as.grants("page", page)).toEqual([{ to: { email: `${local}@example.com` }, level: "read", grantedBy: expect.any(String) }]);
+    const confirmed = await w.user({ email: `${local.toUpperCase()}@Example.com` });
+    await as.grant(page, { email: ` ${local}@example.COM ` }, "write");
+    expect(await w.as(confirmed).level(page)).toBe("write");
+    expect((await as.grants(page)).at(-1)!.to).toEqual({ email: `${local}@example.com` });
   });
 
-  it("does not match an email grant to a different address that merely contains it", async () => {
+  it("G4: an unconfirmed address gets nothing", async () => {
     const { as, page } = await personal();
-    const local = uid();
-    await as.share("page", page, { email: `${local}@example.com` }, "read");
-    expect(await w.as(await w.user({ email: `x${local}@example.com` })).level("page", page)).toBe(null);
-    expect(await w.as(await w.user({ email: `${local}@example.com.evil` })).level("page", page)).toBe(null);
+    const address = `${uid()}@example.com`;
+    const unconfirmed = await w.user({ email: address, verified: false });
+    await as.grant(page, { email: address }, "write");
+    expect(await w.as(unconfirmed).level(page)).toBe(null);
   });
 
-  it("G8: grant revoked: refused on the next request", async () => {
+  it("G5: an email grant applies on the next check after the address is confirmed or the person signs up", async () => {
+    const { as, page } = await personal();
+    const address = `${uid()}@example.com`;
+    await as.grant(page, { email: address }, "read");
+    const later = await w.user({ email: address, verified: false });
+    expect(await w.as(later).level(page)).toBe(null);
+    await w.query(`update "user" set email_verified = true where id = $1`, [later]);
+    expect(await w.as(later).level(page)).toBe("read");
+  });
+
+  it("G6: Everyone reaches signed-out visitors and every person", async () => {
+    const { as, page } = await personal();
+    await as.grant(page, { everyone: true }, "read");
+    expect(await w.as(null).level(page)).toBe("read");
+    expect(await w.as(await w.user()).level(page)).toBe("read");
+  });
+
+  it("G7: Everyone is granted read only", async () => {
+    const { as, page } = await personal();
+    for (const level of ["create", "write", "delete", "manage"] as Level[]) await appError(as.grant(page, { everyone: true }, level), /read only/);
+    await appError(as.grant(page, { everyone: false } as never, "read"));
+    expect(await w.as(null).level(page)).toBe(null);
+  });
+
+  it("G8: granting needs manage; less is a 404 and nothing changes", async () => {
+    const { as, page } = await personal();
+    const [writer, other] = [await w.user(), await w.user()];
+    await as.grant(page, { user: writer }, "delete");
+    await refused(w.as(writer).grant(page, { user: other }, "read"));
+    await refused(w.as(writer).grant(page, { user: writer }, "manage"));
+    await refused(w.as(writer).revoke(page, { user: writer }));
+    await refused(w.as(writer).grants(page));
+    expect(await w.as(other).level(page)).toBe(null);
+    expect(await w.as(writer).level(page)).toBe("delete");
+  });
+
+  it("G9: someone with manage can grant manage, and that person can grant too", async () => {
+    const { as, page } = await personal();
+    const [second, third] = [await w.user(), await w.user()];
+    await as.grant(page, { user: second }, "manage");
+    await w.as(second).grant(page, { user: third }, "read");
+    expect(await w.as(third).level(page)).toBe("read");
+  });
+
+  it("G10: granting again changes the level, never adding a second grant", async () => {
     const { as, page } = await personal();
     const friend = await w.user();
-    await as.share("page", page, { user: friend }, "write");
-    const friendAs = w.as(friend);
-    expect(await friendAs.level("page", page)).toBe("write");
-    await as.revoke("page", page, { user: friend });
-    expect(await friendAs.level("page", page)).toBe(null);
+    await as.grant(page, { user: friend }, "write");
+    await as.grant(page, { user: friend }, "read");
+    expect(await w.as(friend).level(page)).toBe("read");
+    expect(await count("access_grant", "point_id = $1 and user_id = $2", [page, friend])).toBe(1);
   });
 
-  it("G9: shared at read, then again at write: one grant, at write", async () => {
+  it("G11: revoking removes the grant on the next check; revoking nothing is fine", async () => {
     const { as, page } = await personal();
     const friend = await w.user();
-    await as.share("page", page, { user: friend }, "read");
-    await as.share("page", page, { user: friend }, "write");
-    expect(await as.grants("page", page)).toEqual([{ to: { user: friend }, level: "write", grantedBy: expect.any(String) }]);
-    await as.share("page", page, { user: friend }, "read");
-    expect(await w.as(friend).level("page", page)).toBe("read");
+    await as.grant(page, { user: friend }, "write");
+    await as.revoke(page, { user: friend });
+    expect(await w.as(friend).level(page)).toBe(null);
+    await as.revoke(page, { user: friend });
+    await as.revoke(page, { everyone: true });
   });
 
-  it("G10: the person who shared loses their own access: grants they gave stay", async () => {
+  it("G11: revoking one grantee leaves the others", async () => {
+    const { as, page } = await personal();
+    const [a, b] = [await w.user(), await w.user()];
+    await as.grant(page, { user: a }, "read");
+    await as.grant(page, { user: b }, "read");
+    await as.revoke(page, { user: a });
+    expect(await w.as(b).level(page)).toBe("read");
+  });
+
+  it("G12: grants lists every grant, for those with manage", async () => {
     const c = await company();
-    const friend = await w.user();
-    await w.setRole(c.org, c.admin, "owner");
-    await w.as(c.admin).share("page", c.page, { user: friend }, "write");
-    await w.leave(c.org, c.admin);
-    expect(await w.as(c.admin).level("page", c.page)).toBe(null);
-    expect(await w.as(friend).level("page", c.page)).toBe("write");
-    await w.query(`delete from "user" where id = $1`, [c.admin]);
-    expect(await w.as(c.owner).grants("page", c.page)).toEqual([{ to: { user: friend }, level: "write", grantedBy: null }]);
-    expect(await w.as(friend).level("page", c.page)).toBe("write");
+    const id = `doc-${uid()}`;
+    const as = w.as(c.admin);
+    await as.create(id, { parent: organizationPoint(c.org) });
+    await as.grant(id, { team: c.team }, "write");
+    await as.grant(id, { organization: c.org }, "read");
+    await as.grant(id, { email: "Someone@Example.com" }, "read");
+    await as.grant(id, { everyone: true }, "read");
+    expect((await as.grants(id)).map((g) => [g.to, g.level])).toEqual([
+      [{ user: c.admin }, "manage"],
+      [{ team: c.team }, "write"],
+      [{ organization: c.org }, "read"],
+      [{ email: "someone@example.com" }, "read"],
+      [{ everyone: true }, "read"],
+    ]);
   });
 
-  it("G11: someone with write tries to share: refused, since sharing needs manage", async () => {
+  it("G13: granting to someone or something that does not exist is a 404", async () => {
     const { as, page } = await personal();
-    const writer = await w.user();
-    await as.share("page", page, { user: writer }, "write");
-    await refused(w.as(writer).share("page", page, { user: await w.user() }, "read"));
-    await refused(w.as(writer).revoke("page", page, { user: writer }));
-    await refused(w.as(writer).grants("page", page));
-    await refused(w.as(writer).restrict("page", page));
-    expect(await as.grants("page", page)).toHaveLength(1);
+    await refused(as.grant(page, { user: uid() }, "read"));
+    await refused(as.grant(page, { team: uid() }, "read"));
+    await refused(as.grant(page, { organization: uid() }, "read"));
+    await refused(as.grant(page, { user: "not-a-uuid" }, "read"));
+    await refused(as.revoke(page, { team: "not-a-uuid" }));
+    expect(await count("access_grant", "point_id = $1", [page])).toBe(1);
   });
 
-  it("G12: someone with manage shares at manage: allowed, and the new manager can share on", async () => {
-    const { as, page } = await personal();
-    const [first, second, third] = [await w.user(), await w.user(), await w.user()];
-    await as.share("page", page, { user: first }, "manage");
-    await w.as(first).share("page", page, { user: second }, "manage");
-    await w.as(second).share("page", page, { user: third }, "read");
-    expect(await w.as(third).level("page", page)).toBe("read");
+  it("G14: a point under an organization cannot be granted to another organization or its teams", async () => {
+    const a = await company();
+    const b = await company();
+    const as = w.as(a.admin);
+    await refused(as.grant(a.page, { organization: b.org }, "read"), 409);
+    await refused(as.grant(a.page, { team: b.team }, "read"), 409);
+    await refused(as.create(`doc-${uid()}`, { parent: a.folder, grants: [{ to: { team: b.team }, level: "read" }] }), 409);
+    await as.grant(a.page, { user: b.teammate }, "read");
+    await as.grant(a.page, { email: "guest@example.com" }, "read");
+    await as.grant(a.page, { everyone: true }, "read");
+    expect(await w.as(b.member).level(a.page)).toBe("read");
+    expect(await w.as(b.teammate).level(a.page)).toBe("read");
   });
 
-  it("G13: a manager from a grant cannot remove the owner's or an organization role's access", async () => {
+  it("G14: a foreign grant written into the table anyway is ignored", async () => {
+    const a = await company();
+    const b = await company();
+    await w.query(`insert into access_grant (point_id, team_id, level) values ($1, $2, 5)`, [a.page, b.team]);
+    await w.query(`insert into access_grant (point_id, organization_id, level) values ($1, $2, 5)`, [a.page, b.org]);
+    expect(await w.as(b.teammate).level(a.page)).toBe(null);
+    expect(await w.as(b.member).level(a.page)).toBe(null);
+  });
+
+  it("G15: a personal point can be granted to any organization or team", async () => {
     const c = await company();
-    const manager = await w.user();
-    await w.as(c.owner).share("page", c.page, { user: manager }, "manage");
-    const as = w.as(manager);
-    await as.revoke("page", c.page, { user: c.owner });
-    await as.revoke("page", c.page, { user: c.admin });
-    await as.revoke("page", c.page, { organization: c.org });
-    expect(await w.as(c.owner).level("page", c.page)).toBe("manage");
-    expect(await w.as(c.admin).level("page", c.page)).toBe("delete");
-    expect(await w.as(c.member).level("page", c.page)).toBe("read");
-  });
-
-  it("G13: a manager from a grant can revoke their own grant and so lose access", async () => {
     const { as, page } = await personal();
-    const manager = await w.user();
-    await as.share("page", page, { user: manager }, "manage");
-    await w.as(manager).revoke("page", page, { user: manager });
-    expect(await w.as(manager).level("page", page)).toBe(null);
+    await as.grant(page, { team: c.team }, "write");
+    expect(await w.as(c.teammate).level(page)).toBe("write");
   });
 
-  it("G14: a grant at manage: allowed", async () => {
-    const { as, page } = await personal();
-    const friend = await w.user();
-    await as.share("page", page, { user: friend }, "manage");
-    expect(await w.as(friend).level("page", page)).toBe("manage");
-  });
-
-  it("refuses a grant to a user, team or organization that does not exist, and stores nothing", async () => {
-    const { as, page } = await personal();
-    await refused(as.share("page", page, { user: uid() }, "read"));
-    await refused(as.share("page", page, { team: uid() }, "read"));
-    await refused(as.share("page", page, { organization: uid() }, "read"));
-    expect(await as.grants("page", page)).toEqual([]);
-  });
-
-  it("refuses a grantee that is not exactly one of user, team, organization or email", async () => {
-    const { as, page, owner } = await personal();
-    await appError(as.share("page", page, { user: owner, team: owner } as never, "read"));
-    await appError(as.share("page", page, {} as never, "read"));
-    await appError(as.share("page", page, { group: owner } as never, "read"));
-    await appError(as.share("page", page, { email: "   " }, "read"));
-    await appError(as.share("page", page, { user: 7 } as never, "read"));
-  });
-
-  it("refuses a malformed id with a 404 rather than a server error", async () => {
-    const { as, page } = await personal();
-    await refused(as.share("page", page, { user: "not-a-uuid" }, "read"));
-    await refused(as.share("page", page, { team: "7" }, "read"));
-  });
-
-  it("refuses to share an item that is not placed", async () => {
-    const { as } = await personal();
-    await refused(as.share("page", uid(), { user: await w.user() }, "read"));
-  });
-
-  it("keeps grants to a user, a team and an organization on one item apart", async () => {
+  it("G16: a team row whose person left the organization gives nothing", async () => {
     const c = await company();
-    const team = await w.team(c.org);
-    const as = w.as(c.owner);
-    await as.share("page", c.page, { user: c.member }, "read");
-    await as.share("page", c.page, { team }, "write");
-    await as.share("page", c.page, { organization: c.org }, "create");
-    expect(await as.grants("page", c.page)).toHaveLength(3);
-    await as.revoke("page", c.page, { team });
-    expect((await as.grants("page", c.page)).map((g) => Object.keys(g.to)[0]).sort()).toEqual(["organization", "user"]);
+    await w.query(`delete from member where organization_id = $1 and user_id = $2`, [c.org, c.teammate]);
+    expect(await w.as(c.teammate).level(c.page)).toBe(null);
+    const { as, page } = await personal();
+    await as.grant(page, { team: c.team }, "read");
+    expect(await w.as(c.teammate).level(page)).toBe(null);
   });
 
-  it("lists in sharedWithMe only what the caller can still read", async () => {
+  it("G17: someone removed from a team or organization loses that access on the next check", async () => {
     const c = await company();
-    const team = await w.team(c.org);
-    const friend = await w.user();
-    await w.join(team, friend);
-    const [a, b, d] = [uid(), uid(), uid()];
-    for (const id of [a, b, d]) await w.item("page", id, "folder", c.folder);
-    const as = w.as(c.owner);
-    await as.share("page", a, { user: friend }, "read");
-    await as.share("page", b, { team }, "read");
-    await as.share("page", d, { user: friend }, "read");
-    await as.restrict("folder", c.folder);
-    expect((await w.as(friend).sharedWithMe("page")).sort()).toEqual([a, b, d].sort());
-    await w.query(`update access_item set parent_kind = 'user', parent_id = $1 where kind = 'page' and id = $2`, [uid(), d]);
-    expect((await w.as(friend).sharedWithMe("page")).sort()).toEqual([a, b].sort());
-    expect(await w.as(friend).sharedWithMe("folder")).toEqual([]);
-    expect(await w.as(null).sharedWithMe("page")).toEqual([]);
+    expect(await w.as(c.teammate).level(c.page)).toBe("write");
+    await w.orgs(c.admin).removeFromTeam(c.team, c.teammate);
+    expect(await w.as(c.teammate).level(c.page)).toBe(null);
+    const { as, page } = await personal();
+    await as.grant(page, { organization: c.org }, "read");
+    expect(await w.as(c.member).level(page)).toBe("read");
+    await w.orgs(c.admin).removeMember(c.org, c.member);
+    expect(await w.as(c.member).level(page)).toBe(null);
+  });
+
+  it("G18: a grantee must name exactly one principal", async () => {
+    const { as, page } = await personal();
+    await appError(as.grant(page, {} as never, "read"));
+    await appError(as.grant(page, { user: "", team: "" } as never, "read"));
+    await appError(as.grant(page, { user: "  " }, "read"));
+    await appError(as.grant(page, { group: uid() } as never, "read"));
+    await appError(as.grant(page, null as never, "read"));
   });
 });
 
 describe("Sharing email", () => {
-  const sending = (userId: string) => {
+  const notices = () => {
     const sent: ShareNotice[] = [];
-    return { sent, as: createAccess(db, async () => ({ userId, link: null }), async (notice) => void sent.push(notice)) };
+    return { sent, notify: vi.fn(async (n: ShareNotice) => void sent.push(n)) };
   };
 
-  it("emails a person given a new grant, with the app's path", async () => {
-    const { owner, page } = await personal();
-    await w.query(`update "user" set name = 'Ada' where id = $1`, [owner]);
-    const friend = await w.user({ email: "friend@example.com" });
-    const { sent, as } = sending(owner);
-    await as.share("page", page, { user: friend }, "write", { email: { path: `/pages/${page}` } });
-    expect(sent).toEqual([{ to: "friend@example.com", sharedBy: "Ada", level: "write", path: `/pages/${page}`, subject: undefined, text: undefined }]);
+  it("E1: a new grant to a person emails them, naming who shared and the level", async () => {
+    const owner = await w.user();
+    const { sent, notify } = notices();
+    const as = w.as(owner, null, { notify });
+    const id = `note-${uid()}`;
+    await as.create(id);
+    const address = `${uid()}@example.com`;
+    const friend = await w.user({ email: address });
+    await as.grant(id, { user: friend }, "write", { email: { path: "/notes/7" } });
+    expect(sent).toEqual([{ to: address, sharedBy: "Test", level: "write", path: "/notes/7", subject: undefined, text: undefined }]);
   });
 
-  it("emails an address nobody has signed up with yet", async () => {
-    const { owner, page } = await personal();
-    const { sent, as } = sending(owner);
-    await as.share("page", page, { email: "New@Example.com" }, "read");
+  it("E2: a new grant to an email address emails that address", async () => {
+    const { sent, notify } = notices();
+    const as = w.as(await w.user(), null, { notify });
+    const id = `note-${uid()}`;
+    await as.create(id);
+    await as.grant(id, { email: "New@Example.com" }, "read");
     expect(sent.map((n) => [n.to, n.path])).toEqual([["new@example.com", "/"]]);
   });
 
-  it("sends nothing for a team or an organization, a changed level, or when turned off", async () => {
+  it("E3: changing a grant's level sends nothing", async () => {
+    const { sent, notify } = notices();
+    const as = w.as(await w.user(), null, { notify });
+    const id = `note-${uid()}`;
+    await as.create(id);
+    await as.grant(id, { email: "a@example.com" }, "read");
+    await as.grant(id, { email: "a@example.com" }, "write");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("E4: teams, organizations and Everyone get no email", async () => {
     const c = await company();
-    const team = await w.team(c.org);
-    const { sent, as } = sending(c.owner);
-    await as.share("page", c.page, { team }, "write");
-    await as.share("page", c.page, { organization: c.org }, "read");
-    await as.share("page", c.page, { user: c.member }, "read", { email: false });
-    await as.share("page", c.page, { user: c.member }, "write");
+    const { sent, notify } = notices();
+    const as = w.as(c.admin, null, { notify });
+    const id = `doc-${uid()}`;
+    await as.create(id, { parent: organizationPoint(c.org) });
+    await as.grant(id, { team: c.team }, "read");
+    await as.grant(id, { organization: c.org }, "read");
+    await as.grant(id, { everyone: true }, "read");
     expect(sent).toEqual([]);
   });
 
-  it("sends nothing when sharing is refused", async () => {
-    const { page } = await personal();
-    const { sent, as } = sending(await w.user());
-    await refused(as.share("page", page, { email: "x@example.com" }, "read"));
+  it("E5: email false sends nothing; a refused grant sends nothing", async () => {
+    const { sent, notify } = notices();
+    const as = w.as(await w.user(), null, { notify });
+    const id = `note-${uid()}`;
+    await as.create(id);
+    await as.grant(id, { email: "a@example.com" }, "read", { email: false });
+    await refused(w.as(await w.user(), null, { notify }).grant(id, { email: "b@example.com" }, "read"));
     expect(sent).toEqual([]);
   });
 
-  it("refuses a path that could lead off the app", async () => {
-    const { owner, page } = await personal();
-    const { sent, as } = sending(owner);
-    for (const path of ["https://evil.example", "//evil.example/x", "/\\evil.example", "pages/7"]) await appError(as.share("page", page, { email: "x@example.com" }, "read", { email: { path } }));
-    expect(sent).toEqual([]);
-    expect(await as.grants("page", page)).toEqual([]);
+  it("E6: the app's own subject and text are used, with the link after the text", () => {
+    const notice: ShareNotice = { to: "a@example.com", sharedBy: "Sam", level: "read", path: "/n/1", subject: "Hi", text: "Look" };
+    expect(shareMessage(notice, "Demo", "https://demo.test")).toEqual({ to: "a@example.com", subject: "Hi", text: "Look\n\nhttps://demo.test/n/1\n" });
+    expect(shareMessage({ ...notice, subject: undefined, text: undefined, sharedBy: null }, "Demo", "https://demo.test").subject).toBe("Someone shared something with you on Demo");
   });
 
-  it("words the email from the notice, or as the app asks, always linking into the app", () => {
-    const notice = { to: "a@example.com", sharedBy: "Ada", level: "write" as Level, path: "/pages/7" };
-    expect(shareMessage(notice, "Notes", "https://notes.example")).toEqual({
-      to: "a@example.com",
-      subject: "Ada shared something with you on Notes",
-      text: "Ada gave you write access on Notes.\n\nhttps://notes.example/pages/7\n",
-    });
-    expect(shareMessage({ ...notice, sharedBy: null, subject: "A page for you", text: "Have a look." }, "Notes", "https://notes.example")).toEqual({
-      to: "a@example.com",
-      subject: "A page for you",
-      text: "Have a look.\n\nhttps://notes.example/pages/7\n",
-    });
+  it("E7: an email path must start with one slash, so a link never leaves the app", async () => {
+    const as = w.as(await w.user());
+    const id = `note-${uid()}`;
+    await as.create(id);
+    for (const path of ["https://evil.test/x", "//evil.test/x", "/\\evil.test", "notes/1"]) await appError(as.grant(id, { email: "a@example.com" }, "read", { email: { path } }), /one \//);
+    expect(await count("access_grant", "point_id = $1", [id])).toBe(1);
   });
 });
 
 describe("Links", () => {
-  it("K1: a valid link token at read: read, signed in or not", async () => {
+  it("K1: a link gives its level on its point to anyone holding it, signed in or not", async () => {
     const { as, page } = await personal();
-    const { token } = await as.link("page", page, "read");
-    expect(await w.as(null, token).level("page", page)).toBe("read");
-    expect(await w.as(await w.user(), token).level("page", page)).toBe("read");
+    const { token } = await as.link(page, "write");
+    expect(await w.as(null, token).level(page)).toBe("write");
+    expect(await w.as(await w.user(), token).level(page)).toBe("write");
   });
 
-  it("K2: a token for a different item: refused", async () => {
-    const { as, page, folder } = await personal();
-    const other = uid();
-    await w.item("page", other, "folder", folder);
-    const { token } = await as.link("page", page, "read");
-    expect(await w.as(null, token).level("page", other)).toBe(null);
-    expect(await w.as(null, token).level("folder", folder)).toBe(null);
-  });
-
-  it("K3: an expired token: refused; one not yet expired works", async () => {
-    const { as, page } = await personal();
-    const old = await as.link("page", page, "read", { expires: new Date(Date.now() - 1000) });
-    const fresh = await as.link("page", page, "read", { expires: new Date(Date.now() + 60_000) });
-    expect(await w.as(null, old.token).level("page", page)).toBe(null);
-    expect(await w.as(null, fresh.token).level("page", page)).toBe("read");
-  });
-
-  it("K4: a revoked token: refused on the next request", async () => {
-    const { as, page } = await personal();
-    const { id, token } = await as.link("page", page, "write");
-    const holder = w.as(null, token);
-    expect(await holder.level("page", page)).toBe("write");
-    await as.revokeLink("page", page, id);
-    expect(await holder.level("page", page)).toBe(null);
-  });
-
-  it("K5: a token for a folder works on a page inside it", async () => {
+  it("K2: a link reaches only its own point, never the points under it or above it", async () => {
     const { as, folder, page } = await personal();
-    const { token } = await as.link("folder", folder, "read");
-    expect(await w.as(null, token).level("page", page)).toBe("read");
+    const toFolder = (await as.link(folder, "write")).token;
+    const toPage = (await as.link(page, "write")).token;
+    expect(await w.as(null, toFolder).level(page)).toBe(null);
+    expect(await w.as(null, toPage).level(folder)).toBe(null);
   });
 
-  it("K6: read from a grant and a write link: write, the highest", async () => {
+  it("K3: a link carries read, create or write, never delete or manage", async () => {
     const { as, page } = await personal();
-    const friend = await w.user();
-    await as.share("page", page, { user: friend }, "read");
-    const { token } = await as.link("page", page, "write");
-    expect(await w.as(friend, token).level("page", page)).toBe("write");
+    await appError(as.link(page, "delete"), /never delete/);
+    await appError(as.link(page, "manage"), /never manage/);
+    for (const level of ["read", "create", "write"] as Level[]) await as.link(page, level);
   });
 
-  it("K7: a guessed or altered token: refused", async () => {
+  it("K4: an expired or revoked link gives nothing", async () => {
     const { as, page } = await personal();
-    const { token } = await as.link("page", page, "read");
-    const flipped = token.slice(0, -1) + (token.endsWith("A") ? "B" : "A");
-    for (const guess of [flipped, token.slice(1), `${token} `, token.toUpperCase(), "", "null", uid()]) {
-      expect(await w.as(null, guess).level("page", page), guess).toBe(null);
-    }
+    const expired = await as.link(page, "read", { expires: new Date(Date.now() - 1000) });
+    const revoked = await as.link(page, "read");
+    await as.revokeLink(page, revoked.id);
+    expect(await w.as(null, expired.token).level(page)).toBe(null);
+    expect(await w.as(null, revoked.token).level(page)).toBe(null);
+    const later = await as.link(page, "read", { expires: new Date(Date.now() + 60_000) });
+    expect(await w.as(null, later.token).level(page)).toBe("read");
+    await appError(as.link(page, "read", { expires: new Date("nope") }));
   });
 
-  it("K7: the database holds only a hash of the token", async () => {
+  it("K5: a wrong token, or one made for another point, gives nothing", async () => {
+    const a = await personal();
+    const b = await personal();
+    const { token } = await a.as.link(a.page, "write");
+    expect(await w.as(null, token).level(b.page)).toBe(null);
+    expect(await w.as(null, token + "x").level(a.page)).toBe(null);
+    expect(await w.as(null, "").level(a.page)).toBe(null);
+  });
+
+  it("K6: only a hash of each token is stored", async () => {
     const { as, page } = await personal();
-    const { token } = await as.link("page", page, "read");
-    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(await count("access_link", "token_hash = $1", [token])).toBe(0);
-    const stored = (await w.query(`select token_hash from access_link where item_id = $1`, [page])).rows[0].token_hash;
-    expect(await w.as(null, stored).level("page", page)).toBe(null);
+    const { token } = await as.link(page, "read");
+    const stored = (await w.query(`select token_hash from access_link where point_id = $1`, [page])).rows[0].token_hash;
+    expect(stored).not.toContain(token);
+    expect(stored).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("K8: a link made at write: allowed, and create too", async () => {
-    const { as, page } = await personal();
-    expect(await w.as(null, (await as.link("page", page, "write")).token).level("page", page)).toBe("write");
-    expect(await w.as(null, (await as.link("page", page, "create")).token).level("page", page)).toBe("create");
-  });
-
-  it("K9: a link made at delete or manage: refused", async () => {
-    const { as, page } = await personal();
-    await appError(as.link("page", page, "delete"));
-    await appError(as.link("page", page, "manage"));
-    expect(await as.links("page", page)).toEqual([]);
-  });
-
-  it("refuses making, listing or revoking links without manage", async () => {
+  it("K7: making, listing and revoking links needs manage", async () => {
     const { as, page } = await personal();
     const writer = await w.user();
-    await as.share("page", page, { user: writer }, "write");
-    const { id } = await as.link("page", page, "read");
-    await refused(w.as(writer).link("page", page, "read"));
-    await refused(w.as(writer).links("page", page));
-    await refused(w.as(writer).revokeLink("page", page, id));
-    const holder = await as.link("page", page, "write");
-    await refused(w.as(null, holder.token).link("page", page, "read"));
-    expect(await as.links("page", page)).toHaveLength(2);
+    await as.grant(page, { user: writer }, "write");
+    const link = await as.link(page, "read");
+    await refused(w.as(writer).link(page, "read"));
+    await refused(w.as(writer).links(page));
+    await refused(w.as(writer).revokeLink(page, link.id));
+    expect(await as.links(page)).toEqual([{ id: link.id, level: "read", expiresAt: null }]);
   });
 
-  it("revokes a link only through the item it belongs to", async () => {
-    const { as, page, folder } = await personal();
-    const { id, token } = await as.link("page", page, "read");
-    await as.revokeLink("folder", folder, id);
-    expect(await w.as(null, token).level("page", page)).toBe("read");
+  it("K8: revoking with another point's link id revokes nothing", async () => {
+    const a = await personal();
+    const b = await personal();
+    const link = await b.as.link(b.page, "read");
+    await a.as.revokeLink(a.page, link.id);
+    await a.as.revokeLink(a.page, "not-an-id");
+    expect(await w.as(null, link.token).level(b.page)).toBe("read");
   });
 
-  it("gives a link holder nothing they could not get from the link alone", async () => {
+  it("K9: a link and a grant together: the higher wins", async () => {
     const { as, page } = await personal();
-    const { token } = await as.link("page", page, "write");
-    const holder = w.as(null, token);
-    await refused(holder.share("page", page, { user: await w.user() }, "read"));
-    await refused(holder.remove("page", page));
-    expect(await holder.sharedWithMe("page")).toEqual([]);
-  });
-
-  it("stops working when its item is deleted, even if the id is reused", async () => {
-    const { as, folder, page } = await personal();
-    const { token } = await as.link("page", page, "read");
-    await as.remove("page", page);
-    await as.place("page", page, "folder", folder);
-    expect(await w.as(null, token).level("page", page)).toBe(null);
+    const reader = await w.user();
+    await as.grant(page, { user: reader }, "read");
+    const { token } = await as.link(page, "write");
+    expect(await w.as(reader, token).level(page)).toBe("write");
   });
 });
 
 describe("Inheritance", () => {
-  it("I1: write on a folder: write on a page in it", async () => {
+  it("I1: a point that does not inherit ignores its parent's grants", async () => {
+    const { as, folder } = await personal();
+    const friend = await w.user();
+    await as.grant(folder, { user: friend }, "write");
+    const alone = `page-${uid()}`;
+    await as.create(alone, { parent: folder });
+    expect(await w.as(friend).level(alone)).toBe(null);
+  });
+
+  it("I2: a point that inherits uses its parent's grants", async () => {
     const { as, folder, page } = await personal();
     const friend = await w.user();
-    await as.share("folder", folder, { user: friend }, "write");
-    expect(await w.as(friend).level("page", page)).toBe("write");
+    await as.grant(folder, { user: friend }, "write");
+    expect(await w.as(friend).level(page)).toBe("write");
   });
 
-  it("I2: write on a folder: write three folders down", async () => {
-    const { as, owner, folder } = await personal();
-    const [a, b, c, deep] = [uid(), uid(), uid(), uid()];
-    await as.place("folder", a, "folder", folder);
-    await as.place("folder", b, "folder", a);
-    await as.place("folder", c, "folder", b);
-    await as.place("page", deep, "folder", c);
-    const friend = await w.user();
-    await w.as(owner).share("folder", folder, { user: friend }, "write");
-    expect(await w.as(friend).level("page", deep)).toBe("write");
+  it("I3: the walk goes up through inheriting points and stops after the first that does not inherit", async () => {
+    const owner = w.as(await w.user());
+    const [top, middle, low, leaf] = [`top-${uid()}`, `mid-${uid()}`, `low-${uid()}`, `leaf-${uid()}`];
+    await owner.create(top);
+    await owner.create(middle, { parent: top });
+    await owner.create(low, { parent: middle, inherit: true });
+    await owner.create(leaf, { parent: low, inherit: true });
+    const [fromTop, fromMiddle] = [await w.user(), await w.user()];
+    await owner.grant(top, { user: fromTop }, "read");
+    await owner.grant(middle, { user: fromMiddle }, "read");
+    expect(await w.as(fromMiddle).level(leaf)).toBe("read");
+    expect(await w.as(fromTop).level(leaf)).toBe(null);
+    await owner.inherit(middle, true);
+    expect(await w.as(fromTop).level(leaf)).toBe("read");
   });
 
-  it("I3: write on a page: refused on its folder, since levels flow down, never up", async () => {
+  it("I4: changing inheritance needs manage and applies on the next check", async () => {
+    const { as, folder, page } = await personal();
+    const [friend, writer] = [await w.user(), await w.user()];
+    await as.grant(folder, { user: friend }, "read");
+    await as.grant(page, { user: writer }, "delete");
+    await refused(w.as(writer).inherit(page, false));
+    await as.inherit(page, false);
+    expect(await w.as(friend).level(page)).toBe(null);
+  });
+
+  it("I5: a narrower grant to the same principal lowers it on that point", async () => {
     const { as, folder, page } = await personal();
     const friend = await w.user();
-    await as.share("page", page, { user: friend }, "write");
-    expect(await w.as(friend).level("folder", folder)).toBe(null);
+    await as.grant(folder, { user: friend }, "write");
+    await as.grant(page, { user: friend }, "read");
+    expect(await w.as(friend).level(page)).toBe("read");
+    expect(await w.as(friend).level(folder)).toBe("write");
   });
 
-  it("I4: read on a folder, write on a page in it: write there, read on its siblings", async () => {
+  it("I6: a grant to a broad principal never lowers a narrower one", async () => {
+    const c = await company();
+    await w.as(c.admin).grant(c.page, { organization: c.org }, "read");
+    expect(await w.as(c.teammate).level(c.page)).toBe("write");
+    expect(await w.as(c.member).level(c.page)).toBe("read");
+  });
+
+  it("I7: across principals the highest wins", async () => {
+    const c = await company();
+    const id = `doc-${uid()}`;
+    await w.as(c.admin).create(id, { parent: organizationPoint(c.org) });
+    await w.as(c.admin).grant(id, { organization: c.org }, "read");
+    await w.as(c.admin).grant(id, { team: c.team }, "create");
+    await w.as(c.admin).grant(id, { user: c.teammate }, "write");
+    await w.as(c.admin).grant(id, { everyone: true }, "read");
+    expect(await w.as(c.teammate).level(id)).toBe("write");
+  });
+
+  it("I8: a person's email grant and user grant are one principal; the nearer one counts", async () => {
     const { as, folder, page } = await personal();
-    const sibling = uid();
-    await as.place("page", sibling, "folder", folder);
-    const friend = await w.user();
-    await as.share("folder", folder, { user: friend }, "read");
-    await as.share("page", page, { user: friend }, "write");
-    expect(await w.as(friend).level("page", page)).toBe("write");
-    expect(await w.as(friend).level("page", sibling)).toBe("read");
+    const address = `${uid()}@example.com`;
+    const friend = await w.user({ email: address });
+    await as.grant(folder, { user: friend }, "manage");
+    await as.grant(page, { email: address }, "read");
+    expect(await w.as(friend).level(page)).toBe("read");
+    await as.grant(page, { user: friend }, "write");
+    expect(await w.as(friend).level(page)).toBe("write");
   });
 
-  it("I5: a page moved out of a shared folder: the folder's grants stop applying", async () => {
-    const { as, owner, folder, page } = await personal();
-    const friend = await w.user();
-    await as.share("folder", folder, { user: friend }, "write");
-    const other = uid();
-    await as.place("folder", other, "user", owner);
-    await as.place("page", page, "folder", other);
-    expect(await w.as(friend).level("page", page)).toBe(null);
+  it("I9: each team stops at its own nearest grant", async () => {
+    const c = await company();
+    const other = await w.team(c.org, c.admin);
+    await w.join(other, c.teammate);
+    await w.as(c.admin).grant(c.folder, { team: other }, "delete");
+    await w.as(c.admin).grant(c.page, { team: c.team }, "read");
+    // c.team says read at the page; the other team says delete at the folder.
+    expect(await w.as(c.teammate).level(c.page)).toBe("delete");
   });
 
-  it("I6: a page moved into a shared folder: the folder's grants apply", async () => {
-    const { as, owner, folder } = await personal();
-    const friend = await w.user();
-    await as.share("folder", folder, { user: friend }, "write");
-    const loose = uid();
-    await as.place("page", loose, "user", owner);
-    expect(await w.as(friend).level("page", loose)).toBe(null);
-    await as.place("page", loose, "folder", folder);
-    expect(await w.as(friend).level("page", loose)).toBe("write");
+  it("I10: Everyone on a child and manage on the parent: manage", async () => {
+    const { as, page, owner, folder } = await personal();
+    await as.grant(page, { everyone: true }, "read");
+    await as.revoke(page, { user: owner });
+    expect(await w.as(owner).level(page)).toBe("manage");
+    expect((await w.as(owner).grants(folder)).length).toBe(1);
   });
 
-  it("I7: an item never placed: nobody has access, not even its creator", async () => {
-    const { as } = await personal();
-    const never = uid();
-    expect(await as.level("page", never)).toBe(null);
-  });
-
-  it("I8: a chain deeper than the limit: refused, and logged as a bug", async () => {
-    const owner = await w.user();
-    const ids = Array.from({ length: MAX_DEPTH + 1 }, uid);
-    await w.item("folder", ids[0]!, "user", owner);
-    for (let i = 1; i < ids.length; i++) await w.item("folder", ids[i]!, "folder", ids[i - 1]!);
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect(await w.as(owner).level("folder", ids[MAX_DEPTH - 1]!)).toBe("manage");
-      expect(log).not.toHaveBeenCalled();
-      expect(await w.as(owner).level("folder", ids[MAX_DEPTH]!)).toBe(null);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("deep"));
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("refuses everything on a loop written straight into the table, without hanging", async () => {
-    const owner = await w.user();
-    const [a, b] = [uid(), uid()];
-    await w.item("folder", a, "folder", b);
-    await w.item("folder", b, "folder", a);
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      expect(await w.as(owner).level("folder", a)).toBe(null);
-    } finally {
-      log.mockRestore();
-    }
-  });
-
-  it("refuses everything below a missing parent, grants on the item included", async () => {
-    const owner = await w.user();
-    const orphan = uid();
-    await w.item("page", orphan, "folder", uid());
-    await w.query(`insert into access_grant (item_kind, item_id, user_id, level) values ('page', $1, $2, 5)`, [orphan, owner]);
-    expect(await w.as(owner).level("page", orphan)).toBe(null);
-  });
-
-  it("does not confuse two items with the same id but different kinds", async () => {
-    const { as, owner } = await personal();
-    const shared = uid();
-    await as.place("folder", shared, "user", owner);
-    const stranger = await w.user();
-    await w.item("page", shared, "user", stranger);
-    expect(await as.level("folder", shared)).toBe("manage");
-    expect(await as.level("page", shared)).toBe(null);
-    expect(await w.as(stranger).level("folder", shared)).toBe(null);
+  it("I11: inheritance from a team point reaches the team's notes; the org's own grant does not when the team stops", async () => {
+    const c = await company();
+    expect(await w.as(c.teammate).level(c.page)).toBe("write");
+    expect(await w.as(c.member).level(c.page)).toBe(null);
+    await w.as(c.admin).inherit(teamPoint(c.team), true);
+    expect(await w.as(c.member).level(c.page)).toBe("read");
   });
 });
 
-describe("Restricted items", () => {
-  it("R1: folder restricted; read from the organization: refused on it and everything inside", async () => {
-    const c = await company();
-    await w.as(c.owner).restrict("folder", c.folder);
-    expect(await w.as(c.member).level("folder", c.folder)).toBe(null);
-    expect(await w.as(c.member).level("page", c.page)).toBe(null);
-  });
-
-  it("R2: the same folder shared with the user at read: read", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("folder", c.folder);
-    await as.share("folder", c.folder, { user: c.member }, "read");
-    expect(await w.as(c.member).level("folder", c.folder)).toBe("read");
-    expect(await w.as(c.member).level("page", c.page)).toBe("read");
-  });
-
-  it("R3: a read-only folder shared with the organization at read; a member asks for create: refused", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("folder", c.folder);
-    await as.share("folder", c.folder, { organization: c.org }, "read");
-    expect(await w.as(c.member).can("folder", c.folder, "read")).toBe(true);
-    expect(await w.as(c.member).can("folder", c.folder, "create")).toBe(false);
-    await refused(w.as(c.member).place("page", uid(), "folder", c.folder));
-  });
-
-  it("R4: a page restricted inside a folder the user can write: refused there, write on its siblings", async () => {
-    const { as, folder, page } = await personal();
-    const sibling = uid();
-    await as.place("page", sibling, "folder", folder);
-    const friend = await w.user();
-    await as.share("folder", folder, { user: friend }, "write");
-    await as.restrict("page", page);
-    expect(await w.as(friend).level("page", page)).toBe(null);
-    expect(await w.as(friend).level("page", sibling)).toBe("write");
-  });
-
-  it("R5: restricted folder; organization admin: delete", async () => {
-    const c = await company();
-    await w.as(c.owner).restrict("folder", c.folder);
-    expect(await w.as(c.admin).level("page", c.page)).toBe("delete");
-  });
-
-  it("R6: restricted folder; organization owner: manage", async () => {
-    const c = await company();
-    await w.as(c.owner).restrict("folder", c.folder);
-    expect(await w.as(c.owner).level("page", c.page)).toBe("manage");
-  });
-
-  it("R7: a grant on the restricted folder's parent does not reach it", async () => {
-    const c = await company();
-    const inner = uid();
-    const as = w.as(c.owner);
-    await as.place("folder", inner, "folder", c.folder);
-    await as.restrict("folder", inner);
-    const friend = await w.user();
-    await as.share("folder", c.folder, { user: friend }, "manage");
-    expect(await w.as(friend).level("folder", c.folder)).toBe("manage");
-    expect(await w.as(friend).level("folder", inner)).toBe(null);
-  });
-
-  it("R8: a grant on a page inside a restricted folder counts on the page", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("folder", c.folder);
-    await as.share("page", c.page, { user: c.member }, "write");
-    expect(await w.as(c.member).level("page", c.page)).toBe("write");
-    expect(await w.as(c.member).level("folder", c.folder)).toBe(null);
-  });
-
-  it("R9: restriction removed: inheritance from above applies again", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("folder", c.folder);
-    expect(await w.as(c.member).level("page", c.page)).toBe(null);
-    await as.restrict("folder", c.folder, false);
-    expect(await w.as(c.member).level("page", c.page)).toBe("read");
-  });
-
-  it("R10: a restricted item owned by a user: only its own grants and the owner's manage count", async () => {
-    const { as, owner, folder, page } = await personal();
-    const [above, own] = [await w.user(), await w.user()];
-    await as.share("folder", folder, { user: above }, "manage");
-    await as.share("page", page, { user: own }, "read");
-    await as.restrict("page", page);
-    expect(await w.as(owner).level("page", page)).toBe("manage");
-    expect(await w.as(above).level("page", page)).toBe(null);
-    expect(await w.as(own).level("page", page)).toBe("read");
-  });
-
-  it("R11: a link to the folder above a restricted page: refused on the page", async () => {
-    const { as, folder, page } = await personal();
-    const { token } = await as.link("folder", folder, "write");
-    await as.restrict("page", page);
-    expect(await w.as(null, token).level("folder", folder)).toBe("write");
-    expect(await w.as(null, token).level("page", page)).toBe(null);
-  });
-
-  it("a link to the restricted item itself still works", async () => {
-    const { as, page } = await personal();
-    await as.restrict("page", page);
-    const { token } = await as.link("page", page, "read");
-    expect(await w.as(null, token).level("page", page)).toBe("read");
-  });
-
-  it("nested restrictions each cut off what is above them", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    const inner = uid();
-    const leaf = uid();
-    await as.place("folder", inner, "folder", c.folder);
-    await as.place("page", leaf, "folder", inner);
-    await as.restrict("folder", c.folder);
-    await as.restrict("folder", inner);
-    const friend = await w.user();
-    await as.share("folder", c.folder, { user: friend }, "write");
-    expect(await w.as(friend).level("page", c.page)).toBe("write");
-    expect(await w.as(friend).level("page", leaf)).toBe(null);
-    await as.share("folder", inner, { user: friend }, "read");
-    expect(await w.as(friend).level("page", leaf)).toBe("read");
-    expect(await w.as(c.admin).level("page", leaf)).toBe("delete");
-  });
-
-  it("a restricted item at the top of an organization shuts out members but not admins", async () => {
-    const c = await company();
-    const top = uid();
-    await w.item("folder", top, "organization", c.org, true);
-    expect(await w.as(c.member).level("folder", top)).toBe(null);
-    expect(await w.as(c.admin).level("folder", top)).toBe("delete");
-  });
-
-  it("a grant to the organization on the restricted item still reaches members", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("folder", c.folder);
-    await as.share("folder", c.folder, { organization: c.org }, "write");
-    expect(await w.as(c.member).level("page", c.page)).toBe("write");
-    expect(await w.as(c.outsider).level("page", c.page)).toBe(null);
-  });
-
-  it("restricting needs manage; a manager from above who restricts can lock themselves out", async () => {
-    const { as, folder, page } = await personal();
-    const [writer, manager] = [await w.user(), await w.user()];
-    await as.share("folder", folder, { user: writer }, "write");
-    await as.share("folder", folder, { user: manager }, "manage");
-    await refused(w.as(writer).restrict("page", page));
-    await w.as(manager).restrict("page", page);
-    expect(await w.as(manager).level("page", page)).toBe(null);
-    expect(await as.level("page", page)).toBe("manage");
-  });
-
-  it("restricting twice, or lifting a restriction that is not there, changes nothing", async () => {
-    const { as, page } = await personal();
-    await as.restrict("page", page, false);
-    await as.restrict("page", page);
-    await as.restrict("page", page);
-    expect((await w.query(`select restricted from access_item where id = $1`, [page])).rows[0].restricted).toBe(true);
-  });
-
-  it("a restriction moves with its item", async () => {
-    const c = await company();
-    const as = w.as(c.owner);
-    await as.restrict("page", c.page);
-    const other = uid();
-    await as.place("folder", other, "organization", c.org);
-    await as.place("page", c.page, "folder", other);
-    expect(await w.as(c.member).level("page", c.page)).toBe(null);
-  });
-});
-
-describe("Placing", () => {
-  it("P1: place a page under a folder: recorded", async () => {
-    const { as, folder } = await personal();
-    const page = uid();
-    await as.place("page", page, "folder", folder);
-    expect(await parentOf("page", page)).toEqual({ parent_kind: "folder", parent_id: folder });
-  });
-
-  it("P2: place a folder under itself: refused", async () => {
-    const { as, folder } = await personal();
-    await refused(as.place("folder", folder, "folder", folder), 409);
-  });
-
-  it("P3: place a folder under its own child or grandchild: refused", async () => {
-    const { as, folder } = await personal();
-    const [child, grandchild] = [uid(), uid()];
-    await as.place("folder", child, "folder", folder);
-    await as.place("folder", grandchild, "folder", child);
-    await refused(as.place("folder", folder, "folder", child), 409);
-    await refused(as.place("folder", folder, "folder", grandchild), 409);
-    await refused(as.place("folder", child, "folder", grandchild), 409);
-  });
-
-  it("P4: two moves at the same moment that together would make a loop: one succeeds, the other is refused", async () => {
-    for (let round = 0; round < 25; round++) {
-      const { as, owner } = await personal();
-      const [a, b] = [uid(), uid()];
-      await as.place("folder", a, "user", owner);
-      await as.place("folder", b, "user", owner);
-      const results = await Promise.allSettled([w.as(owner).place("folder", a, "folder", b), w.as(owner).place("folder", b, "folder", a)]);
-      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-      const failure = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
-      expect((failure.reason as EndpointError).status).toBe(409);
-    }
-  });
-
-  it("P5: the app's own change fails after place in the same transaction: neither is saved", async () => {
-    const { as, folder } = await personal();
-    const page = uid();
-    await w.query(`create table if not exists pages (id text primary key)`);
-    await db
-      .transaction(async (tx) => {
-        await as.in(tx).place("page", page, "folder", folder);
-        await tx.execute(sql`insert into pages (id) values (${page})`);
-        throw new Error("the app changes its mind");
-      })
-      .catch(() => {});
-    expect(await parentOf("page", page)).toBe(null);
-    expect(await count("pages", "id = $1", [page])).toBe(0);
-  });
-
-  it("P5: both commit together when the app's change succeeds", async () => {
-    const { as, folder } = await personal();
-    const page = uid();
-    await w.query(`create table if not exists pages (id text primary key)`);
-    await db.transaction(async (tx) => {
-      await as.in(tx).place("page", page, "folder", folder);
-      await tx.execute(sql`insert into pages (id) values (${page})`);
-    });
-    expect(await parentOf("page", page)).toEqual({ parent_kind: "folder", parent_id: folder });
-  });
-
-  it("P6: place an item at the top, under a user or an organization: recorded", async () => {
-    const owner = await w.user();
-    const mine = uid();
-    await w.as(owner).place("folder", mine, "user", owner);
-    expect(await parentOf("folder", mine)).toEqual({ parent_kind: "user", parent_id: owner });
-    const c = await company();
-    const top = uid();
-    await w.as(c.admin).place("folder", top, "organization", c.org);
-    expect(await parentOf("folder", top)).toEqual({ parent_kind: "organization", parent_id: c.org });
-  });
-
-  it("P6: nobody places at the top of another user, or of an organization they cannot create in", async () => {
-    const c = await company();
-    await refused(w.as(c.member).place("folder", uid(), "user", c.owner));
-    await refused(w.as(c.member).place("folder", uid(), "organization", c.org));
-    await refused(w.as(c.outsider).place("folder", uid(), "organization", c.org));
-    await refused(w.as(null).place("folder", uid(), "organization", c.org));
-    await refused(w.as(null).place("folder", uid(), "user", c.owner));
-  });
-
-  it("P7: the mover has write on the item and create on the new parent: recorded", async () => {
-    const { as, folder, page } = await personal();
-    const target = uid();
-    await as.place("folder", target, "folder", folder);
-    const mover = await w.user();
-    await as.share("page", page, { user: mover }, "write");
-    await as.share("folder", target, { user: mover }, "create");
-    await w.as(mover).place("page", page, "folder", target);
-    expect(await parentOf("page", page)).toEqual({ parent_kind: "folder", parent_id: target });
-  });
-
-  it("P8: the mover lacks write on the item, or create on the new parent: refused, as 404", async () => {
-    const { as, folder, page } = await personal();
-    const target = uid();
-    await as.place("folder", target, "folder", folder);
-    const mover = await w.user();
-    await as.share("page", page, { user: mover }, "create");
-    await as.share("folder", target, { user: mover }, "manage");
-    await refused(w.as(mover).place("page", page, "folder", target));
-    await as.share("page", page, { user: mover }, "write");
-    await as.share("folder", target, { user: mover }, "read");
-    await refused(w.as(mover).place("page", page, "folder", target));
-    expect(await parentOf("page", page)).toEqual({ parent_kind: "folder", parent_id: folder });
-  });
-
-  it("creating a new item needs only create on its parent", async () => {
-    const { as, folder } = await personal();
+describe("Admins", () => {
+  it("A1: an organization's creator is its first admin, with manage on its point", async () => {
     const creator = await w.user();
-    await as.share("folder", folder, { user: creator }, "create");
-    const page = uid();
-    await w.as(creator).place("page", page, "folder", folder);
-    expect(await w.as(creator).level("page", page)).toBe("create");
-    await refused(w.as(await w.user()).place("page", uid(), "folder", folder));
+    const { id, admins } = await w.org(creator);
+    expect(await w.as(creator).level(organizationPoint(id))).toBe("manage");
+    expect((await w.query(`select user_id from team_member where team_id = $1`, [admins])).rows).toEqual([{ user_id: creator }]);
   });
 
-  it("a create link lets a signed-out holder add an item, and nothing more", async () => {
-    const { as, folder, page } = await personal();
-    const { token } = await as.link("folder", folder, "create");
-    const holder = w.as(null, token);
-    const added = uid();
-    await holder.place("page", added, "folder", folder);
-    expect(await parentOf("page", added)).toEqual({ parent_kind: "folder", parent_id: folder });
-    await refused(holder.place("page", page, "folder", folder));
+  it("A2: admins get manage on every point under the organization, even one with no grants that stands alone", async () => {
+    const c = await company();
+    const second = await w.user();
+    await w.member(c.org, second);
+    await w.join(c.admins, second);
+    const id = `secret-${uid()}`;
+    await w.as(c.teammate).create(id, { parent: teamPoint(c.team) });
+    await w.as(c.teammate).revoke(id, { user: c.teammate }).catch(() => {});
+    expect(await w.as(second).level(id)).toBe("manage");
+    expect(await w.as(second).level(c.page)).toBe("manage");
+    expect(await w.as(second).level(teamPoint(c.team))).toBe("manage");
   });
 
-  it("cannot be used to move an item into a parent that is not placed", async () => {
-    const { as, page } = await personal();
-    await refused(as.place("page", page, "folder", uid()));
+  it("A3: admins of one organization get nothing in another", async () => {
+    const a = await company();
+    const b = await company();
+    expect(await w.as(a.admin).level(b.page)).toBe(null);
+    expect(await w.as(a.admin).level(organizationPoint(b.org))).toBe(null);
   });
 
-  it("refuses a move that would make the tree too deep, counting what is below the item", async () => {
-    const { as, owner } = await personal();
-    const chain = Array.from({ length: MAX_DEPTH - 2 }, uid);
-    await as.place("folder", chain[0]!, "user", owner);
-    for (let i = 1; i < chain.length; i++) await as.place("folder", chain[i]!, "folder", chain[i - 1]!);
-    const [x, y, z] = [uid(), uid(), uid()];
-    await as.place("folder", x, "folder", chain.at(-1)!);
-    await as.place("folder", y, "folder", x);
-    await refused(as.place("folder", z, "folder", y), 409);
-    const branch = uid();
-    const twig = uid();
-    await as.place("folder", branch, "user", owner);
-    await as.place("folder", twig, "folder", branch);
-    await refused(as.place("folder", branch, "folder", x), 409);
-    await as.place("folder", branch, "folder", chain.at(-1)!);
-    expect(await as.level("folder", twig)).toBe("manage");
+  it("A4: an admin who leaves the organization keeps no reach, even with the team row left behind", async () => {
+    const c = await company();
+    const second = await w.user();
+    await w.member(c.org, second);
+    await w.join(c.admins, second);
+    await w.query(`delete from member where organization_id = $1 and user_id = $2`, [c.org, second]);
+    expect(await w.as(second).level(c.page)).toBe(null);
   });
 
-  it("placing an item where it already is changes nothing", async () => {
-    const { as, folder, page } = await personal();
-    await as.place("page", page, "folder", folder);
-    expect(await parentOf("page", page)).toEqual({ parent_kind: "folder", parent_id: folder });
+  it("A5: admins have no reach into members' personal points", async () => {
+    const c = await company();
+    const id = `mine-${uid()}`;
+    await w.as(c.member).create(id);
+    expect(await w.as(c.admin).level(id)).toBe(null);
   });
 
-  it("an item moved between organizations takes on the new one's roles", async () => {
-    const [a, b] = [await company(), await company()];
-    const mover = await w.user();
-    await w.member(a.org, mover, "owner");
-    await w.member(b.org, mover, "owner");
-    await w.as(mover).place("page", a.page, "folder", b.folder);
-    expect(await w.as(a.member).level("page", a.page)).toBe(null);
-    expect(await w.as(b.member).level("page", a.page)).toBe("read");
+  it("A6: the last admin cannot leave, be removed, or leave the Admins team; with a second admin they can", async () => {
+    const c = await company();
+    const orgs = w.orgs(c.admin);
+    const theirs = `theirs-${uid()}`;
+    await w.as(c.teammate).create(theirs, { parent: teamPoint(c.team) });
+    await refused(orgs.removeMember(c.org, c.admin), 409);
+    await refused(orgs.removeFromTeam(c.admins, c.admin), 409);
+    expect(await w.as(c.admin).level(theirs)).toBe("manage");
+    await orgs.addToTeam(c.admins, c.member);
+    await orgs.removeFromTeam(c.admins, c.admin);
+    expect(await w.as(c.admin).level(theirs)).toBe(null);
+    await refused(w.orgs(c.member).removeMember(c.org, c.member), 409);
   });
 
-  it("many moves at once never store a loop", async () => {
-    const { owner } = await personal();
-    const ids = Array.from({ length: 12 }, uid);
-    for (const id of ids) await w.as(owner).place("folder", id, "user", owner);
-    let seed = 7;
-    const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) % ids.length;
-    for (let round = 0; round < 10; round++) {
-      await Promise.allSettled(Array.from({ length: 16 }, () => w.as(owner).place("folder", ids[next()]!, "folder", ids[next()]!)));
-      for (const id of ids) expect(await w.as(owner).level("folder", id), "every folder still reaches its owner").toBe("manage");
-    }
+  it("A7: the Admins team cannot be deleted", async () => {
+    const c = await company();
+    await refused(w.orgs(c.admin).removeTeam(c.admins), 409);
+  });
+
+  it("A8: two admins removing each other at once leave one admin", async () => {
+    const c = await company();
+    await w.orgs(c.admin).addToTeam(c.admins, c.member);
+    const results = await Promise.allSettled([w.orgs(c.admin).removeFromTeam(c.admins, c.member), w.orgs(c.member).removeFromTeam(c.admins, c.admin)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(Number((await w.query(`select count(*) from team_member where team_id = $1`, [c.admins])).rows[0].count)).toBe(1);
   });
 });
 
-describe("Highest wins", () => {
-  it("H1: read from the organization, write from a team grant: write", async () => {
-    const c = await company();
-    const team = await w.team(c.org);
-    await w.join(team, c.member);
-    await w.as(c.owner).share("page", c.page, { team }, "write");
-    expect(await w.as(c.member).level("page", c.page)).toBe("write");
-  });
-
-  it("H2: delete from a role, read from a grant: delete", async () => {
-    const c = await company();
-    await w.as(c.owner).share("page", c.page, { user: c.admin }, "read");
-    expect(await w.as(c.admin).level("page", c.page)).toBe("delete");
-  });
-
-  it("H3: read on a folder from one team, write on the page from another: write", async () => {
-    const c = await company();
-    const [one, two] = [await w.team(c.org), await w.team(c.org)];
-    const friend = await w.user();
-    await w.join(one, friend);
-    await w.join(two, friend);
-    await w.as(c.owner).share("folder", c.folder, { team: one }, "read");
-    await w.as(c.owner).share("page", c.page, { team: two }, "write");
-    expect(await w.as(friend).level("page", c.page)).toBe("write");
-  });
-
-  it("H4: the same level from several places, one revoked: unchanged", async () => {
-    const c = await company();
-    const team = await w.team(c.org);
-    const friend = await w.user();
-    await w.join(team, friend);
-    const as = w.as(c.owner);
-    await as.share("page", c.page, { team }, "write");
-    await as.share("page", c.page, { user: friend }, "write");
-    await as.share("folder", c.folder, { email: (await w.query(`select email from "user" where id = $1`, [friend])).rows[0].email }, "write");
-    await as.revoke("page", c.page, { user: friend });
-    expect(await w.as(friend).level("page", c.page)).toBe("write");
-  });
-});
-
-describe("Endpoints and lists", () => {
-  const Page = z.object({ id: z.string() });
-  const endpoints = {
-    readPage: endpoint({ method: "GET", path: "/api/pages/:id", input: Page, output: Page, access: { kind: "page", id: "id", level: "read" } }, ({ id }) => ({ id })),
-    editPage: endpoint(
-      { serve: ["api", "mcp"], method: "PUT", path: "/api/pages/:id", input: Page, output: Page, access: { kind: "page", id: "id", level: "write" } },
-      ({ id }) => {
-        ran.push(id);
-        return { id };
-      },
-    ),
-  };
-  const ran: string[] = [];
-  const api = apiHandler(endpoints)!;
-  const call = async (access: Access, method: string, path: string) => {
-    const response = await api.handle(new Request(`https://app.test${path}`, { method, headers: { "content-type": "application/json" }, ...(method !== "GET" && { body: "{}" }) }), { access });
-    return { status: response!.status, body: await response!.json() };
-  };
-
-  it("E1: the caller has the declared level: the function runs", async () => {
-    const { as, page } = await personal();
-    expect(await call(as, "PUT", `/api/pages/${page}`)).toEqual({ status: 200, body: { id: page } });
-    expect(ran).toContain(page);
-  });
-
-  it("E2: the caller has less: 404, and the function never runs", async () => {
-    const { as, page } = await personal();
+describe("Moving", () => {
+  it("M1: moving needs manage on the point and create on the new parent", async () => {
+    const a = await personal();
+    const b = await personal();
+    await refused(a.as.move(a.page, b.folder));
+    await b.as.grant(b.folder, { user: a.owner }, "create");
+    await a.as.move(a.page, b.folder);
+    expect((await pointOf(a.page)).parent_id).toBe(b.folder);
     const reader = await w.user();
-    await as.share("page", page, { user: reader }, "read");
-    expect(await call(w.as(reader), "GET", `/api/pages/${page}`)).toMatchObject({ status: 200 });
-    expect(await call(w.as(reader), "PUT", `/api/pages/${page}`)).toMatchObject({ status: 404, body: { error: "not found" } });
-    expect(ran).not.toContain(page);
+    await b.as.grant(b.page, { user: reader }, "write");
+    await refused(w.as(reader).move(b.page, null));
   });
 
-  it("E3: the id names no item: the same 404 as no access", async () => {
-    const { as, page } = await personal();
-    const stranger = w.as(await w.user());
-    expect(await call(as, "GET", `/api/pages/${uid()}`)).toEqual(await call(stranger, "GET", `/api/pages/${page}`));
+  it("M2: a point cannot move under itself or anything under it", async () => {
+    const { as, folder, page } = await personal();
+    await refused(as.move(folder, page), 409);
+    await refused(as.move(folder, folder), 409);
+    expect((await pointOf(folder)).parent_id).toBe(null);
   });
 
-  it("E4: an MCP call gets the same checks, and a refusal is a tool error saying not found", async () => {
-    const { as, page } = await personal();
-    const mcp = async (access: Access) => {
-      const request = new Request("https://app.test/mcp", {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "editPage", arguments: { id: page } } }),
-      });
-      return ((await (await serveMcp(request, { access }, "test", endpoints)).json()) as { result: { isError?: boolean; content: { text: string }[] } }).result;
-    };
-    expect(await mcp(as)).toEqual({ content: [{ type: "text", text: JSON.stringify({ id: page }) }] });
-    expect(await mcp(w.as(await w.user()))).toEqual({ isError: true, content: [{ type: "text", text: "not found" }] });
+  it(`M3: a move that would make a chain longer than ${MAX_DEPTH} is refused`, async () => {
+    const owner = w.as(await w.user());
+    let parent: string | undefined;
+    const ids: string[] = [];
+    for (let i = 0; i < MAX_DEPTH - 1; i++) {
+      const id = `deep-${uid()}`;
+      await owner.create(id, { parent });
+      ids.push(id);
+      parent = id;
+    }
+    const a = `pair-${uid()}`;
+    const b = `pair-${uid()}`;
+    await owner.create(a);
+    await owner.create(b, { parent: a });
+    await refused(owner.move(a, parent!), 409);
+    await owner.move(b, parent!);
   });
 
-  it("E5: accessible lists exactly the items a single check allows", async () => {
+  it("M4: organization and team points move and go only through the organization", async () => {
     const c = await company();
-    const as = w.as(c.owner);
-    await w.query(`create table if not exists docs (id uuid primary key)`);
-    const ids = Array.from({ length: 8 }, uid);
-    for (const [i, id] of ids.entries()) {
-      await w.query(`insert into docs (id) values ($1)`, [id]);
-      await as.place("doc", id, i % 2 ? "folder" : "organization", i % 2 ? c.folder : c.org);
-    }
-    await as.restrict("doc", ids[1]!);
-    await as.share("doc", ids[2]!, { user: c.outsider }, "write");
-    await as.restrict("folder", c.folder);
-    await as.share("folder", c.folder, { user: c.outsider }, "read");
-    const { token } = await as.link("doc", ids[4]!, "create");
-    await w.query(`insert into docs (id) values ($1)`, [uid()]);
-    for (const caller of [c.owner, c.admin, c.member, c.outsider, null]) {
-      for (const link of [null, token]) {
-        const access = w.as(caller, link);
-        for (const level of ["read", "create", "write", "delete", "manage"] as Level[]) {
-          const listed = (await db.execute(sql`select id::text as id from docs where ${await access.accessible("doc", level, sql`docs.id`)} order by id`)).rows.map((r) => r.id);
-          const single = [];
-          for (const id of [...ids].sort()) if (await access.can("doc", id, level)) single.push(id);
-          expect(listed, `${caller} ${link} ${level}`).toEqual(single);
-        }
-      }
-    }
+    const as = w.as(c.admin);
+    await refused(as.move(teamPoint(c.team), null), 409);
+    await refused(as.move(organizationPoint(c.org), null), 409);
+    await refused(as.remove(teamPoint(c.team)), 409);
+    await refused(as.remove(organizationPoint(c.org)), 409);
   });
 
-  it("E6: can in a hand-written route answers the same as an endpoint", async () => {
+  it("M5: moving into an organization brings the whole subtree under it, with its admins", async () => {
+    const c = await company();
+    const mine = await personal();
+    await w.member(c.org, mine.owner);
+    await w.as(c.admin).grant(teamPoint(c.team), { user: mine.owner }, "create");
+    await mine.as.move(mine.folder, teamPoint(c.team));
+    expect((await pointOf(mine.page)).organization_id).toBe(c.org);
+    expect(await w.as(c.admin).level(mine.page)).toBe("manage");
+    await mine.as.move(mine.folder, null);
+    expect((await pointOf(mine.page)).organization_id).toBe(null);
+    expect(await w.as(c.admin).level(mine.page)).toBe(null);
+  });
+
+  it("M6: a subtree granted to another organization's team cannot move into an organization", async () => {
+    const a = await company();
+    const b = await company();
+    const mine = await personal();
+    await mine.as.grant(mine.page, { team: b.team }, "read");
+    await w.as(a.admin).grant(teamPoint(a.team), { user: mine.owner }, "create");
+    await w.member(a.org, mine.owner);
+    await refused(mine.as.move(mine.folder, teamPoint(a.team)), 409);
+    await mine.as.revoke(mine.page, { team: b.team });
+    await mine.as.move(mine.folder, teamPoint(a.team));
+  });
+
+  it("M7: a point can move to the top", async () => {
     const { as, page } = await personal();
-    const reader = await w.user();
-    await as.share("page", page, { user: reader }, "read");
-    expect(await w.as(reader).can("page", page, "read")).toBe((await call(w.as(reader), "GET", `/api/pages/${page}`)).status === 200);
-    expect(await w.as(reader).can("page", page, "write")).toBe((await call(w.as(reader), "PUT", `/api/pages/${page}`)).status === 200);
+    await as.move(page, null);
+    expect((await pointOf(page)).parent_id).toBe(null);
   });
 
-  it("refuses at definition an endpoint whose access names a field its input does not have", () => {
-    expect(() => endpoint({ method: "GET", path: "/api/x", input: z.object({ id: z.string() }), output: Page, access: { kind: "page", id: "pageId", level: "read" } }, () => ({ id: "" }))).toThrow(/pageId/);
+  it("M8: two moves at once can never make a loop", async () => {
+    const owner = w.as(await w.user());
+    const [a, b] = [`a-${uid()}`, `b-${uid()}`];
+    await owner.create(a);
+    await owner.create(b);
+    await Promise.allSettled([owner.move(a, b), owner.move(b, a)]);
+    const loop = await w.query(`select 1 from access_point x join access_point y on x.parent_id = y.id and y.parent_id = x.id where x.id = $1`, [a]);
+    expect(loop.rows).toEqual([]);
   });
 });
 
 describe("Deleting", () => {
-  it("D1: deleting an item takes its grants, links and place with it", async () => {
-    const { as, page } = await personal();
-    await as.share("page", page, { user: await w.user() }, "read");
-    await as.link("page", page, "read");
-    await as.remove("page", page);
-    expect(await parentOf("page", page)).toBe(null);
-    expect(await count("access_grant", "item_id = $1", [page])).toBe(0);
-    expect(await count("access_link", "item_id = $1", [page])).toBe(0);
-  });
-
-  it("D1: inside the app's transaction, a failed delete keeps everything", async () => {
-    const { as, page } = await personal();
-    await as.share("page", page, { user: await w.user() }, "read");
-    await db.transaction(async (tx) => {
-      await as.in(tx).remove("page", page);
-      throw new Error("rolled back");
-    }).catch(() => {});
-    expect(await count("access_grant", "item_id = $1", [page])).toBe(1);
-  });
-
-  it("D2: deleting a folder that still has children: refused until they are gone", async () => {
+  it("D1: removing needs delete and returns the point and everything under it, its own id first", async () => {
     const { as, folder, page } = await personal();
-    await refused(as.remove("folder", folder), 409);
-    await as.remove("page", page);
-    await as.remove("folder", folder);
-    expect(await parentOf("folder", folder)).toBe(null);
+    const deeper = `deeper-${uid()}`;
+    await as.create(deeper, { parent: page });
+    const writer = await w.user();
+    await as.grant(folder, { user: writer }, "write");
+    await refused(w.as(writer).remove(folder));
+    await as.link(page, "read");
+    expect(await as.remove(folder)).toEqual([folder, page, deeper]);
+    for (const id of [folder, page, deeper]) {
+      expect(await pointOf(id)).toBe(null);
+      expect(await count("access_grant", "point_id = $1", [id])).toBe(0);
+      expect(await count("access_link", "point_id = $1", [id])).toBe(0);
+    }
   });
 
-  it("deleting needs delete", async () => {
-    const c = await company();
-    await refused(w.as(c.member).remove("page", c.page));
-    await w.as(c.admin).remove("page", c.page);
+  it("D2: inside the app's transaction, a rolled-back remove keeps everything", async () => {
+    const { as, page } = await personal();
+    await db
+      .transaction(async (tx) => {
+        await as.in(tx).remove(page);
+        throw new Error("rolled back");
+      })
+      .catch(() => {});
+    expect(await pointOf(page)).not.toBe(null);
   });
 
-  it("D3: a deleted user's grants go, grants they gave stay, and their own items lose all access", async () => {
+  it("D3: a deleted person's grants go, and grants they gave stay", async () => {
     const { as, owner, page } = await personal();
     const [friend, other] = [await w.user(), await w.user()];
-    await as.share("page", page, { user: friend }, "write");
-    const c = await company();
-    await w.as(c.owner).share("page", c.page, { user: owner }, "manage");
-    await as.share("page", c.page, { user: other }, "read");
-    await w.query(`delete from "user" where id = $1`, [owner]);
-    expect(await count("access_grant", "user_id = $1", [owner])).toBe(0);
-    expect(await w.as(other).level("page", c.page)).toBe("read");
-    expect(await w.as(friend).level("page", page)).toBe(null);
+    await as.grant(page, { user: friend }, "write");
+    await as.grant(page, { user: other }, "read");
+    await w.query(`delete from "user" where id = $1`, [friend]);
+    expect(await count("access_grant", "user_id = $1", [friend])).toBe(0);
+    expect(await w.as(other).level(page)).toBe("read");
+    expect(await w.as(owner).level(page)).toBe("manage");
   });
 
-  it("D4: a deleted organization's grants go, and items placed under it lose all access", async () => {
+  it("D4: a deleted team's grants go, and its point with everything under it", async () => {
     const c = await company();
-    const friend = await w.user();
-    await w.as(c.owner).share("page", c.page, { user: friend }, "write");
-    const elsewhere = await personal();
-    await elsewhere.as.share("page", elsewhere.page, { organization: c.org }, "read");
-    await w.query(`delete from organization where id = $1`, [c.org]);
-    expect(await w.as(friend).level("page", c.page)).toBe(null);
-    expect(await w.as(c.owner).level("page", c.page)).toBe(null);
+    const mine = await personal();
+    await mine.as.grant(mine.page, { team: c.team }, "write");
+    await w.orgs(c.admin).removeTeam(c.team);
+    expect(await count("access_grant", "team_id = $1", [c.team])).toBe(0);
+    expect(await pointOf(teamPoint(c.team))).toBe(null);
+    expect(await pointOf(c.page)).toBe(null);
+  });
+
+  it("D5: a deleted organization takes every point under it and every grant to it", async () => {
+    const c = await company();
+    const mine = await personal();
+    await mine.as.grant(mine.page, { organization: c.org }, "read");
+    await w.orgs(c.admin).remove(c.org);
+    expect(await pointOf(c.page)).toBe(null);
+    expect(await pointOf(organizationPoint(c.org))).toBe(null);
     expect(await count("access_grant", "organization_id = $1", [c.org])).toBe(0);
+    expect(await mine.as.level(mine.page)).toBe("manage");
   });
 
-  it("a deleted team's grants go", async () => {
-    const c = await company();
-    const team = await w.team(c.org);
-    await w.as(c.owner).share("page", c.page, { team }, "write");
-    await w.query(`delete from team where id = $1`, [team]);
-    expect(await count("access_grant", "team_id = $1", [team])).toBe(0);
-  });
-});
-
-describe("Wiring", () => {
-  const app = defineApp(undefined, {
-    endpoints: {
-      readPage: endpoint(
-        { method: "GET", path: "/api/public/pages/:id", input: z.object({ id: z.string() }), output: z.object({ level: z.string().nullable() }), access: { kind: "page", id: "id", level: "read" } },
-        async ({ id }, a) => ({ level: await a.access.level("page", id) }),
-      ),
-    },
-    pool: (connectionString) => new Pool({ connectionString, max: 1 }),
-  });
-  const ctx = { waitUntil: () => {} };
-  const get = async (path: string, headers: Record<string, string>, access = "on") => {
-    const response = await app.fetch(new Request(`https://app.test${path}`, { headers }), { DB: { connectionString: url }, ACCESS: access }, ctx).catch((e: Error) => e);
-    return response instanceof Response ? { status: response.status, body: await response.json() } : response.message;
-  };
-
-  it("reads a link token from the request's x-access-link header", async () => {
-    const { as, page } = await personal();
-    const { token } = await as.link("page", page, "write");
-    expect(await get(`/api/public/pages/${page}`, { "x-access-link": token })).toEqual({ status: 200, body: { level: "write" } });
-    expect(await get(`/api/public/pages/${page}`, {})).toMatchObject({ status: 404 });
-    expect(await get(`/api/public/pages/${page}?link=${token}`, {})).toMatchObject({ status: 404 });
-  });
-
-  it("refuses app.access when the app has not turned access on", async () => {
-    const { page } = await personal();
-    expect(await get(`/api/public/pages/${page}`, {}, "off")).toMatchObject({ status: 500 });
+  it("D6: removing a point inside an app transaction lets the app delete its rows in the same commit", async () => {
+    const { as, folder, page } = await personal();
+    await w.query(`create table if not exists pages (id text primary key)`);
+    await w.query(`insert into pages (id) values ($1), ($2)`, [folder, page]);
+    await db.transaction(async (tx) => {
+      const gone = await as.in(tx).remove(folder);
+      await tx.execute(sql`delete from pages where id in ${gone}`);
+    });
+    expect(await count("pages", "id in ($1, $2)", [folder, page])).toBe(0);
   });
 });

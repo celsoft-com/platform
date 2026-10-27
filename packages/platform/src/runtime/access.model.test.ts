@@ -1,209 +1,195 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { random, Reference, type Grantee, type Outcome } from "../../test/access-reference.js";
+import { random, Reference, type RefGrant } from "../../test/access-reference.js";
 import { freshDatabase, world } from "../../test/database.js";
-import { LEVELS, type Level } from "./access.js";
-import { EndpointError } from "./endpoint-error.js";
+import { LEVELS } from "./access.js";
 
-// Random worlds and random operations, run against Postgres and against the reference version of
-// the rules side by side; every outcome and every caller's level on every item must agree.
+// Random worlds written straight into the tables, odd states included (grants to other
+// organizations, team rows left behind, unconfirmed emails, expired links), checked against the
+// reference version of the rules: every caller's level on every point must agree, through both
+// the list filter and single checks, and again after the memberships churn.
 
 const { db, pool } = await freshDatabase();
 const w = world(db, pool);
 
-const WORLDS = Number(process.env.ACCESS_WORLDS ?? 12);
-const STEPS = Number(process.env.ACCESS_STEPS ?? 60);
-const KINDS = ["folder", "page"] as const;
+const WORLDS = Number(process.env.ACCESS_WORLDS ?? 10);
+const ROUNDS = Number(process.env.ACCESS_ROUNDS ?? 3);
 
-async function outcome(work: Promise<unknown>): Promise<Outcome> {
-  try {
-    await work;
-    return "ok";
-  } catch (error) {
-    if (error instanceof EndpointError && (error.status === 404 || error.status === 409)) return error.status;
-    throw error;
-  }
-}
-
-// Every caller's level on every item of a kind, through accessible, in one query per caller.
-async function levels(user: string | null, token: string | null, kind: string, ids: string[]): Promise<Map<string, number>> {
-  const access = w.as(user, token);
-  const parts = await Promise.all(LEVELS.map(async (level) => sql`(${await access.accessible(kind, level, sql`o.id`)})::int`));
-  const rows = (await db.execute(sql`select o.id, ${sql.join(parts, sql` + `)} as level from access_item o where o.kind = ${kind} and o.id in ${ids}`)).rows;
-  return new Map(rows.map((row) => [row.id as string, Number(row.level)]));
+async function insertGrant(g: RefGrant): Promise<void> {
+  const cols = {
+    user: "user" in g ? g.user : null,
+    team: "team" in g ? g.team : null,
+    organization: "organization" in g ? g.organization : null,
+    everyone: "everyone" in g ? true : null,
+    email: "email" in g ? g.email : null,
+  };
+  await w.query(
+    `insert into access_grant (point_id, user_id, team_id, organization_id, everyone, email, level) values ($1, $2, $3, $4, $5, $6, $7)
+     on conflict on constraint access_grant_once do update set level = excluded.level`,
+    [g.point, cols.user, cols.team, cols.organization, cols.everyone, cols.email, g.level],
+  );
 }
 
 async function buildWorld(seed: number) {
   const r = random(seed);
   const ref = new Reference();
   const users: string[] = [];
-  const emails: string[] = [];
   for (let i = 0; i < 6; i++) {
     const local = randomUUID();
     const email = `${r.chance(0.3) ? local.toUpperCase() : local}@example.com`;
     const verified = r.chance(0.7);
     const id = await w.user({ email, verified });
     users.push(id);
-    emails.push(email.toLowerCase());
     ref.users.set(id, { email, verified });
   }
-  const orgs = [await w.org(), await w.org()];
-  orgs.forEach((org) => ref.orgs.add(org));
-  for (const org of orgs) {
-    for (const user of users) {
-      if (!r.chance(0.6)) continue;
-      const role = r.pick(["member", "member", "admin", "owner", "member,admin", "guest"]);
-      await w.member(org, user, role);
-      ref.roles.set(`${org} ${user}`, role);
-    }
+
+  const orgs: string[] = [];
+  for (let i = 0; i < 2; i++) {
+    const org = (await w.query(`insert into organization (name, slug) values ('Org', $1) returning id`, [randomUUID()])).rows[0].id as string;
+    orgs.push(org);
+    await w.query(`insert into access_point (id, organization_id, for_organization) values ($1, $2, $2)`, [`organization:${org}`, org]);
+    ref.points.set(`organization:${org}`, { id: `organization:${org}`, parent: null, inherits: false, organization: org });
   }
+  for (const org of orgs) for (const user of users) if (r.chance(0.6)) {
+    await w.member(org, user);
+    ref.members.add(`${org} ${user}`);
+  }
+
   const teams: string[] = [];
   for (const org of orgs) {
-    for (let t = 0; t < 2; t++) {
-      const team = await w.team(org);
+    for (const admins of [true, false, false]) {
+      const team = (await w.query(`insert into team (name, organization_id, admins) values ('T', $1, $2) returning id`, [org, admins])).rows[0].id as string;
       teams.push(team);
-      ref.teams.set(team, org);
-      for (const user of users) {
-        if (r.chance(0.4)) {
-          await w.join(team, user);
-          ref.teamMembers.add(`${team} ${user}`);
-        }
+      ref.teams.set(team, { organization: org, admins });
+      const point = `team:${team}`;
+      const inherits = r.chance(0.4);
+      await w.query(`insert into access_point (id, parent_id, organization_id, for_team, inherits) values ($1, $2, $3, $4, $5)`, [point, `organization:${org}`, org, team, inherits]);
+      ref.points.set(point, { id: point, parent: `organization:${org}`, inherits, organization: org });
+      // Mostly members of the organization, sometimes a row left behind by someone who is not.
+      for (const user of users) if (r.chance(0.3) && (ref.members.has(`${org} ${user}`) || r.chance(0.3))) {
+        await w.join(team, user);
+        ref.teamMembers.add(`${team} ${user}`);
       }
     }
   }
-  return { r, ref, users, emails, orgs, teams };
+
+  const ids = [...ref.points.keys()];
+  for (let i = 0; i < 18; i++) {
+    const id = `p${i}-${randomUUID()}`;
+    const parent = r.chance(0.15) ? null : r.pick(ids);
+    const organization = parent ? ref.points.get(parent)!.organization : null;
+    const inherits = r.chance(0.6);
+    await w.query(`insert into access_point (id, parent_id, organization_id, inherits) values ($1, $2, $3, $4)`, [id, parent, organization, inherits]);
+    ref.points.set(id, { id, parent, inherits, organization });
+    ids.push(id);
+  }
+
+  const grantees = (): RefGrant[] => {
+    const point = r.pick(ids);
+    const level = 1 + r.int(5);
+    const user = r.pick(users);
+    return [
+      { point, level, user },
+      { point, level, team: r.pick(teams) },
+      { point, level, organization: r.pick(orgs) },
+      { point, level, email: ref.users.get(user)!.email.toLowerCase() },
+      { point, level: 1, everyone: true },
+    ];
+  };
+  for (let i = 0; i < 45; i++) {
+    const g = r.pick(grantees());
+    const key = JSON.stringify({ ...g, level: 0 });
+    ref.grants = ref.grants.filter((x) => JSON.stringify({ ...x, level: 0 }) !== key);
+    ref.grants.push(g);
+    await insertGrant(g);
+  }
+
+  const tokens: (string | null)[] = [null];
+  for (let i = 0; i < 4; i++) {
+    const token = randomUUID();
+    const point = r.pick(ids);
+    const level = 1 + r.int(3);
+    const expired = r.chance(0.25);
+    const hash = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))).toString("hex");
+    await w.query(`insert into access_link (point_id, token_hash, level, expires_at) values ($1, $2, $3, $4)`, [point, hash, level, expired ? new Date(Date.now() - 1000) : null]);
+    ref.links.set(token, { point, level, expired });
+    tokens.push(token);
+  }
+  return { r, ref, users, orgs, teams, ids, tokens };
 }
 
-async function compare(seed: number, step: number, ref: Reference, users: string[], tokens: string[], ids: string[]) {
-  const callers: (string | null)[] = [...users, null];
-  for (const user of callers) {
-    for (const token of [null, ...tokens]) {
-      for (const kind of KINDS) {
-        const real = await levels(user, token, kind, ids);
-        for (const [key, node] of ref.items) {
-          if (node.kind !== kind) continue;
-          expect(real.get(node.id) ?? -1, `seed ${seed} step ${step}: ${user ?? "signed out"} with ${token ? "a link" : "no link"} on ${key}`).toBe(
-            ref.level(user, token, kind, node.id),
-          );
-        }
-        expect(real.size, `seed ${seed} step ${step}: items in the database`).toBe([...ref.items.values()].filter((n) => n.kind === kind).length);
+// Every point's level for one caller in one query, summing the list filter at each level.
+async function filtered(user: string | null, token: string | null, ids: string[]): Promise<Map<string, number>> {
+  const access = w.as(user, token);
+  const parts = await Promise.all(LEVELS.map(async (level) => sql`(${await access.allows(level, sql`p.id`)})::int`));
+  const found = (await db.execute(sql`select p.id, ${sql.join(parts, sql` + `)} as level from access_point p where p.id in ${ids}`)).rows;
+  return new Map(found.map((row) => [row.id as string, Number(row.level)]));
+}
+
+async function compare(world: Awaited<ReturnType<typeof buildWorld>>, seed: number, round: number): Promise<void> {
+  const { ref, users, ids, tokens } = world;
+  for (const user of [...users, null]) {
+    for (const token of tokens) {
+      const listed = await filtered(user, token, ids);
+      for (const id of ids) {
+        expect(listed.get(id), `seed ${seed} round ${round}: ${user} ${token} on ${id}`).toBe(ref.level(user, token, id));
       }
+    }
+    for (const id of ids.slice(0, 6)) {
+      const single = await w.as(user, tokens[1] ?? null).level(id);
+      expect(single ? LEVELS.indexOf(single) + 1 : 0, `seed ${seed} single ${user} on ${id}`).toBe(ref.level(user, tokens[1] ?? null, id));
     }
   }
 }
 
-describe("access against the reference rules", () => {
-  for (let world = 0; world < WORLDS; world++) {
-    const seed = Number(process.env.ACCESS_SEED ?? 1000) + world;
-    it(`agrees on random world ${seed}`, async () => {
-      const { r, ref, users, emails, orgs, teams } = await buildWorld(seed);
-      const ids = Array.from({ length: 10 }, () => randomUUID());
-      const tokens: string[] = [];
-      const caller = () => (r.chance(0.1) ? null : r.pick(users));
-      const someToken = () => (tokens.length && r.chance(0.25) ? r.pick(tokens) : null);
-      const anyItem = () => ({ kind: r.pick(KINDS), id: r.pick(ids) });
-      const placed = () => (ref.items.size ? r.pick([...ref.items.values()]) : anyItem());
-      const grantee = (): Grantee =>
-        r.pick<() => Grantee>([
-          () => ({ user: r.pick(users) }),
-          () => ({ team: r.pick(teams) }),
-          () => ({ organization: r.pick(orgs) }),
-          () => ({ email: r.chance(0.7) ? r.pick(emails) : `${randomUUID()}@example.com` }),
-        ])();
-
-      // Seed the tree through the owners, so the first steps have something to act on.
-      for (const id of ids.slice(0, 3)) {
-        const top = r.chance(0.5) ? { kind: "user", id: r.pick(users) } : { kind: "organization", id: r.pick(orgs) };
-        const admin = top.kind === "user" ? top.id : [...ref.roles].find(([key, role]) => key.startsWith(top.id) && /owner|admin/.test(role))?.[0].split(" ")[1];
-        if (!admin) continue;
-        const kind = r.pick(KINDS);
-        expect(await outcome(w.as(admin).place(kind, id, top.kind, top.id))).toBe(ref.place(admin, null, kind, id, top.kind, top.id));
+// Joins, leaves, confirmations and grant changes between rounds.
+async function churn(world: Awaited<ReturnType<typeof buildWorld>>): Promise<void> {
+  const { r, ref, users, orgs, teams, ids } = world;
+  for (let i = 0; i < 8; i++) {
+    const user = r.pick(users);
+    const step = r.int(5);
+    if (step === 0) {
+      const org = r.pick(orgs);
+      if (ref.members.delete(`${org} ${user}`)) await w.query(`delete from member where organization_id = $1 and user_id = $2`, [org, user]);
+      else {
+        await w.member(org, user);
+        ref.members.add(`${org} ${user}`);
       }
-
-      for (let step = 0; step < STEPS; step++) {
-        const user = caller();
-        const token = someToken();
-        const as = w.as(user, token);
-        const op = r.int(10);
-        const target = placed();
-        let real: Outcome;
-        let expected: Outcome;
-        if (op <= 2) {
-          const item = r.chance(0.3) ? anyItem() : target;
-          const parent = r.chance(0.2) ? (r.chance(0.5) ? { kind: "user", id: user ?? r.pick(users) } : { kind: "organization", id: r.pick(orgs) }) : placed();
-          real = await outcome(as.place(item.kind, item.id, parent.kind, parent.id));
-          expected = ref.place(user, token, item.kind, item.id, parent.kind, parent.id);
-        } else if (op === 3) {
-          const on = r.chance(0.7);
-          real = await outcome(as.restrict(target.kind, target.id, on));
-          expected = ref.restrict(user, token, target.kind, target.id, on);
-        } else if (op === 4 || op === 5) {
-          const to = grantee();
-          const level = r.int(5) + 1;
-          real = await outcome(as.share(target.kind, target.id, to, LEVELS[level - 1]!));
-          expected = ref.share(user, token, target.kind, target.id, "email" in to ? { email: to.email.toLowerCase() } : to, level);
-        } else if (op === 6) {
-          const to = grantee();
-          real = await outcome(as.revoke(target.kind, target.id, to));
-          expected = ref.revoke(user, token, target.kind, target.id, to);
-        } else if (op === 7) {
-          const level = r.int(3) + 1;
-          const expires = r.chance(0.2) ? new Date(Date.now() - 1000) : undefined;
-          let made: { token: string } | undefined;
-          real = await outcome(as.link(target.kind, target.id, LEVELS[level - 1] as Level, { expires }).then((link) => (made = link)));
-          expected = ref.canLink(user, token, target.kind, target.id);
-          if (made) {
-            ref.links.set(made.token, { kind: target.kind, id: target.id, level, expired: !!expires });
-            tokens.push(made.token);
-          }
-        } else if (op === 8) {
-          real = await outcome(as.remove(target.kind, target.id));
-          expected = ref.remove(user, token, target.kind, target.id);
-        } else {
-          // Membership changes outside access: roles, teams and confirmed emails.
-          const who = r.pick(users);
-          const org = r.pick(orgs);
-          const change = r.int(4);
-          if (change === 0) {
-            const role = r.pick(["member", "admin", "owner", "admin,member"]);
-            if (ref.roles.has(`${org} ${who}`)) await w.setRole(org, who, role);
-            else await w.member(org, who, role);
-            ref.roles.set(`${org} ${who}`, role);
-          } else if (change === 1) {
-            await w.leave(org, who);
-            ref.roles.delete(`${org} ${who}`);
-          } else if (change === 2) {
-            const team = r.pick(teams);
-            if (ref.teamMembers.has(`${team} ${who}`)) {
-              await w.leaveTeam(team, who);
-              ref.teamMembers.delete(`${team} ${who}`);
-            } else {
-              await w.join(team, who);
-              ref.teamMembers.add(`${team} ${who}`);
-            }
-          } else {
-            await w.query(`update "user" set email_verified = true where id = $1`, [who]);
-            ref.users.get(who)!.verified = true;
-          }
-          real = expected = "ok";
-        }
-        expect(real, `seed ${seed} step ${step}: operation ${op} by ${user ?? "signed out"}`).toBe(expected);
-        if (step % 6 === 5 || step === STEPS - 1) await compare(seed, step, ref, users, tokens.slice(-2), ids);
+    } else if (step === 1) {
+      const team = r.pick(teams);
+      if (ref.teamMembers.delete(`${team} ${user}`)) await w.query(`delete from team_member where team_id = $1 and user_id = $2`, [team, user]);
+      else {
+        await w.join(team, user);
+        ref.teamMembers.add(`${team} ${user}`);
       }
+    } else if (step === 2) {
+      const person = ref.users.get(user)!;
+      person.verified = !person.verified;
+      await w.query(`update "user" set email_verified = $2 where id = $1`, [user, person.verified]);
+    } else if (step === 3 && ref.grants.length > 0) {
+      const g = ref.grants.splice(r.int(ref.grants.length), 1)[0]!;
+      await w.query(
+        `delete from access_grant where point_id = $1 and user_id is not distinct from $2 and team_id is not distinct from $3 and organization_id is not distinct from $4 and everyone is not distinct from $5 and email is not distinct from $6`,
+        [g.point, "user" in g ? g.user : null, "team" in g ? g.team : null, "organization" in g ? g.organization : null, "everyone" in g ? true : null, "email" in g ? g.email : null],
+      );
+    } else {
+      const id = r.pick(ids.filter((x) => !x.startsWith("organization:")));
+      const point = ref.points.get(id)!;
+      point.inherits = !point.inherits;
+      await w.query(`update access_point set inherits = $2 where id = $1`, [id, point.inherits]);
+    }
+  }
+}
 
-      // The single check and the list filter must agree everywhere.
-      for (const node of ref.items.values()) {
-        const user = caller();
-        const level = await w.as(user).level(node.kind, node.id);
-        expect(level ? LEVELS.indexOf(level) + 1 : 0, `seed ${seed}: single check on ${node.kind} ${node.id}`).toBe(ref.level(user, null, node.kind, node.id));
+describe("random worlds against the reference rules", () => {
+  for (let seed = 1; seed <= WORLDS; seed++) {
+    it(`world ${seed}`, async () => {
+      const world = await buildWorld(seed * 7919);
+      for (let round = 0; round < ROUNDS; round++) {
+        await compare(world, seed, round);
+        await churn(world);
       }
-
-      // Deleting a user takes their grants and their own items' access with them.
-      const gone = r.pick(users);
-      await w.query(`delete from "user" where id = $1`, [gone]);
-      ref.deleteUser(gone);
-      await compare(seed, STEPS, ref, users.filter((u) => u !== gone), tokens.slice(-2), ids);
-    }, 120_000);
+    });
   }
 });

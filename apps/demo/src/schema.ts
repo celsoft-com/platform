@@ -9,7 +9,7 @@ export const notes = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    // Set for a team note, shared with everyone in that organization; empty for a private note.
+    // Set for an organization's note, whose control point inherits from the organization's; empty for a personal note.
     organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
     attachmentName: text("attachment_name"),

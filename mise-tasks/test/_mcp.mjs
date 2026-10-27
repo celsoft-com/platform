@@ -75,10 +75,12 @@ const rpc = async (method, params = {}) => {
 };
 const tools = (await rpc("tools/list")).result?.tools?.map((t) => t.name).sort() ?? [];
 check("tools listed", tools.join(", ") || "none");
-const teams = await rpc("tools/call", { name: "listMyTeams", arguments: {} });
-const team = JSON.parse(teams.result?.content?.[0]?.text ?? "[]")[0];
-check("listMyTeams as the signed-in user", team?.id ? `team ${team.name}` : JSON.stringify(teams).slice(0, 160));
-const added = await rpc("tools/call", { name: "addTeamNote", arguments: { team: team?.id, body: "from an AI client" } });
-check("addTeamNote through MCP", JSON.parse(added.result?.content?.[0]?.text ?? "{}").body ?? JSON.stringify(added).slice(0, 160));
-const bad = await rpc("tools/call", { name: "addTeamNote", arguments: { team: team?.id, body: "" } });
+const orgs = await rpc("tools/call", { name: "listMyOrganizations", arguments: {} });
+const org = JSON.parse(orgs.result?.content?.[0]?.text ?? "[]")[0];
+check("listMyOrganizations as the signed-in user", org?.id ? `organization ${org.name}` : JSON.stringify(orgs).slice(0, 160));
+const added = await rpc("tools/call", { name: "addOrganizationNote", arguments: { organization: org?.id, body: "from an AI client" } });
+check("addOrganizationNote through MCP", JSON.parse(added.result?.content?.[0]?.text ?? "{}").body ?? JSON.stringify(added).slice(0, 160));
+const foreign = await rpc("tools/call", { name: "addOrganizationNote", arguments: { organization: crypto.randomUUID(), body: "elsewhere" } });
+check("another organization is a tool error", foreign.result?.isError ? foreign.result.content?.[0]?.text : JSON.stringify(foreign).slice(0, 160));
+const bad = await rpc("tools/call", { name: "addOrganizationNote", arguments: { organization: org?.id, body: "" } });
 check("bad input is a tool error", bad.result?.isError ? "isError" : JSON.stringify(bad).slice(0, 160));

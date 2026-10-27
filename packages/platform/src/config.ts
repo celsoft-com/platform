@@ -30,7 +30,7 @@ export const configSchema = z
       .optional(),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
     auth: z
-      .union([z.boolean(), z.object({ organizations: z.boolean().default(false).describe("Organizations with members, roles, invitations and teams") }).strict()])
+      .union([z.boolean(), z.object({ organizations: z.boolean().default(false).describe("Organizations with members, invitations, teams and a built-in Admins team") }).strict()])
       .default(false)
       .transform((auth) => (auth === true ? { organizations: false } : auth))
       .describe("Sign-up and login with email and password; needs database and email"),

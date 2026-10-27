@@ -48,25 +48,25 @@
     <h2>Shared with me</h2>
     <ul id="shared"></ul>
 
-    <h2>Teams</h2>
-    <form id="new-team">
-      <input name="name" placeholder="New team name" required maxlength="60">
-      <button>Create team</button>
+    <h2>Organizations</h2>
+    <form id="new-org">
+      <input name="name" placeholder="New organization name" required maxlength="60">
+      <button>Create organization</button>
     </form>
-    <ul id="team-list"></ul>
-    <div id="team" hidden>
-      <h3 id="team-name"></h3>
+    <ul id="org-list"></ul>
+    <div id="org" hidden>
+      <h3 id="org-name"></h3>
       <p id="here"></p>
       <form id="invite">
-        <input name="email" type="email" placeholder="Invite someone by email" required>
+        <input name="email" type="email" placeholder="Invite someone by email (admins only)" required>
         <button>Invite</button>
       </form>
-      <form id="new-team-note">
-        <textarea name="body" placeholder="Write a team note" required maxlength="10000"></textarea>
+      <form id="new-org-note">
+        <textarea name="body" placeholder="Write a note for the organization" required maxlength="10000"></textarea>
         <button>Add</button>
       </form>
       <p id="typing"></p>
-      <ul id="team-notes"></ul>
+      <ul id="org-notes"></ul>
     </div>
   </section>
 
@@ -186,13 +186,13 @@
 
     addEventListener("hashchange", openFromAddress);
 
-    // Team notes: saved through the API, announced to the team's room, with who is here and who is typing.
+    // Organization notes: saved through the API, announced to the organization's room, with who is here and who is typing.
     let room;
-    let team;
+    let org;
     let typingTimer;
     let lastTyping = 0;
 
-    function teamNote(note) {
+    function orgNote(note) {
       const li = document.createElement("li");
       const meta = document.createElement("time");
       meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
@@ -200,33 +200,33 @@
       return li;
     }
 
-    async function loadTeamNotes() {
-      const list = await call("listTeamNotes", { team: team.id });
-      $("team-notes").replaceChildren(...list.map(teamNote));
+    async function loadOrgNotes() {
+      const list = await call("listOrganizationNotes", { organization: org.id });
+      $("org-notes").replaceChildren(...list.map(orgNote));
     }
 
-    async function loadTeams() {
-      const teams = (await request("/api/auth/organization/list")) ?? [];
-      $("team-list").replaceChildren(...teams.map((t) => {
+    async function loadOrgs() {
+      const orgs = await call("listMyOrganizations", {});
+      $("org-list").replaceChildren(...orgs.map((o) => {
         const li = document.createElement("li");
         const open = document.createElement("button");
-        open.textContent = t.name;
-        open.onclick = () => openTeam(t);
+        open.textContent = o.name;
+        open.onclick = () => openOrg(o);
         li.append(open);
         return li;
       }));
     }
 
-    async function openTeam(next) {
+    async function openOrg(next) {
       room?.close();
-      team = next;
-      $("team").hidden = false;
-      $("team-name").textContent = team.name;
+      org = next;
+      $("org").hidden = false;
+      $("org-name").textContent = org.name;
       $("here").textContent = "";
-      await loadTeamNotes();
-      room = live(`team:${team.id}`, {
+      await loadOrgNotes();
+      room = live(`organization:${org.id}`, {
         onMessage(data, { from }) {
-          if (data.type === "note") $("team-notes").prepend(teamNote(data.note));
+          if (data.type === "note") $("org-notes").prepend(orgNote(data.note));
           if (data.type === "typing" && from) {
             $("typing").textContent = `${from.name} is typing`;
             clearTimeout(typingTimer);
@@ -236,18 +236,17 @@
         onPresence(people, anonymous) {
           $("here").textContent = `Here now: ${people.map((p) => p.name).join(", ")}`;
         },
-        onReload: loadTeamNotes,
+        onReload: loadOrgNotes,
       });
     }
 
-    $("new-team").addEventListener("submit", async (event) => {
+    $("new-org").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const name = new FormData($("new-team")).get("name").trim();
-      const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
+      const name = new FormData($("new-org")).get("name").trim();
       try {
-        await request("/api/auth/organization/create", { name, slug });
-        $("new-team").reset();
-        await loadTeams();
+        await call("createOrganization", { name });
+        $("new-org").reset();
+        await loadOrgs();
       } catch (error) { say(error.message); }
     });
 
@@ -255,23 +254,23 @@
       event.preventDefault();
       const email = new FormData($("invite")).get("email");
       try {
-        await request("/api/auth/organization/invite-member", { email, role: "member", organizationId: team.id });
+        await request(`/api/platform/organizations/${org.id}/invitations`, { email });
         $("invite").reset();
         say(`Invited ${email}; they get an email with a link to join.`);
       } catch (error) { say(error.message); }
     });
 
-    $("new-team-note").addEventListener("submit", async (event) => {
+    $("new-org-note").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const body = new FormData($("new-team-note")).get("body");
+      const body = new FormData($("new-org-note")).get("body");
       try {
-        const note = await call("addTeamNote", { team: team.id, body });
-        $("team-notes").prepend(teamNote(note));
-        $("new-team-note").reset();
+        const note = await call("addOrganizationNote", { organization: org.id, body });
+        $("org-notes").prepend(orgNote(note));
+        $("new-org-note").reset();
       } catch (error) { say(error.message); }
     });
 
-    $("new-team-note").body.addEventListener("input", () => {
+    $("new-org-note").body.addEventListener("input", () => {
       if (Date.now() - lastTyping < 2000) return;
       lastTyping = Date.now();
       room?.send({ type: "typing" });
@@ -290,7 +289,7 @@
       $("who").replaceChildren(`${session.user.email} `, out);
       show("signed-in");
       await loadNotes();
-      await loadTeams();
+      await loadOrgs();
     }
 
     start().catch((error) => say(error.message));
