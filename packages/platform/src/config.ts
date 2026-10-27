@@ -30,14 +30,22 @@ export const configSchema = z
       .optional(),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
     auth: z
-      .union([z.boolean(), z.object({ organizations: z.boolean().default(false).describe("Organizations with members, invitations, teams and a built-in Admins team") }).strict()])
+      .union([
+        z.boolean(),
+        z
+          .object({
+            organizations: z.boolean().default(false).describe("Organizations with members, invitations, teams and a built-in Admins team"),
+            apiTokens: z.boolean().default(false).describe("Personal API tokens people make at /tokens and send as Authorization: Bearer on /api/"),
+          })
+          .strict(),
+      ])
       .default(false)
-      .transform((auth) => (auth === true ? { organizations: false } : auth))
+      .transform((auth) => (auth === true ? { organizations: false, apiTokens: false } : auth))
       .describe("Sign-up and login with email and password; needs database and email"),
     files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
     live: z.boolean().default(false).describe("Live rooms: messages and presence over WebSockets, on Durable Objects"),
     mcp: z.boolean().default(false).describe("Serve endpoints marked for MCP at /mcp, to AI clients that sign in with OAuth; needs auth"),
-    access: z.boolean().default(false).describe("Items, levels, grants and links through app.access; needs auth"),
+    access: z.boolean().default(false).describe("Control points, grants and links through app.access; needs auth"),
     previews: z
       .object({
         sendEmailTo: z

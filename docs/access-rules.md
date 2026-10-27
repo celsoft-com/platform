@@ -44,6 +44,12 @@ checked against a plain reference version of these rules, in `access.model.test.
 | P12 | Ids with quotes, `%`, `_`, other scripts | Taken literally; never match another point |
 | P13 | Reading a point's own settings | Parent, inheritance, static and organization, for those with `read`; 404 otherwise |
 
+## Token caps
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| C1 | Caller is an API token with a cap | The lower of its level and the cap, in checks and list filters, links included; never more than the owner has |
+
 ## Static points
 
 | # | Situation | Expected |
@@ -200,6 +206,26 @@ checked against a plain reference version of these rules, in `access.model.test.
 | N10 | Input gives no usable point id | 404, never a server error |
 | N11 | Link token | Read from the `x-access-link` header, never the query |
 | N12 | `app.access` with access off | Error |
+
+## API tokens
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| T1 | Making a token | Shown once, starting `pat_`; only a hash stored; listed without the key |
+| T2 | Calling `/api/` with `Authorization: Bearer` | Runs as the person who made it |
+| T3 | Token capped at `read` | Every method but GET, HEAD and OPTIONS is a 403, and nothing runs |
+| T4 | Endpoint needs more than the cap | 404, even where the owner has more; a cap never adds to the owner's level |
+| T5 | Organization routes | The cap applies there too |
+| T6 | Token on `/api/auth/*` | Ignored: it cannot make tokens, change the password or the profile |
+| T7 | Unknown, altered, expired or revoked token | 401, even with a good cookie beside it |
+| T8 | Tokens off | A token is ignored; the token routes and screen answer 404 |
+| T9 | Lifetime | 90 days unless set; at most 365; never forever; updating a token is refused |
+| T10 | Making a token with other fields | Only name, lifetime and cap are kept; an unknown cap is a 400; signed out is a 401 |
+| T11 | Someone else's tokens, or a token id that is no UUID | Not listed; cannot be read or revoked; a 404, never a server error |
+| T12 | Owner deleted, or cap changed in the table to no level | 401 |
+| T13 | Token on `/mcp` | 401; MCP takes only OAuth tokens |
+| T14 | `Authorization` that is not a bearer token | Ignored |
+| T15 | `/tokens` | The tokens screen |
 
 ## Attacks
 

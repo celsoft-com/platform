@@ -208,3 +208,104 @@ if (page === "reset") document.getElementById("email").value = params.get("email
 if (page === "reset" && (params.get("error") || !params.get("token"))) say("That reset link has expired or was already used. Ask for a new one from the sign-in page.");
 if (page === "login" && !oauthQuery) fetch("/api/auth/get-session", { credentials: "same-origin" }).then(r => r.json()).then(s => s && s.session && finish()).catch(() => {});
 `;
+
+// The API tokens screen: the signed-in person's tokens, making one shown exactly once, and revoking.
+export const TOKENS_PATH = "/tokens";
+
+export function renderTokensScreen(appName: string, stylesheet: string | undefined): Response {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>API tokens · ${escape(appName)}</title>
+<style>${STYLE}${TOKENS_STYLE}</style>${stylesheet ? `<link rel="stylesheet" href="${escape(stylesheet)}">` : ""}
+</head><body class="platform-screen" data-page="tokens">
+<main class="platform-card platform-wide">
+<p class="platform-app">${escape(appName)}</p>
+<h1 class="platform-title">API tokens</h1>
+<p class="platform-intro">A token lets a script call this app's API as you, sent as <code>Authorization: Bearer &lt;token&gt;</code>. Its level caps what it can do, so a leaked token can do no more.</p>
+<form class="platform-form" novalidate>
+<label class="platform-field"><span class="platform-label">Name</span><input class="platform-input" name="name" required maxlength="100" placeholder="What it is for"></label>
+<label class="platform-field"><span class="platform-label">Level</span><select class="platform-input" name="cap">
+<option value="read">read: look, never change</option><option value="create">create</option><option value="write">write</option><option value="delete">delete</option><option value="manage" selected>manage: all you can do</option></select></label>
+<label class="platform-field"><span class="platform-label">Expires after (days, 1 to 365)</span><input class="platform-input" name="days" type="number" min="1" max="365" value="90" required></label>
+<p class="platform-error" role="alert" hidden></p>
+<button class="platform-button" type="submit">Make a token</button></form>
+<div class="platform-message" role="status" hidden></div>
+<ul class="platform-tokens"></ul>
+<nav class="platform-links"><a href="/">Back to the app</a></nav>
+</main>
+<script>${TOKENS_SCRIPT}</script>
+</body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
+const TOKENS_STYLE = `
+.platform-wide{max-width:560px}
+.platform-tokens{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.platform-tokens li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--platform-line);font-size:14px}
+.platform-tokens small{display:block;color:var(--platform-muted)}
+.platform-tokens button{font:inherit;padding:6px 10px;border:1px solid var(--platform-line);border-radius:8px;background:transparent;color:var(--platform-error);cursor:pointer}
+`;
+
+const TOKENS_SCRIPT = `
+const form = document.querySelector(".platform-form");
+const error = document.querySelector(".platform-error");
+const message = document.querySelector(".platform-message");
+const list = document.querySelector(".platform-tokens");
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.message || data.error || "That didn't work. Try again.");
+  return data;
+}
+
+const when = d => d ? new Date(d).toLocaleString() : "never";
+
+async function load() {
+  const r = await fetch("/api/auth/api-key/list", { credentials: "same-origin" });
+  if (r.status === 401) { location.assign("/login?next=" + encodeURIComponent("/tokens")); return; }
+  const data = await r.json().catch(() => []);
+  const keys = Array.isArray(data) ? data : (data.apiKeys || []);
+  list.replaceChildren(...keys.map(k => {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = k.name || "(no name)";
+    const meta = document.createElement("small");
+    const cap = (k.metadata && k.metadata.cap) || "manage";
+    meta.textContent = (k.start || "") + "… · level " + cap + " · last used " + when(k.lastRequest) + " · expires " + when(k.expiresAt);
+    text.append(name, meta);
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.textContent = "Revoke";
+    revoke.onclick = async () => {
+      if (!confirm("Revoke " + (k.name || "this token") + "? Scripts using it stop working at once.")) return;
+      try { await post("/api/auth/api-key/delete", { keyId: k.id }); load(); }
+      catch (err) { error.textContent = err.message; error.hidden = false; }
+    };
+    li.append(text, revoke);
+    return li;
+  }));
+}
+
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  error.hidden = true;
+  if (!form.reportValidity()) return;
+  const v = Object.fromEntries(new FormData(form));
+  try {
+    const made = await post("/api/auth/api-key/create", { name: v.name, expiresIn: Number(v.days) * 86400, metadata: { cap: v.cap } });
+    const note = document.createElement("p");
+    note.textContent = "Copy it now; it is never shown again.";
+    const code = document.createElement("p");
+    code.className = "platform-code";
+    code.textContent = made.key;
+    message.replaceChildren(note, code);
+    message.hidden = false;
+    form.reset();
+    load();
+  } catch (err) { error.textContent = err.message; error.hidden = false; }
+});
+
+load();
+`;

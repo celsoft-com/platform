@@ -135,7 +135,7 @@ describe("preview", () => {
 });
 
 describe("auth and email", () => {
-  const authConfig: Config = { ...config, auth: { organizations: false }, email: true };
+  const authConfig: Config = { ...config, auth: { organizations: false, apiTokens: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
 
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
@@ -150,6 +150,7 @@ describe("auth and email", () => {
       APP_NAME: "demo",
       LIVE_ROOMS: "off",
       AUTH_ORGANIZATIONS: "off",
+      AUTH_API_TOKENS: "off",
       MCP: "off",
       ACCESS: "off",
       EMAIL_MODE: "send",
@@ -281,7 +282,7 @@ describe("files", () => {
 });
 
 describe("destroy", () => {
-  const full: Config = { ...config, auth: { organizations: false }, email: true, files: true };
+  const full: Config = { ...config, auth: { organizations: false, apiTokens: false }, email: true, files: true };
 
   async function deployEverything() {
     const c = { ...ctx(), config: full };

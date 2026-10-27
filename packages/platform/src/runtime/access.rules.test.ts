@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { freshDatabase, world } from "../../test/database.js";
-import { applyStaticPoints, MAX_DEPTH, organizationPoint, shareMessage, teamPoint, type Level, type ShareNotice } from "./access.js";
+import { applyStaticPoints, createAccess, MAX_DEPTH, organizationPoint, shareMessage, teamPoint, type Level, type ShareNotice } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
 
 // One test per row of docs/access-rules.md, named by its row, then the stranger cases around them.
@@ -237,6 +237,25 @@ describe("Points", () => {
     expect(await stranger.level("%")).toBe(null);
     expect(await stranger.level("abc-%")).toBe(null);
     expect(await stranger.level(id.replace("abc", "a_c"))).toBe(null);
+  });
+});
+
+describe("Token caps", () => {
+  const capped = (userId: string, cap: Level, link: string | null = null) => createAccess(db, async () => ({ userId, link, cap }));
+
+  it("C1: a capped caller gets the lower of its level and the cap, in checks and in list filters", async () => {
+    const { owner, page, as } = await personal();
+    expect(await capped(owner, "write").level(page)).toBe("write");
+    await refused(capped(owner, "write").require(page, "manage"));
+    await refused(capped(owner, "write").grant(page, { everyone: true }, "read"));
+    const filter = await capped(owner, "create").allows("write", sql`${page}`);
+    expect((await db.execute(sql`select ${filter} as ok`)).rows[0]!.ok).toBe(false);
+    const readable = await capped(owner, "read").readable(sql`${page}`);
+    expect((await db.execute(sql`select ${readable} as ok`)).rows[0]!.ok).toBe(true);
+    const stranger = await w.user();
+    expect(await capped(stranger, "manage").level(page)).toBe(null);
+    const { token } = await as.link(page, "write");
+    expect(await capped(stranger, "read", token).level(page)).toBe("read");
   });
 });
 

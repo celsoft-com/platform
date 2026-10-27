@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -32,6 +32,8 @@
     "prepare": "tsc -b && node dist/write-schema.js"
   },
   "dependencies": {
+    "@better-auth/api-key": "1.7.12",
+    "@better-auth/core": "1.7.12",
     "@better-auth/mcp": "1.7.12",
     "@better-auth/oauth-provider": "1.7.12",
     "@modelcontextprotocol/sdk": "1.32.2",
