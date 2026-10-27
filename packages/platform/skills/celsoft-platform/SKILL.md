@@ -56,7 +56,7 @@ export default defineApp(undefined, {
 2. **Checks:** bad input is a 400; an output that does not match its schema is a 500, logged.
 3. **Errors:** throw `EndpointError(status, message)`; a thrown `Response`, as `requireUser()` throws, keeps its status.
 4. **Access:** every `/api/` path needs a signed-in user except under `/api/public/`; MCP calls always carry one.
-5. **Item access:** with `access` on, `access: { kind: "note", id: "id", level: "write" }` in the definition checks the caller's level on the item whose id is in that input field before the function runs, and answers 404 when it falls short.
+5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "none"`; the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
@@ -110,7 +110,7 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams; see Organizations above. Needs `database` and `email`.
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
-6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth. Needs `auth`.
+6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 
 ## Commands

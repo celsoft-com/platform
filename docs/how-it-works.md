@@ -126,7 +126,7 @@ flowchart LR
 1. **On:** `"mcp": true` in `platform.jsonc`, with auth on.
 2. **Tools:** each endpoint with `serve: ["mcp"]` or `serve: ["api", "mcp"]` is a tool named after the endpoint, described by its `description` and input schema.
 3. **Connecting:** an AI client such as Claude is given `https://<hostname>/mcp`; it registers itself, sends the person to `/login` and `/consent`, and gets a token.
-4. **As the user:** every call runs with `app.requireUser()` returning the person who approved the client.
+4. **As the user:** every call runs with `app.requireUser()` returning the person who approved the client, and gets the same control point checks the API does.
 5. **Errors:** bad input, `EndpointError` and other failures come back as tool errors with a message, so the AI can correct itself.
 
 ### Access
