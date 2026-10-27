@@ -121,6 +121,13 @@ flowchart LR
 6. **Apply:** deploy applies new migrations under a lock, and stops before any change if `db generate` was not run.
 7. **Previews:** each PR gets its own copy of the prod database, so migrations are tried there first.
 
+### API tokens
+
+1. **On:** `"auth": { "apiTokens": true }` in `platform.jsonc`.
+2. **Making:** people make, list and revoke their own at `/tokens`, choosing a name, a lifetime of up to 365 days (90 by default) and a level cap.
+3. **Using:** scripts send `Authorization: Bearer <token>` to `/api/`; the request runs as the token's owner, with every access check capped at the token's level, and a `read` token only reads.
+4. **Never on auth:** tokens are ignored on `/api/auth/*` and refused on `/mcp`.
+
 ### MCP
 
 1. **On:** `"mcp": true` in `platform.jsonc`, with auth on.

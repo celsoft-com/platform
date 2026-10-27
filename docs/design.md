@@ -266,6 +266,13 @@ A published CLI, runtime library and app template that create and reuse each app
         7. **Who may**: each call checks the organization's or the team's point: reading needs `read`, renaming `write`, deleting `delete`, creating teams `create`, and inviting, removing others and changing a team's members `manage`; anyone may leave, except the last admin.
         8. **Invitations**: emailed with a link to `/login?invitation=<id>` and accepted by whoever signs in with that confirmed address, so the id is no secret; an invitation can also name a team. People see the invitations sent to their confirmed address and may accept or decline them.
     9. **Access**: who may do what to an app's resources, through control points in `app.access`; see App Code, Access.
+    10. **API tokens**: personal tokens for scripts, behind `"auth": { "apiTokens": true }`, through Better Auth's API key plugin, which stores only hashes; while off, its routes answer 404 and tokens are never accepted, and its table exists whenever auth is on.
+        1. **Sending**: `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`; the request runs as the person who made the token. A token is never accepted on `/api/auth/*`, so it can never make tokens, change a password or touch the account, and `/mcp` takes only OAuth tokens.
+        2. **Cap**: the creator picks the token's highest level, `read` to `manage`, defaulting to `manage`; every control point check gives it at most that, and a `read` token is refused on every method but GET, HEAD and OPTIONS. Endpoints declared `"none"` are limited only by that method rule.
+        3. **Lifetime**: 90 days unless the creator picks another length, at most 365, never unlimited; tokens cannot be updated.
+        4. **Making**: only a name, a lifetime and a cap are taken; Better Auth's server-only settings are dropped.
+        5. **Screen**: `/tokens`, styled like `/login`, lists the signed-in person's tokens with name, level, last use and expiry, makes one shown exactly once, and revokes; apps may build their own on the same routes, `/api/auth/api-key/create`, `list`, `get` and `delete`.
+        6. **Refused**: an unknown, altered, expired or revoked token, one whose owner is gone, or one whose cap is no level, is a 401, even beside a good cookie.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
@@ -303,7 +310,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Auth**: `app.auth` is the full Better Auth instance and API.
     3. **Bindings**: `app.env.DB` and `app.env.FILES` are Cloudflare's own bindings.
 10. **Auth setup**: owned by the platform and never copied into apps, so upgrades can change it safely; permissions live in control points.
-11. **Left out**: GitHub sign-in, and API tokens other than MCP's.
+11. **Left out**: GitHub sign-in.
 12. **Endpoints**: typed functions an app declares once and serves over its API, MCP, or both; some choices are still open.
     1. **Zod only**: every type an app writes is a Zod schema; whatever the API and MCP need beyond that is the package's wrapping, never the app's.
     2. **Named**: declared by name in `defineApp`'s `endpoints`; the name is the MCP tool name, so it stays stable when a path changes.

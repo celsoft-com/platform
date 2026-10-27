@@ -1,8 +1,11 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { apiKey } from "@better-auth/api-key";
 import { mcp } from "@better-auth/mcp";
 // Lets the declaration of createAuth name the OAuth provider types the MCP plugin brings.
 import type {} from "@better-auth/oauth-provider";
+// Lets the declaration of createAuth name the schema types the API key plugin brings.
+import type {} from "@better-auth/core/db/internal";
 import { admin, jwt } from "better-auth/plugins";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { sql } from "drizzle-orm";
@@ -11,6 +14,9 @@ import { authSchema } from "../schema.js";
 import type { Email } from "./email.js";
 
 export const AUTH_PATH = "/api/auth";
+export const TOKEN_DAYS = 90;
+export const MAX_TOKEN_DAYS = 365;
+export const TOKEN_PREFIX = "pat_";
 export const OWNER_ROLE = "owner";
 
 export interface AuthSettings {
@@ -66,6 +72,20 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     // unless platform.jsonc turns MCP on. Organizations are the platform's own, in organizations.ts.
     plugins: [
       admin({ defaultRole: "user", adminRoles: [OWNER_ROLE, "admin"], roles: { [OWNER_ROLE]: adminAc, admin: adminAc, user: userAc } }),
+      // Personal API tokens: hashed, 90 days unless the creator picks another length up to 365, with
+      // the cap in their metadata. The platform verifies them itself on /api/ and never lets Better
+      // Auth turn one into a session, so no token reaches /api/auth/*.
+      apiKey({
+        defaultPrefix: TOKEN_PREFIX,
+        requireName: true,
+        maximumNameLength: 100,
+        enableMetadata: true,
+        enableSessionForAPIKeys: false,
+        // Read from no header, so Better Auth itself never accepts a token.
+        apiKeyHeaders: [],
+        keyExpiration: { defaultExpiresIn: TOKEN_DAYS * 24 * 60 * 60, minExpiresIn: 1, maxExpiresIn: MAX_TOKEN_DAYS },
+        rateLimit: { enabled: false },
+      }),
       // The OAuth server AI clients sign in through to reach the app's MCP endpoints; its tokens
       // are JWTs bound to the app's /mcp, signed with keys the JWT plugin keeps.
       jwt(),

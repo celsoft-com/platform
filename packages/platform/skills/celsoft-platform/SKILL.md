@@ -95,6 +95,16 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 4. **Admins:** the creator is the first member of the Admins team; add others with `addToTeam(adminsTeamId, userId)`.
 5. **Invitations:** emailed with a link to `/login?invitation=<id>`, accepted by whoever signs in with that confirmed address; an invitation can name a team.
 
+## API tokens
+
+With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
+
+1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
+2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`; `requireUser()` returns the token's owner.
+3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `access: "none"` are limited only by that, so put writes behind a point when tokens should not reach them.
+4. **Lifetime:** 90 days unless chosen, at most 365.
+5. **Never:** on `/api/auth/*` or `/mcp`.
+
 ## Tables and migrations
 
 1. **Change** `src/schema.ts`, then run `npx @celsoft/platform db generate`; read and commit the SQL in `drizzle/`.
@@ -107,7 +117,7 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 
 1. **`database`:** a Neon project id; prod, each preview and `dev` get their own branch.
 2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
-3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams; see Organizations above. Needs `database` and `email`.
+3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams, and `{ "apiTokens": true }` personal API tokens; see those sections above. Needs `database` and `email`.
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.

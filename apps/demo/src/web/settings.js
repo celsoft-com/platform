@@ -53,6 +53,11 @@ export async function settingsPage(ctx) {
       el("p", {}, el("a", { href: "/forgot", textContent: "Forgot it? Reset it by email." })),
     ),
     section(
+      "API tokens",
+      empty("Tokens let scripts call this app's API as you, each capped at a level you choose, for up to a year."),
+      el("p", {}, el("a", { href: "/tokens", textContent: "Manage your API tokens" })),
+    ),
+    section(
       "Sessions",
       sessions.length
         ? el(

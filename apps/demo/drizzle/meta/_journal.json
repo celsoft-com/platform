@@ -71,6 +71,13 @@
       "when": 1793068182165,
       "tag": "20261027022942_swift_quasimodo",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793073566302,
+      "tag": "20261027035926_silly_rumiko_fujikawa",
+      "breakpoints": true
     }
   ]
 }

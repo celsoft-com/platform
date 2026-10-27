@@ -103,6 +103,8 @@ export interface Caller {
   userId: string | null;
   // A link token the request carries, as the `x-access-link` header.
   link: string | null;
+  // The highest level an API token may use, when the caller is one; every check gives at most this.
+  cap?: Level | null;
 }
 
 // The longest chain from a point up through its parents, counting the point itself.
@@ -155,6 +157,7 @@ interface Who {
   userId: string | null;
   linkHash: string | null;
   app: boolean;
+  cap: number | null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -168,6 +171,11 @@ const userParam = (userId: string | null) => (userId && UUID.test(userId) ? user
 // their own organization or none. The organization's Admins get `manage`, and a link counts only
 // on the point it was made for.
 function levelSql(point: SQL, who: Who): SQL {
+  const level = uncappedLevelSql(point, who);
+  return who.cap === null ? level : sql`least(${level}, ${who.cap})`;
+}
+
+function uncappedLevelSql(point: SQL, who: Who): SQL {
   if (who.app) return sql`(select case when exists (select 1 from access_point where id = (${point})) then ${MANAGE} else 0 end)`;
   const userId = userParam(who.userId);
   // The point is read once, in a query with no tables of its own, so a column the app passes,
@@ -349,8 +357,8 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
   const { notify, ready } = options;
   let human: Promise<Who> | undefined;
   const person = () =>
-    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link }]) => ({ userId, linkHash: link ? await hashToken(link) : null, app: false })));
-  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHash: null, app: true });
+    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHash: link ? await hashToken(link) : null, app: false, cap: cap ? rank(cap) : null })));
+  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHash: null, app: true, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
     async function levelOf(at: Db, point: string): Promise<number> {

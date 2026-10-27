@@ -1,6 +1,6 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { applyStaticPoints, createAccess, LINK_HEADER, shareMessage, type Access, type StaticPoint } from "./access.js";
+import { applyStaticPoints, createAccess, LEVELS, LINK_HEADER, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { apiHandler, undeclaredAccess, type Endpoint } from "./endpoints.js";
@@ -12,7 +12,7 @@ import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { EndpointError } from "./endpoint-error.js";
-import { isScreen, renderScreen } from "./screens.js";
+import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
 
 export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
@@ -30,6 +30,7 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   APP_NAME?: string;
   BETTER_AUTH_SECRET?: string;
   AUTH_ORGANIZATIONS?: string;
+  AUTH_API_TOKENS?: string;
   AUTH_LIMIT?: RateLimiter;
   LIVE?: LiveNamespace;
   LIVE_ROOMS?: string;
@@ -133,27 +134,40 @@ export function defineApp<
         return json({ error: "this app is misconfigured; see its logs" }, 500);
       }
       const { app, close } = createContext(request, env, ctx, options, once);
+      let closeToken: (() => void) | undefined;
       try {
         if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
-        const live = await liveRoute(request, url, env, app, options);
+        // A request with an API token runs as the token's owner, capped at the token's level.
+        let current = app;
+        const token = apiToken(request, url, env);
+        if (token !== null) {
+          const holder = await tokenHolder(app, token);
+          if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
+          if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
+          const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap);
+          current = made.app;
+          closeToken = made.close;
+        }
+        const live = await liveRoute(request, url, env, current, options);
         if (live) return live;
         if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
           const answered = await mcpRoute(request, url, env, ctx, app, options, once);
           if (answered) return answered;
         }
         if (env.BETTER_AUTH_SECRET) {
-          const platform = await platformRoute(request, url, env, app, options);
+          const platform = await platformRoute(request, url, env, current, options);
           if (platform) return platform;
         }
-        const answered = await api?.handle(request, app);
+        const answered = await api?.handle(request, current);
         if (answered) return answered;
-        return await handle(request, app);
+        return await handle(request, current);
       } catch (thrown) {
         if (thrown instanceof Response) return thrown;
         // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
         if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
         throw thrown;
       } finally {
+        closeToken?.();
         close();
       }
     },
@@ -185,6 +199,8 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   once: Once,
   // Set when the caller is already known, as for an MCP client signed in with a token.
   knownSession?: () => Promise<Session | null>,
+  // The level an API token is capped at, when the request carries one.
+  cap?: Level,
 ): { app: AppContext<Env, Schema>; close(): void } {
   const openPool = options.pool ?? defaultPool;
   let pool: Pool | undefined;
@@ -226,7 +242,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const db = app.db as NodePgDatabase<Record<string, unknown>>;
-      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER) }), {
+      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER), cap }), {
         // Sent after the answer, so a slow or failing email never fails the grant itself.
         notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
@@ -240,7 +256,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const appName = env.APP_NAME ?? new URL(origin).hostname;
-      return (organizations ??= createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null }), async (notice) =>
+      return (organizations ??= createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
         app.waitUntil(
           app.email
             .send({
@@ -265,6 +281,49 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
 }
 
+// A session for a caller proved some other way than a cookie, such as an OAuth or API token.
+async function sessionAs<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, userId: string, id: string): Promise<Session | null> {
+  const user = await (await app.auth.$context).internalAdapter.findUserById(userId);
+  if (!user || (user as { banned?: boolean | null }).banned) return null;
+  return { user, session: { id, userId, token: "", expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date() } } as unknown as Session;
+}
+
+const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
+const TOKEN_ROUTES = ["create", "list", "delete", "get"];
+
+// The API token a request carries, when tokens are on: only on /api/ outside /api/auth/, where
+// a token can never make more tokens or change the account.
+function apiToken(request: Request, url: URL, env: PlatformBindings): string | null {
+  if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
+  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith(`${AUTH_PATH}/`)) return null;
+  return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
+}
+
+// The token's owner and cap, or null for a token that is unknown, expired, revoked, capped at
+// no known level, or whose owner is gone.
+async function tokenHolder<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, token: string): Promise<{ session: Session; cap: Level } | null> {
+  const result = await app.auth.api.verifyApiKey({ body: { key: token } }).catch(() => null);
+  if (!result?.valid || !result.key) return null;
+  const cap = (result.key.metadata as { cap?: unknown } | null)?.cap;
+  if (!LEVELS.includes(cap as Level)) return null;
+  const session = await sessionAs(app, result.key.referenceId, `api-token ${result.key.id}`);
+  return session ? { session, cap: cap as Level } : null;
+}
+
+// What a person may send when making a token: a name, a lifetime and a cap, and nothing else,
+// so no token is made without an expiry or with Better Auth's server-only settings.
+async function tokenCreateRequest(request: Request): Promise<Request | Response> {
+  const body = (await request.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "send a JSON object" }, 400);
+  const cap = (body.metadata as { cap?: unknown } | undefined)?.cap ?? "manage";
+  if (!LEVELS.includes(cap as Level)) return json({ error: `a token's cap is one of ${LEVELS.join(", ")}` }, 400);
+  if (body.expiresIn !== undefined && body.expiresIn !== null && typeof body.expiresIn !== "number") return json({ error: "expiresIn is a number of seconds" }, 400);
+  const clean = { name: body.name, ...(typeof body.expiresIn === "number" && { expiresIn: body.expiresIn }), metadata: { cap } };
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  return new Request(request.url, { method: "POST", headers, body: JSON.stringify(clean) });
+}
+
 // The OAuth server's routes, which exist only for MCP.
 const MCP_AUTH_PATHS = ["/oauth2/", "/admin/oauth2/", "/jwks", "/.well-known/"];
 
@@ -284,10 +343,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   const origin = env.APP_URL ?? url.origin;
   const userId = await mcpUserId(request, app.auth, `${origin}${MCP_PATH}`);
   if (!userId) return mcpChallenge(origin);
-  const known = async (): Promise<Session | null> => {
-    const user = await (await app.auth.$context).internalAdapter.findUserById(userId);
-    return user ? ({ user, session: { id: "mcp", userId, token: "", expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date() } } as unknown as Session) : null;
-  };
+  const known = () => sessionAs(app, userId, "mcp");
   const { app: asUser, close } = createContext(request, env, ctx, options, once, known);
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
@@ -327,6 +383,7 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   const path = url.pathname;
   if (path === "/consent" && env.MCP !== "on") return undefined;
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
+  if (request.method === "GET" && path === TOKENS_PATH && env.AUTH_API_TOKENS === "on") return renderTokensScreen(env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
@@ -334,6 +391,14 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
     return serveOrganizations(request, path, app.organizations);
   }
   if (env.MCP !== "on" && MCP_AUTH_PATHS.some((p) => path.startsWith(`${AUTH_PATH}${p}`))) return json({ error: "not found" }, 404);
+  if (path.startsWith(`${AUTH_PATH}/api-key/`)) {
+    // Only the calls the tokens screen needs; updating could remove a token's expiry.
+    if (env.AUTH_API_TOKENS !== "on" || !TOKEN_ROUTES.includes(path.slice(`${AUTH_PATH}/api-key/`.length))) return json({ error: "not found" }, 404);
+    if (path === `${AUTH_PATH}/api-key/create`) {
+      const checked = await tokenCreateRequest(request);
+      return checked instanceof Response ? checked : app.auth.handler(checked);
+    }
+  }
   if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
 
   if (needsSession(path)) await app.requireUser();

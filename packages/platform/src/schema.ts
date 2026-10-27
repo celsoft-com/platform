@@ -258,6 +258,39 @@ export const oauthClientAssertion = pgTable("oauth_client_assertion", {
   expiresAt: at("expires_at").notNull(),
 });
 
+// Better Auth's API key plugin: personal API tokens, stored only as hashes. A token acts as the user
+// it names, capped at the level in its metadata; see docs/design.md, App Code, API tokens.
+export const apikey = pgTable(
+  "apikey",
+  {
+    id: id(),
+    configId: text("config_id").notNull().default("default"),
+    name: text("name"),
+    start: text("start"),
+    referenceId: uuid("reference_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    prefix: text("prefix"),
+    key: text("key").notNull(),
+    refillInterval: integer("refill_interval"),
+    refillAmount: integer("refill_amount"),
+    lastRefillAt: at("last_refill_at"),
+    enabled: boolean("enabled").default(true),
+    rateLimitEnabled: boolean("rate_limit_enabled").default(true),
+    rateLimitTimeWindow: integer("rate_limit_time_window"),
+    rateLimitMax: integer("rate_limit_max"),
+    requestCount: integer("request_count").default(0),
+    remaining: integer("remaining"),
+    lastRequest: at("last_request"),
+    expiresAt: at("expires_at"),
+    createdAt: at("created_at").notNull().defaultNow(),
+    updatedAt: at("updated_at").notNull().defaultNow(),
+    permissions: text("permissions"),
+    metadata: text("metadata"),
+  },
+  (t) => [index("apikey_config_id_idx").on(t.configId), index("apikey_reference_id_idx").on(t.referenceId), index("apikey_key_idx").on(t.key)],
+);
+
 // The platform's own organizations, replacing Better Auth's organization plugin so no role checks
 // run beside control points; see docs/design.md, Auth behavior, Organizations. Members carry no
 // roles: each organization's built-in Admins team, the one team with `admins` set, does what an
@@ -427,6 +460,7 @@ export const authSchema = {
   oauthAccessToken,
   oauthConsent,
   oauthClientAssertion,
+  apikey,
 };
 
 export const organizationSchema = { organization, member, team, teamMember, invitation };
