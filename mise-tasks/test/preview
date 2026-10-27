@@ -113,6 +113,7 @@ check "Better Auth's organization routes are gone (404)" "$(status -b "$jar" -d 
 cookie=$(awk '{ sub(/^#HttpOnly_/, "") } !/^#/ && NF >= 7 { printf "%s=%s; ", $6, $7 }' "$jar")
 node "$(dirname "$0")/_live.mjs" "$base" "$cookie"
 node "$(dirname "$0")/_mcp.mjs" "$base" "$email" "first-password-1"
+node "$(dirname "$0")/_budget.mjs" "$base" "$cookie" "$id"
 
 signin='{"email":"'$email'","password":"second-password-2"}'
 check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"

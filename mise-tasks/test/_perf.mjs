@@ -57,7 +57,16 @@ for (const [name, call] of Object.entries(endpoints)) {
 }
 
 // A short burst of reads at a fixed concurrency: requests per second and percentiles under load.
-const reads = [endpoints["read a note"], endpoints["list my notes"], endpoints["permissions panel"]];
+// The burst is spread over enough API tokens that no one caller meets the per-caller rate limit,
+// as many people would spread it.
+const tokens = [];
+for (let i = 0; i < Math.ceil(Number(burst) / 1000); i++) {
+  const made = await send("/api/auth/api-key/create", { method: "POST", body: JSON.stringify({ name: `perf ${i}`, metadata: { cap: "manage" } }) });
+  tokens.push(JSON.parse(made.body).key);
+}
+let turn = 0;
+const asToken = (path) => send(path, { headers: { authorization: `Bearer ${tokens[turn++ % tokens.length]}`, cookie: "" } });
+const reads = [() => asToken(`/api/public/notes/${note}`), () => asToken("/api/notes"), () => asToken(`/api/notes/${note}/access`)];
 const results = [];
 let next = 0;
 const started = performance.now();
