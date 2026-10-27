@@ -136,3 +136,27 @@ describe("tracing", () => {
     expect((await app.fetch(new Request("https://x/"), env, fakeCtx().ctx)).headers.get("server-timing")).toBeNull();
   });
 });
+
+describe("rate limit", () => {
+  const app = defineApp(ok, { pages: [] });
+  const limiter = (allow: (key: string) => boolean) => {
+    const keys: string[] = [];
+    return { keys, API_LIMIT: { limit: async ({ key }: { key: string }) => (keys.push(key), { success: allow(key) }) } };
+  };
+
+  it("limits each caller on the API, by address when signed out, and answers 429 with a wait", async () => {
+    const { keys, API_LIMIT } = limiter(() => false);
+    const response = await app.fetch(new Request("https://x/api/things", { headers: { "cf-connecting-ip": "203.0.113.7" } }), { API_LIMIT }, fakeCtx().ctx);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(keys).toEqual(["address 203.0.113.7"]);
+  });
+
+  it("never counts static paths, and lets callers under the limit through", async () => {
+    const { keys, API_LIMIT } = limiter(() => true);
+    expect((await app.fetch(new Request("https://x/api/things"), { API_LIMIT }, fakeCtx().ctx)).status).toBe(200);
+    expect((await app.fetch(new Request("https://x/about.html"), { API_LIMIT: limiter(() => false).API_LIMIT }, fakeCtx().ctx)).status).toBe(200);
+    expect(keys).toHaveLength(1);
+  });
+});
+

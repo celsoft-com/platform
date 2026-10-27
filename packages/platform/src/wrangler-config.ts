@@ -62,7 +62,10 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     // The room class is always deployed, so turning live off and on never needs a Durable Object migration.
     durable_objects: { bindings: [{ name: "LIVE", class_name: "LiveRoom" }] },
     migrations: [{ tag: "live-rooms-v1", new_sqlite_classes: ["LiveRoom"] }],
-    ...(auth && { ratelimits: [{ name: "AUTH_LIMIT", namespace_id: namespaceId(worker), simple: AUTH_LIMIT }] }),
+    ratelimits: [
+      ...(auth ? [{ name: "AUTH_LIMIT", namespace_id: namespaceId(worker), simple: AUTH_LIMIT }] : []),
+      { name: "API_LIMIT", namespace_id: namespaceId(`${worker}:api`), simple: { limit: config.rateLimit, period: 60 } },
+    ],
   };
 }
 

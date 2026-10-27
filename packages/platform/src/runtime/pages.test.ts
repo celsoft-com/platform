@@ -411,4 +411,20 @@ describe("Pages: sign-in and access", () => {
     const page = await wired.fetch(new Request(`https://app.test/doc/${id}`, { headers: { cookie } }), traced, ctx);
     expect(page.headers.get("server-timing")).toMatch(/desc="1 queries"/);
   });
+
+  it("R1: the rate limit counts a signed-in person by their id, and a token by the token", async () => {
+    const keys: string[] = [];
+    const API_LIMIT = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: true }) };
+    const cookie = await signUp();
+    const session = await wired.fetch(new Request("https://app.test/api/auth/get-session", { headers: { cookie } }), env, ctx);
+    const { user } = (await session.json()) as { user: { id: string } };
+    await wired.fetch(new Request("https://app.test/doc/mine/list", { headers: { cookie } }), { ...env, API_LIMIT }, ctx);
+    const made = await send("/api/auth/api-key/create", { method: "POST", cookie, body: { name: "limited" } });
+    const key = JSON.parse(made.text).key as string;
+    await wired.fetch(new Request("https://app.test/doc/mine/list", { headers: { authorization: `Bearer ${key}` } }), { ...env, API_LIMIT }, ctx);
+    expect(keys[0]).toBe(user.id);
+    expect(keys[1]).toMatch(/^token [0-9a-f]{32}$/);
+    expect(keys[1]).not.toContain(key);
+  });
 });
+

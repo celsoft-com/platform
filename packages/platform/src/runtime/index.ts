@@ -37,6 +37,7 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   AUTH_ORGANIZATIONS?: string;
   AUTH_API_TOKENS?: string;
   AUTH_LIMIT?: RateLimiter;
+  API_LIMIT?: RateLimiter;
   LIVE?: LiveNamespace;
   LIVE_ROOMS?: string;
   MCP?: string;
@@ -175,7 +176,12 @@ export function defineApp<
         current = made.app;
         closeToken = made.close;
       }
-      const live = await liveRoute(request, url, env, current, options);
+      if (env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname))) {
+      // One caller cannot spend everyone's capacity: a token, a person, or else an address.
+      const caller = token !== null ? `token ${(await hashToken(token)).slice(0, 32)}` : ((await current.session().catch(() => null))?.user.id ?? `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`);
+      if (!(await env.API_LIMIT.limit({ key: caller })).success) return Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
+    }
+    const live = await liveRoute(request, url, env, current, options);
       if (live) return live;
       if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
         const answered = await mcpRoute(request, url, env, ctx, app, options, once);

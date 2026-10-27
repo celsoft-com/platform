@@ -189,7 +189,13 @@ describe("auth and email", () => {
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });
-    expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
+    expect(first.config.ratelimits).toEqual([
+      { name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } },
+      { name: "API_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 1200, period: 60 } },
+    ]);
+    const [authLimit, apiLimit] = first.config.ratelimits as { namespace_id: string }[];
+    expect(authLimit!.namespace_id).not.toBe(apiLimit!.namespace_id);
+    expect(first.config.minify).toBeUndefined();
     expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
     expect(first.config.main).toBe("entry.ts");
     expect(first.config.durable_objects).toEqual({ bindings: [{ name: "LIVE", class_name: "LiveRoom" }] });
