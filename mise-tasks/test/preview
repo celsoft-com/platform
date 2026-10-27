@@ -58,7 +58,13 @@ check "page signed out goes to sign in" "$(page "$base/print" | sed "s|$base||")
 check "page lists my notes" "$(curl -s -b "$jar" "$base/print" | grep -c "/print/$id")"
 check "page shows a note I can read" "$(curl -s -b "$jar" "$base/print/$id" | grep -c 'edited by link')"
 check "page refuses someone else (404)" "$(page -b "$jar2" "$base/print/$id")"
-check "page sends a signed-out visitor to sign in" "$(page "$base/print/$id" | sed "s|$base||")"
+check "page refuses a signed-out visitor (404)" "$(page "$base/print/$id")"
+check "refused page offers sign-in" "$(curl -s "$base/print/$id" | grep -c "/login?next=%2Fprint%2F$id")"
+jar3=$(mktemp)
+check "link kept as a cookie" "$(status -c "$jar3" -d '{"link":"'$read_token'"}' "$base/api/platform/link")"
+check "altered link not kept (404)" "$(status -d '{"link":"x'$read_token'"}' "$base/api/platform/link")"
+check "link cookie opens the page signed out" "$(curl -s -b "$jar3" "$base/print/$id" | grep -c 'edited by link')"
+check "link cookie downloads the attachment" "$(curl -s -b "$jar3" "$base/api/notes/$id/attachment")"
 check "page with a bad id (404)" "$(page -b "$jar" "$base/print/not-a-note")"
 check "page path not routed (404)" "$(page -b "$jar" "$base/print/$id/more")"
 check "page only reads (405)" "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/print")"
@@ -79,6 +85,8 @@ check "token cannot make tokens (401)" "$(status -H "authorization: Bearer $writ
 check "altered token refused (401)" "$(status -H "authorization: Bearer ${write_key}x" "$base/api/notes")"
 check "unlimited token refused (400)" "$(status -b "$jar" -d '{"name":"forever","expiresIn":"never"}' "$base/api/auth/api-key/create")"
 write_id=$(json -b "$jar" "$base/api/auth/api-key/list" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).apiKeys.find(k=>k.name==="smoke write")||{}).id||""))')
+check "read token reads a page" "$(page -H "authorization: Bearer $read_key" "$base/print/$id")"
+check "altered token refused on a page (401)" "$(page -H "authorization: Bearer ${read_key}x" "$base/print/$id")"
 check "revoke token" "$(status -b "$jar" -d '{"keyId":"'$write_id'"}' "$base/api/auth/api-key/delete")"
 check "revoked token refused (401)" "$(status -H "authorization: Bearer $write_key" "$base/api/notes")"
 
@@ -110,4 +118,4 @@ check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run plat
 check "old session (cached up to 5 minutes)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
 check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
 check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
-rm -f "$jar" "$jar2" "$attachment"
+rm -f "$jar" "$jar2" "$jar3" "$attachment"

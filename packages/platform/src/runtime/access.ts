@@ -101,8 +101,8 @@ export interface Access {
 
 export interface Caller {
   userId: string | null;
-  // A link token the request carries, as the `x-access-link` header.
-  link: string | null;
+  // The link tokens the request carries: the `x-access-link` header and the link cookies.
+  link: string | readonly string[] | null;
   // The highest level an API token may use, when the caller is one; every check gives at most this.
   cap?: Level | null;
 }
@@ -143,6 +143,24 @@ export function shareMessage(notice: ShareNotice, appName: string, origin: strin
   };
 }
 
+// At most this many link tokens count on one request, so a pile of cookies cannot slow every check.
+export const MAX_LINKS = 20;
+
+function linkTokens(link: Caller["link"]): string[] {
+  const all = link === null ? [] : typeof link === "string" ? [link] : [...link];
+  return [...new Set(all.filter((t) => typeof t === "string" && t.length > 0 && t.length <= 200))].slice(0, MAX_LINKS);
+}
+
+// The point a link token opens and when it stops, or null for a token that is unknown or expired.
+export async function linkTarget(db: Db, token: string): Promise<{ point: string; expires: Date | null } | null> {
+  if (token.length === 0 || token.length > 200) return null;
+  const [row] = await rows<{ point_id: string; expires_at: Date | string | null }>(
+    db,
+    sql`select point_id, expires_at from access_link where token_hash = ${await hashToken(token)} and (expires_at is null or expires_at > now())`,
+  );
+  return row ? { point: row.point_id, expires: row.expires_at === null ? null : new Date(row.expires_at) } : null;
+}
+
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -155,7 +173,7 @@ function newToken(): string {
 
 interface Who {
   userId: string | null;
-  linkHash: string | null;
+  linkHashes: string[];
   app: boolean;
   cap: number | null;
 }
@@ -218,7 +236,7 @@ function uncappedLevelSql(point: SQL, who: Who): SQL {
       select ${MANAGE} from _ac_chain _ac_c join _ac_teams _ac_x on _ac_x.admins and _ac_x.organization_id = _ac_c.organization_id where _ac_c.depth = 0
       union all
       select _ac_l.level from access_link _ac_l
-      where _ac_l.point_id = (select id from _ac_target) and _ac_l.token_hash = ${who.linkHash} and (_ac_l.expires_at is null or _ac_l.expires_at > now())
+      where _ac_l.point_id = (select id from _ac_target) and ${who.linkHashes.length > 0 ? sql`_ac_l.token_hash in ${who.linkHashes}` : sql`false`} and (_ac_l.expires_at is null or _ac_l.expires_at > now())
     )
     select coalesce(max(level), 0) from _ac_levels
   )`;
@@ -357,8 +375,8 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
   const { notify, ready } = options;
   let human: Promise<Who> | undefined;
   const person = () =>
-    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHash: link ? await hashToken(link) : null, app: false, cap: cap ? rank(cap) : null })));
-  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHash: null, app: true, cap: null });
+    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
+  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHashes: [], app: true, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
     async function levelOf(at: Db, point: string): Promise<number> {

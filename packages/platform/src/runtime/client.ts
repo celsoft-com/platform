@@ -3,7 +3,7 @@ import { oc } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
-import { LINK_HEADER } from "./link-header.js";
+import { LINK_EXCHANGE_PATH, LINK_HEADER } from "./link-header.js";
 
 export { EndpointError };
 
@@ -29,7 +29,8 @@ export function linkFromPage(): string | null {
 
 // Calls the app's endpoints by name over its REST API; the generated .platform/client.ts passes
 // each endpoint's method and path, and the app's own type for the inputs and outputs. Every call
-// carries the page's access link token, or the one `link` returns.
+// carries the page's access link token, or the one `link` returns. In a browser, the page's token
+// is also kept as a cookie once, so plain links such as downloads and server pages count it too.
 export function createCall<App>(routes: Record<string, readonly [Method, string]>, options: { url?: string; link?: () => string | null } = {}): Call<App> {
   const contract = Object.fromEntries(Object.entries(routes).map(([name, [method, path]]) => [name, oc.route({ method, path: path as `/${string}` })]));
   const url = options.url ?? (typeof location === "undefined" ? undefined : location.origin);
@@ -42,7 +43,16 @@ export function createCall<App>(routes: Record<string, readonly [Method, string]
       },
     }));
 
+  let kept: string | null = null;
+  const keep = () => {
+    const token = typeof location === "undefined" || options.link ? null : linkFromPage();
+    if (!token || token === kept) return;
+    kept = token;
+    fetch(`${url}${LINK_EXCHANGE_PATH}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link: token }), credentials: "same-origin" }).catch(() => {});
+  };
+
   return (async (name: string, input: unknown) => {
+    keep();
     const fn = routes[name] && client[name];
     if (!fn) throw new Error(`no API endpoint named ${name}`);
     try {

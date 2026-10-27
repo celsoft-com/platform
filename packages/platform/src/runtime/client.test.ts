@@ -55,7 +55,26 @@ describe("call", () => {
     vi.stubGlobal("location", { origin: "https://app.test", hash: "" });
     await createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"] })("getNote", { id: 1 });
     await call("getNote", { id: 1 });
-    expect(links).toEqual(["tok_en-1", null, null]);
+    expect(links.filter((_, i) => !seen[i]!.startsWith("POST /api/platform/link"))).toEqual(["tok_en-1", null, null]);
+  });
+
+  it("in a browser, keeps the page's link as a cookie once per token, and never sends it elsewhere", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname === "/api/platform/link") bodies.push(`${request.url} ${await request.text()}`);
+      return fetcher(request);
+    });
+    vi.stubGlobal("location", { origin: "https://app.test", hash: "#/notes/7&link=tok_en-1" });
+    const browser = createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"] });
+    await browser("getNote", { id: 1 });
+    await browser("getNote", { id: 2 });
+    vi.stubGlobal("location", { origin: "https://app.test", hash: "#/notes/8&link=other" });
+    await browser("getNote", { id: 3 });
+    vi.stubGlobal("location", { origin: "https://app.test", hash: "#/notes" });
+    await browser("getNote", { id: 4 });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(bodies).toEqual(['https://app.test/api/platform/link {"link":"tok_en-1"}', 'https://app.test/api/platform/link {"link":"other"}']);
   });
 
   it("sends the token an app's own link option returns", async () => {

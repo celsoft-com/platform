@@ -1,6 +1,7 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { applyStaticPoints, createAccess, LEVELS, LINK_HEADER, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { applyStaticPoints, createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { apiHandler, undeclaredAccess, type Endpoint } from "./endpoints.js";
@@ -146,7 +147,8 @@ export function defineApp<
         if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
         // A request with an API token runs as the token's owner, capped at the token's level.
         let current = app;
-        const token = apiToken(request, url, env);
+        const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
+        const token = apiToken(request, url, env, onPage);
         if (token !== null) {
           const holder = await tokenHolder(app, token);
           if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
@@ -165,7 +167,7 @@ export function defineApp<
           const platform = await platformRoute(request, url, env, current, options);
           if (platform) return platform;
         }
-        const page = await pages?.handle(request, url, current, env.BETTER_AUTH_SECRET ? () => signInRedirect(url) : undefined);
+        const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET));
         if (page) return page;
         const answered = await api?.handle(request, current);
         if (answered) return answered;
@@ -251,7 +253,8 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const db = app.db as NodePgDatabase<Record<string, unknown>>;
-      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER), cap }), {
+      const links = [request.headers.get(LINK_HEADER), ...linkCookies(request)].filter((t): t is string => t !== null);
+      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: links, cap }), {
         // Sent after the answer, so a slow or failing email never fails the grant itself.
         notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
@@ -308,11 +311,12 @@ const signInRedirect = (url: URL) => new Response(null, { status: 302, headers: 
 const TOKEN_ROUTES = ["create", "list", "delete", "get"];
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The API token a request carries, when tokens are on: only on /api/ outside /api/auth/, where
-// a token can never make more tokens or change the account.
-function apiToken(request: Request, url: URL, env: PlatformBindings): string | null {
+// The API token a request carries, when tokens are on: on /api/ outside /api/auth/, where a
+// token can never make more tokens or change the account, and on page reads.
+function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boolean): string | null {
   if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
-  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith(`${AUTH_PATH}/`)) return null;
+  const onApi = url.pathname.startsWith("/api/") && !url.pathname.startsWith(`${AUTH_PATH}/`);
+  if (!onApi && !onPage) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 
@@ -339,6 +343,35 @@ async function tokenCreateRequest(request: Request): Promise<Request | Response>
   const headers = new Headers(request.headers);
   headers.delete("content-length");
   return new Request(request.url, { method: "POST", headers, body: JSON.stringify(clean) });
+}
+
+const LINK_COOKIE = "platform_link_";
+const LINK_COOKIE_DAYS = 30;
+
+// The link tokens kept as cookies, one per point.
+function linkCookies(request: Request): string[] {
+  return (request.headers.get("cookie") ?? "")
+    .split(";")
+    .map((c) => c.trim())
+    .filter((c) => c.startsWith(LINK_COOKIE))
+    .map((c) => c.slice(c.indexOf("=") + 1))
+    .slice(0, MAX_LINKS);
+}
+
+// Keeps a valid link token as an HttpOnly cookie named after its point, so a newer link to the
+// same point replaces it; it lasts until the link expires, at most LINK_COOKIE_DAYS. A token that
+// opens nothing is a 404, the same as any missing point.
+async function exchangeLink(request: Request, url: URL, db: NodePgDatabase<Record<string, unknown>>): Promise<Response> {
+  if (request.method !== "POST") return json({ error: "not found" }, 404);
+  const body = (await request.json().catch(() => undefined)) as { link?: unknown } | undefined;
+  const token = body?.link;
+  const target = typeof token === "string" ? await linkTarget(db, token) : null;
+  if (!target) return json({ error: "not found" }, 404);
+  const days = LINK_COOKIE_DAYS * 86400;
+  const seconds = Math.max(1, Math.min(days, target.expires ? Math.floor((target.expires.getTime() - Date.now()) / 1000) : days));
+  const name = `${LINK_COOKIE}${(await hashToken(target.point)).slice(0, 16)}`;
+  const secure = url.protocol === "https:" ? "; Secure" : "";
+  return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": `${name}=${token}; Path=/; Max-Age=${seconds}; HttpOnly; SameSite=Lax${secure}` } });
 }
 
 // The OAuth server's routes, which exist only for MCP.
@@ -402,6 +435,10 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (request.method === "GET" && path === TOKENS_PATH && env.AUTH_API_TOKENS === "on") return renderTokensScreen(env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
+  if (path === LINK_EXCHANGE_PATH) {
+    if (env.ACCESS !== "on") return json({ error: "not found" }, 404);
+    return exchangeLink(request, url, app.db as NodePgDatabase<Record<string, unknown>>);
+  }
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
     await app.requireUser();
