@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Measure a demo preview's speed: mise run test:perf -- <preview url> [rounds] [concurrency] [burst requests]; it signs up a test user, so never point it at prod"
+set -euo pipefail
+node "$(dirname "$0")/_perf.mjs" "$@"

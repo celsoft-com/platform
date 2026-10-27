@@ -398,4 +398,17 @@ describe("Pages: sign-in and access", () => {
     const answer = await leaving.fetch(new Request("https://app.test/api/leave", { headers: { cookie: joiner } }), { ...env, AUTH_ORGANIZATIONS: "on" }, ctx);
     expect(await answer.json()).toEqual({ before: "read", after: null });
   });
+
+  it("Q1: with a fresh session cookie, knowing who is calling costs no query, and a page read costs its own queries only", async () => {
+    const cookie = await signUp();
+    const traced = { ...env, TRACE: "on" };
+    const whoami = defineApp(async (_req, app) => Response.json({ id: (await app.requireUser()).id }), { pool: (c) => new Pool({ connectionString: c, max: 2 }) });
+    await whoami.fetch(new Request("https://app.test/api/me", { headers: { cookie } }), traced, ctx);
+    const answer = await whoami.fetch(new Request("https://app.test/api/me", { headers: { cookie } }), traced, ctx);
+    expect(answer.status).toBe(200);
+    expect(answer.headers.get("server-timing")).toContain('db-all;dur=0.0;desc="0 queries"');
+    const id = await point(cookie);
+    const page = await wired.fetch(new Request(`https://app.test/doc/${id}`, { headers: { cookie } }), traced, ctx);
+    expect(page.headers.get("server-timing")).toMatch(/desc="1 queries"/);
+  });
 });

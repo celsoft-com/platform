@@ -88,7 +88,9 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
       }),
       // The OAuth server AI clients sign in through to reach the app's MCP endpoints; its tokens
       // are JWTs bound to the app's /mcp, signed with keys the JWT plugin keeps.
-      jwt(),
+      // Without this, every session lookup signs a JWT into a set-auth-jwt header, reading the
+      // signing keys from the database; nothing the platform serves reads that header.
+      jwt({ disableSettingJwtHeader: true }),
       mcp({
         loginPage: "/login",
         consentPage: "/consent",
