@@ -12,6 +12,18 @@ export interface WranglerInput {
   bucket?: string | undefined;
   // Paths the app's pages claim; each and everything below it reaches the Worker first.
   pages?: string[] | undefined;
+  // Where Cloudflare should run the Worker: next to the database, as a placement hint.
+  placement?: string | undefined;
+}
+
+const AZURE_REGIONS: Record<string, string> = { gwc: "germanywestcentral" };
+
+// Cloudflare's placement hint for a Neon region, such as aws-us-east-2 to aws:us-east-2, or
+// nothing for a provider Cloudflare does not take hints for.
+export function placementRegion(neonRegion: string): string | undefined {
+  const [, provider, region] = /^(aws|azure|gcp)-(.+)$/.exec(neonRegion) ?? [];
+  if (!provider || !region) return undefined;
+  return `${provider}:${provider === "azure" ? (AZURE_REGIONS[region] ?? region) : region}`;
 }
 
 export const AUTH_LIMIT = { limit: 10, period: 60 } as const;
@@ -27,7 +39,7 @@ export function entryModule(worker: string): string {
   return `// Written by @celsoft/platform at deploy; never edit or commit it.\nimport app from ${JSON.stringify(fromGenerated(worker))};\nexport default app;\nexport const LiveRoom = app.LiveRoom;\n`;
 }
 
-export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket, pages = [] }: WranglerInput): object {
+export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket, pages = [], placement }: WranglerInput): object {
   const auth = config.auth;
   return {
     name: worker,
@@ -38,6 +50,8 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     workers_dev: false,
     routes: [{ pattern: hostname, custom_domain: true }],
     observability: { enabled: true },
+    // Every query is a round trip to the database, so the Worker runs next to it, not next to the visitor.
+    ...(placement && { placement: { region: placement } }),
     vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) },
     ...(config.frontend && {
       assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? SCREEN_PATHS : []), ...(auth && auth.apiTokens ? [TOKENS_PATH] : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : []), ...pages.flatMap((p) => [p, `${p}/*`])] },

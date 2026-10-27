@@ -14,6 +14,10 @@ export class FakeNeon implements Neon {
   async postgresVersion() {
     return this.pgVersion;
   }
+  regionId = "aws-us-east-2";
+  async region() {
+    return this.regionId;
+  }
   async endpointHosts() {
     return this.branches.map((b) => `${b.id}.neon.test`);
   }

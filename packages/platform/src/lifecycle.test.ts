@@ -138,6 +138,17 @@ describe("auth and email", () => {
   const authConfig: Config = { ...config, auth: { organizations: false, apiTokens: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
 
+  it("runs the Worker next to the database: the Neon project's region becomes the placement hint", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys[0]!.config.placement).toEqual({ region: "aws:us-east-2" });
+    ports.neon.regionId = "azure-gwc";
+    await deploy(ctx(), { kind: "preview", pr: 3 });
+    expect(ports.wrangler.deploys[1]!.config.placement).toEqual({ region: "azure:germanywestcentral" });
+    ports.neon.regionId = "elsewhere-1";
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys[2]!.config.placement).toBeUndefined();
+  });
+
   it("writes the app's static points after migrations, on prod and previews, and never without auth", async () => {
     const points = { about: { grants: [{ to: { everyone: true as const }, level: "read" as const }] } };
     await deploy({ ...authCtx(), staticPoints: points }, { kind: "prod" });

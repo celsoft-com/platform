@@ -5,7 +5,7 @@ import { LEGACY_BUCKET_MARKER, LEGACY_DNS_COMMENT, legacyNames } from "./legacy.
 import type { Branch, Hyperdrive, MailDomain, Ports, Repo, Zone } from "./ports.js";
 import type { Run } from "./run.js";
 import { names, originOf, previewHostname, previewPattern, type Target } from "./target.js";
-import { wranglerConfig } from "./wrangler-config.js";
+import { placementRegion, wranglerConfig } from "./wrangler-config.js";
 
 export interface Context {
   config: Config;
@@ -67,9 +67,11 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   }
 
   let hyperdriveId: string | undefined;
+  let placement: string | undefined;
   if (config.database) {
     const project = config.database.neonProject;
     await requirePostgres(ports.neon, project);
+    placement = placementRegion(await ports.neon.region(project));
     const prod = await ports.neon.defaultBranch(project);
 
     let copied = false;
@@ -133,7 +135,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   }
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages });
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
 
   // The old Worker kept writing to the old bucket until now, so what it added is copied before the old bucket goes.

@@ -9,6 +9,8 @@ export interface Neon {
   listsProjects(): Promise<boolean>;
   endpointHosts(project: string): Promise<string[]>;
   postgresVersion(project: string): Promise<number>;
+  // The project's region as Neon names it, such as aws-us-east-2.
+  region(project: string): Promise<string>;
   defaultBranch(project: string): Promise<Branch>;
   findBranch(project: string, name: string): Promise<Branch | undefined>;
   listBranches(project: string, namePrefix: string): Promise<Branch[]>;
