@@ -3,297 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Notes</title>
+  <title>Notes demo</title>
   <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-    form { display: grid; gap: .5rem; margin-bottom: 1rem; }
-    input, textarea, button { font: inherit; padding: .4rem; }
-    textarea { min-height: 3rem; }
-    header { display: flex; justify-content: space-between; align-items: baseline; }
-    ul { list-style: none; padding: 0; }
-    li { border-bottom: 1px solid #8884; padding: .75rem 0; white-space: pre-wrap; }
-    time { display: block; font-size: .8rem; opacity: .7; }
-    #message { min-height: 1.5rem; }
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; --line: #8884; --accent: #3b6fd8; --danger: #c0392b; }
+    body { margin: 0; }
+    nav { display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: center; padding: .6rem 1rem; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: Canvas; z-index: 1; }
+    nav a { text-decoration: none; color: inherit; padding: .2rem 0; border-bottom: 2px solid transparent; }
+    nav a.active { border-bottom-color: var(--accent); }
+    nav .brand { font-weight: 700; margin-right: .5rem; }
+    nav .spacer { flex: 1; }
+    main { max-width: 52rem; margin: 1.5rem auto; padding: 0 1rem; }
+    #flash { max-width: 52rem; margin: .75rem auto 0; padding: 0 1rem; min-height: 1.4rem; }
+    #flash.error { color: var(--danger); }
+    .card { border: 1px solid var(--line); border-radius: .5rem; padding: .75rem 1rem; margin: 1rem 0; }
+    .card h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+    h3 { margin: 1rem 0 .4rem; font-size: 1rem; }
+    form { display: grid; gap: .5rem; margin: .5rem 0; }
+    form.row, .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    input, textarea, select, button, a.button { font: inherit; padding: .4rem .6rem; }
+    textarea { min-height: 5rem; }
+    button, a.button { cursor: pointer; border: 1px solid var(--line); border-radius: .35rem; background: transparent; color: inherit; text-decoration: none; }
+    button.danger { color: var(--danger); border-color: var(--danger); }
+    .list { list-style: none; padding: 0; margin: 0; }
+    .list li { padding: .5rem 0; border-bottom: 1px solid var(--line); }
+    .list li:last-child { border-bottom: 0; }
+    .list li button { font-size: .8rem; padding: .15rem .5rem; margin-left: .3rem; }
+    .muted { opacity: .7; font-size: .9rem; }
+    .tag { font-size: .7rem; border: 1px solid var(--line); border-radius: .3rem; padding: 0 .35rem; margin-left: .4rem; }
+    .body { white-space: pre-wrap; }
+    table { border-collapse: collapse; width: 100%; }
+    td { padding: .4rem .3rem; border-bottom: 1px solid var(--line); }
+    td button { font-size: .8rem; padding: .15rem .5rem; margin-right: .3rem; }
     [hidden] { display: none !important; }
-    .actions { display: flex; gap: .5rem; margin-top: .4rem; }
-    .actions button { font-size: .8rem; padding: .2rem .5rem; }
-    #opened { border: 1px solid #8886; border-radius: .4rem; padding: .75rem; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
-  <header><h1>Notes</h1><span id="who"></span></header>
-  <p id="message" role="status"></p>
-  <section id="opened" hidden>
-    <p id="opened-meta"></p>
-    <form id="edit-opened">
-      <textarea name="body" required maxlength="10000"></textarea>
-      <button>Save</button>
-    </form>
-    <p id="opened-body"></p>
-  </section>
-
-  <section id="signed-out" hidden>
-    <p><a href="/login">Sign in</a> or <a href="/signup">create an account</a> to keep notes.</p>
-  </section>
-
-  <section id="signed-in" hidden>
-    <form id="new">
-      <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
-      <label>Attach a file (up to 10 MB) <input name="file" type="file"></label>
-      <button>Add</button>
-    </form>
-    <ul id="notes"></ul>
-
-    <h2>Shared with me</h2>
-    <ul id="shared"></ul>
-
-    <h2>Teams</h2>
-    <form id="new-team">
-      <input name="name" placeholder="New team name" required maxlength="60">
-      <button>Create team</button>
-    </form>
-    <ul id="team-list"></ul>
-    <div id="team" hidden>
-      <h3 id="team-name"></h3>
-      <p id="here"></p>
-      <form id="invite">
-        <input name="email" type="email" placeholder="Invite someone by email" required>
-        <button>Invite</button>
-      </form>
-      <form id="new-team-note">
-        <textarea name="body" placeholder="Write a team note" required maxlength="10000"></textarea>
-        <button>Add</button>
-      </form>
-      <p id="typing"></p>
-      <ul id="team-notes"></ul>
-    </div>
-  </section>
-
-  <script type="module">
-    import { live } from "@celsoft/platform/live";
-    // Typed calls to the Worker's endpoints, generated by the platform from src/worker.ts.
-    import { call } from "./.platform/client";
-
-    const $ = (id) => document.getElementById(id);
-    const say = (text) => ($("message").textContent = text);
-    const show = (id) => ["signed-out", "signed-in"].forEach((s) => ($(s).hidden = s !== id));
-
-    async function request(path, body) {
-      const response = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(data?.message ?? data?.error ?? `request failed (${response.status})`);
-      return data;
-    }
-
-    $("new").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const response = await fetch("/api/notes", { method: "POST", body: new FormData($("new")) });
-      if (!response.ok) return say((await response.json().catch(() => null))?.error ?? "could not save the note");
-      $("new").reset();
-      say("");
-      await loadNotes();
-    });
-
-    async function loadNotes() {
-      const notes = await request("/api/notes");
-      $("notes").replaceChildren(...notes.map((note) => {
-        const li = document.createElement("li");
-        const time = document.createElement("time");
-        time.textContent = new Date(note.createdAt).toLocaleString();
-        li.append(note.body);
-        if (note.attachmentName) {
-          const link = document.createElement("a");
-          link.href = `/api/notes/${note.id}/attachment`;
-          link.textContent = `Attachment: ${note.attachmentName}`;
-          link.style.display = "block";
-          li.append(link);
-        }
-        li.append(time, noteActions(note));
-        return li;
-      }));
-      const shared = await call("sharedNotes", {});
-      $("shared").replaceChildren(...shared.map((note) => {
-        const li = document.createElement("li");
-        const open = document.createElement("a");
-        open.href = `#note=${note.id}`;
-        open.textContent = note.body;
-        const meta = document.createElement("time");
-        meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
-        li.append(open, meta);
-        return li;
-      }));
-    }
-
-    // Sharing a note with someone by email, or making a link anyone holding it can open.
-    function noteActions(note) {
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      const share = document.createElement("button");
-      share.textContent = "Share";
-      share.onclick = async () => {
-        const email = prompt("Share with which email address?");
-        if (!email) return;
-        const level = confirm("Let them edit it? Cancel shares it read-only.") ? "write" : "read";
-        try {
-          await call("shareNote", { id: note.id, email, level });
-          say(`Shared with ${email}; they can open it once they sign in with a confirmed address.`);
-        } catch (error) { say(error.message); }
-      };
-      const link = document.createElement("button");
-      link.textContent = "Copy link";
-      link.onclick = async () => {
-        const level = confirm("Let link holders edit it? Cancel makes a read-only link.") ? "write" : "read";
-        try {
-          const { path } = await call("linkNote", { id: note.id, level });
-          const url = new URL(path, location.origin).toString();
-          await navigator.clipboard?.writeText(url).catch(() => {});
-          say(`Link: ${url}`);
-        } catch (error) { say(error.message); }
-      };
-      actions.append(share, link);
-      return actions;
-    }
-
-    // A note opened from an address such as /#note=<id>&link=<token>; the generated client sends the
-    // link token with every call, so this works signed out too.
-    async function openFromAddress() {
-      const id = new URLSearchParams(location.hash.slice(1)).get("note");
-      $("opened").hidden = !id;
-      if (!id) return;
-      try {
-        const note = await call("getNote", { id });
-        const editable = ["write", "delete", "manage"].includes(note.level);
-        $("opened-meta").textContent = `${note.author}'s note, ${new Date(note.createdAt).toLocaleString()} (you can ${editable ? "edit" : "read"} it)`;
-        $("edit-opened").hidden = !editable;
-        $("opened-body").hidden = editable;
-        $("edit-opened").body.value = note.body;
-        $("opened-body").textContent = note.body;
-      } catch {
-        $("opened-meta").textContent = "This note does not exist or is not shared with you.";
-        $("edit-opened").hidden = $("opened-body").hidden = true;
-      }
-    }
-
-    $("edit-opened").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const id = new URLSearchParams(location.hash.slice(1)).get("note");
-      try {
-        await call("editNote", { id, body: $("edit-opened").body.value });
-        say("Saved.");
-      } catch (error) { say(error.message); }
-    });
-
-    addEventListener("hashchange", openFromAddress);
-
-    // Team notes: saved through the API, announced to the team's room, with who is here and who is typing.
-    let room;
-    let team;
-    let typingTimer;
-    let lastTyping = 0;
-
-    function teamNote(note) {
-      const li = document.createElement("li");
-      const meta = document.createElement("time");
-      meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
-      li.append(note.body, meta);
-      return li;
-    }
-
-    async function loadTeamNotes() {
-      const list = await call("listTeamNotes", { team: team.id });
-      $("team-notes").replaceChildren(...list.map(teamNote));
-    }
-
-    async function loadTeams() {
-      const teams = (await request("/api/auth/organization/list")) ?? [];
-      $("team-list").replaceChildren(...teams.map((t) => {
-        const li = document.createElement("li");
-        const open = document.createElement("button");
-        open.textContent = t.name;
-        open.onclick = () => openTeam(t);
-        li.append(open);
-        return li;
-      }));
-    }
-
-    async function openTeam(next) {
-      room?.close();
-      team = next;
-      $("team").hidden = false;
-      $("team-name").textContent = team.name;
-      $("here").textContent = "";
-      await loadTeamNotes();
-      room = live(`team:${team.id}`, {
-        onMessage(data, { from }) {
-          if (data.type === "note") $("team-notes").prepend(teamNote(data.note));
-          if (data.type === "typing" && from) {
-            $("typing").textContent = `${from.name} is typing`;
-            clearTimeout(typingTimer);
-            typingTimer = setTimeout(() => ($("typing").textContent = ""), 3000);
-          }
-        },
-        onPresence(people, anonymous) {
-          $("here").textContent = `Here now: ${people.map((p) => p.name).join(", ")}`;
-        },
-        onReload: loadTeamNotes,
-      });
-    }
-
-    $("new-team").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const name = new FormData($("new-team")).get("name").trim();
-      const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
-      try {
-        await request("/api/auth/organization/create", { name, slug });
-        $("new-team").reset();
-        await loadTeams();
-      } catch (error) { say(error.message); }
-    });
-
-    $("invite").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const email = new FormData($("invite")).get("email");
-      try {
-        await request("/api/auth/organization/invite-member", { email, role: "member", organizationId: team.id });
-        $("invite").reset();
-        say(`Invited ${email}; they get an email with a link to join.`);
-      } catch (error) { say(error.message); }
-    });
-
-    $("new-team-note").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const body = new FormData($("new-team-note")).get("body");
-      try {
-        const note = await call("addTeamNote", { team: team.id, body });
-        $("team-notes").prepend(teamNote(note));
-        $("new-team-note").reset();
-      } catch (error) { say(error.message); }
-    });
-
-    $("new-team-note").body.addEventListener("input", () => {
-      if (Date.now() - lastTyping < 2000) return;
-      lastTyping = Date.now();
-      room?.send({ type: "typing" });
-    });
-
-    async function start() {
-      await openFromAddress();
-      const session = await request("/api/auth/get-session");
-      if (!session) {
-        $("who").replaceChildren();
-        return show("signed-out");
-      }
-      const out = document.createElement("button");
-      out.textContent = "Sign out";
-      out.onclick = async () => { await request("/api/auth/sign-out", {}); say(""); start(); };
-      $("who").replaceChildren(`${session.user.email} `, out);
-      show("signed-in");
-      await loadNotes();
-      await loadTeams();
-    }
-
-    start().catch((error) => say(error.message));
-  </script>
+  <nav id="nav"></nav>
+  <p id="flash" role="status"></p>
+  <main id="main"></main>
+  <script type="module" src="/src/web/main.js"></script>
 </body>
 </html>

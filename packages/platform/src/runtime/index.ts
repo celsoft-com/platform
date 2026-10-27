@@ -1,18 +1,21 @@
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { createAccess, LINK_HEADER, shareMessage, type Access } from "./access.js";
+import { applyStaticPoints, createAccess, LINK_HEADER, shareMessage, type Access, type StaticPoint } from "./access.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, type Endpoint } from "./endpoints.js";
+import { apiHandler, undeclaredAccess, type Endpoint } from "./endpoints.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import type { z } from "zod";
 import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
+import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
+import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen } from "./screens.js";
 
-export { LEVELS, LINK_HEADER, MAX_DEPTH, type Access, type Grant, type Grantee, type Level, type Link, type ShareEmail } from "./access.js";
+export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
+export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
 export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
@@ -49,6 +52,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly auth: Auth;
   readonly live: Live;
   readonly access: Access;
+  readonly organizations: Organizations;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -80,7 +84,14 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   endpoints?: Record<string, Endpoint<any, any, AppContext<Env, Schema>>>;
   screens?: { stylesheet?: string };
   live?: LiveOptions<Env, Schema>;
+  // Control points declared in code, applied at every start; see StaticPoint.
+  access?: { points?: Record<string, StaticPoint> };
   pool?: (connectionString: string) => Pool;
+}
+
+// What one Worker instance does once: applying the app's static points before the first check.
+interface Once {
+  staticPoints?: Promise<void>;
 }
 
 const defaultPool = (connectionString: string) => new Pool({ connectionString, max: 5 });
@@ -107,6 +118,8 @@ export function defineApp<
   const check = messageCheck(options.live?.message);
   const handle = handler ?? (notFound as Handler<Env, Schema>);
   const api = apiHandler(options.endpoints ?? {});
+  const once: Once = {};
+  const undeclared = undeclaredAccess(options.endpoints ?? {});
 
   return {
     // Read by the package to generate the browser client's routes; the app's own types come from here.
@@ -114,13 +127,18 @@ export function defineApp<
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const url = new URL(request.url);
-      const { app, close } = createContext(request, env, ctx, options);
+      // With access on, every endpoint says what it checks, so a forgotten check never ships open.
+      if (env.ACCESS === "on" && undeclared.length > 0) {
+        console.error(`endpoints ${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
+        return json({ error: "this app is misconfigured; see its logs" }, 500);
+      }
+      const { app, close } = createContext(request, env, ctx, options, once);
       try {
         if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
         const live = await liveRoute(request, url, env, app, options);
         if (live) return live;
         if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
-          const answered = await mcpRoute(request, url, env, ctx, app, options);
+          const answered = await mcpRoute(request, url, env, ctx, app, options, once);
           if (answered) return answered;
         }
         if (env.BETTER_AUTH_SECRET) {
@@ -132,6 +150,8 @@ export function defineApp<
         return await handle(request, app);
       } catch (thrown) {
         if (thrown instanceof Response) return thrown;
+        // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
+        if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
         throw thrown;
       } finally {
         close();
@@ -145,7 +165,7 @@ export function defineApp<
       const env = rawEnv as Env;
       return async (room, message, from) => {
         const pending: Promise<unknown>[] = [];
-        const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options);
+        const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options, once);
         try {
           await onMessage(room, message as z.output<Message>, from, app);
           await Promise.allSettled(pending);
@@ -162,6 +182,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   env: Env,
   ctx: ExecutionContext,
   options: AppOptions<Env, Schema>,
+  once: Once,
   // Set when the caller is already known, as for an MCP client signed in with a token.
   knownSession?: () => Promise<Session | null>,
 ): { app: AppContext<Env, Schema>; close(): void } {
@@ -173,6 +194,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let auth: Auth | undefined;
   let live: Live | undefined;
   let access: Access | undefined;
+  let organizations: Organizations | undefined;
   let session: Promise<Session | null> | undefined;
 
   const app: AppContext<Env, Schema> = {
@@ -203,11 +225,31 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     get access() {
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
-      return (access ??= createAccess(
-        app.db as NodePgDatabase<Record<string, unknown>>,
-        async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER) }),
-        // Sent after the answer, so a slow or failing email never fails the share itself.
-        async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
+      const db = app.db as NodePgDatabase<Record<string, unknown>>;
+      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER) }), {
+        // Sent after the answer, so a slow or failing email never fails the grant itself.
+        notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
+        // Once per Worker instance; a failure is retried by the next request.
+        ready: () => (once.staticPoints ??= applyStaticPoints(db, options.access?.points ?? {}).catch((error) => {
+          once.staticPoints = undefined;
+          throw error;
+        })),
+      }));
+    },
+    get organizations() {
+      if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
+      const origin = env.APP_URL ?? new URL(request.url).origin;
+      const appName = env.APP_NAME ?? new URL(origin).hostname;
+      return (organizations ??= createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null }), async (notice) =>
+        app.waitUntil(
+          app.email
+            .send({
+              to: notice.to,
+              subject: `Join ${notice.organization} on ${appName}`,
+              text: `${notice.invitedBy ?? "Someone"} invited you to join ${notice.organization}:\n\n${new URL(`/login?invitation=${notice.invitationId}`, origin)}\n`,
+            })
+            .catch((error) => console.error("invitation email failed", error)),
+        ),
       ));
     },
     session() {
@@ -235,6 +277,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   ctx: ExecutionContext,
   app: AppContext<Env, Schema>,
   options: AppOptions<Env, Schema>,
+  once: Once,
 ): Promise<Response | undefined> {
   if (url.pathname.startsWith(WELL_KNOWN)) return app.auth.handler(request);
   if (url.pathname !== MCP_PATH) return undefined;
@@ -245,7 +288,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
     const user = await (await app.auth.$context).internalAdapter.findUserById(userId);
     return user ? ({ user, session: { id: "mcp", userId, token: "", expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date() } } as unknown as Session) : null;
   };
-  const { app: asUser, close } = createContext(request, env, ctx, options, known);
+  const { app: asUser, close } = createContext(request, env, ctx, options, once, known);
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
     return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
@@ -285,7 +328,11 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   if (path === "/consent" && env.MCP !== "on") return undefined;
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
-  if (path.startsWith(`${AUTH_PATH}/organization/`) && env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
+  if (path.startsWith(PLATFORM_API)) {
+    if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
+    await app.requireUser();
+    return serveOrganizations(request, path, app.organizations);
+  }
   if (env.MCP !== "on" && MCP_AUTH_PATHS.some((p) => path.startsWith(`${AUTH_PATH}${p}`))) return json({ error: "not found" }, 404);
   if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
 

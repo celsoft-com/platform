@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
-import { defineApp } from "./index.js";
+import { defineApp, EndpointError } from "./index.js";
 
 function fakePool() {
   const calls: string[] = [];
@@ -60,6 +60,15 @@ describe("defineApp", () => {
     expect((await app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).status).toBe(418);
   });
 
+  it("answers a thrown EndpointError with its status, as endpoints do", async () => {
+    const app = defineApp(() => {
+      throw new EndpointError(404, "not found");
+    });
+    const response = await app.fetch(new Request("https://x/api/thing"), {}, fakeCtx().ctx);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "not found" });
+  });
+
   it("refuses a form posted from another site", async () => {
     const app = defineApp(ok);
     const post = (origin?: string) =>
@@ -89,7 +98,16 @@ describe("with auth", () => {
   });
 
   it("hides organization routes unless organizations are on", async () => {
-    expect((await call("/api/auth/organization/list", undefined, { AUTH_ORGANIZATIONS: "off" })).status).toBe(404);
+    expect((await call("/api/platform/organizations", undefined, { AUTH_ORGANIZATIONS: "off" })).status).toBe(404);
+  });
+
+  it("asks for sign-in on organization routes", async () => {
+    expect((await call("/api/platform/organizations", undefined, { AUTH_ORGANIZATIONS: "on" })).status).toBe(401);
+  });
+
+  it("leaves Better Auth's own organization routes unserved", async () => {
+    const response = await call("/api/auth/organization/create", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }, { AUTH_ORGANIZATIONS: "on" });
+    expect(response.status).toBe(404);
   });
 
   it("answers 429 once the rate limit is spent", async () => {

@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { afterAll, inject } from "vitest";
-import { createAccess } from "../src/runtime/access.js";
+import { createAccess, type AccessOptions } from "../src/runtime/access.js";
+import { createOrganizations, type InvitationNotice } from "../src/runtime/organizations.js";
 
 // A fresh database per test file, copied from the template the global setup migrated.
 export async function freshDatabase(): Promise<{ db: NodePgDatabase<Record<string, unknown>>; pool: Pool; url: string }> {
@@ -20,43 +21,38 @@ export async function freshDatabase(): Promise<{ db: NodePgDatabase<Record<strin
 
 export type Db = NodePgDatabase<Record<string, unknown>>;
 
-// Builds people, organizations and teams straight into Better Auth's tables, and an Access for any
-// caller.
+// Builds people, organizations and teams, and an Access or Organizations for any caller.
+// Organizations and teams are made through the platform's own calls, so their points and the
+// Admins team exist as they would in an app; joining is written straight into the tables.
 export function world(db: Db, pool: Pool) {
   const one = async (text: string, values: unknown[]) => (await pool.query(text, values)).rows[0];
-  return {
+  const w = {
     async user(options: { email?: string; verified?: boolean } = {}): Promise<string> {
       const email = options.email ?? `${randomUUID()}@example.com`;
       return (await one(`insert into "user" (name, email, email_verified) values ('Test', $1, $2) returning id`, [email, options.verified ?? true])).id;
     },
-    async org(): Promise<string> {
-      return (await one(`insert into organization (name, slug) values ('Org', $1) returning id`, [randomUUID()])).id;
+    as(userId: string | null, link: string | null = null, options: AccessOptions = {}) {
+      return createAccess(db, async () => ({ userId, link }), options);
     },
-    async member(org: string, user: string, role = "member"): Promise<void> {
-      await pool.query(`insert into member (organization_id, user_id, role) values ($1, $2, $3)`, [org, user, role]);
+    orgs(userId: string | null, notify?: (notice: InvitationNotice) => Promise<void>) {
+      return createOrganizations(db, async () => ({ userId, link: null }), notify);
     },
-    async setRole(org: string, user: string, role: string): Promise<void> {
-      await pool.query(`update member set role = $3 where organization_id = $1 and user_id = $2`, [org, user, role]);
+    // An organization made by `creator`, who is its first admin.
+    async org(creator: string): Promise<{ id: string; admins: string }> {
+      const { id } = await w.orgs(creator).create({ name: "Org" });
+      const admins = (await one(`select id from team where organization_id = $1 and admins`, [id])).id;
+      return { id, admins };
     },
-    async leave(org: string, user: string): Promise<void> {
-      await pool.query(`delete from member where organization_id = $1 and user_id = $2`, [org, user]);
+    async member(org: string, user: string): Promise<void> {
+      await pool.query(`insert into member (organization_id, user_id) values ($1, $2)`, [org, user]);
     },
-    async team(org: string): Promise<string> {
-      return (await one(`insert into team (name, organization_id) values ('Team', $1) returning id`, [org])).id;
+    async team(org: string, creator: string): Promise<string> {
+      return (await w.orgs(creator).createTeam(org, "Team")).id;
     },
     async join(team: string, user: string): Promise<void> {
       await pool.query(`insert into team_member (team_id, user_id) values ($1, $2)`, [team, user]);
     },
-    async leaveTeam(team: string, user: string): Promise<void> {
-      await pool.query(`delete from team_member where team_id = $1 and user_id = $2`, [team, user]);
-    },
-    // Writes an item straight into the tree, skipping place's checks, to set up a case quickly.
-    async item(kind: string, id: string, parentKind: string, parentId: string, restricted = false): Promise<void> {
-      await pool.query(`insert into access_item (kind, id, parent_kind, parent_id, restricted) values ($1, $2, $3, $4, $5)`, [kind, id, parentKind, parentId, restricted]);
-    },
-    as(userId: string | null, link: string | null = null) {
-      return createAccess(db, async () => ({ userId, link }));
-    },
     query: (text: string, values: unknown[] = []) => pool.query(text, values),
   };
+  return w;
 }

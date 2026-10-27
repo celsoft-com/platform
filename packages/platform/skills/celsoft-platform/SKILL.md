@@ -56,7 +56,7 @@ export default defineApp(undefined, {
 2. **Checks:** bad input is a 400; an output that does not match its schema is a 500, logged.
 3. **Errors:** throw `EndpointError(status, message)`; a thrown `Response`, as `requireUser()` throws, keeps its status.
 4. **Access:** every `/api/` path needs a signed-in user except under `/api/public/`; MCP calls always carry one.
-5. **Item access:** with `access` on, `access: { kind: "note", id: "id", level: "write" }` in the definition checks the caller's level on the item whose id is in that input field before the function runs, and answers 404 when it falls short.
+5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "none"`; the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
@@ -64,24 +64,36 @@ export default defineApp(undefined, {
 
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `session()`, `requireUser()`,
 `files` (R2, folders), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
-`access` (with `access` on), `env` and `waitUntil`. Each is created on first use.
+`access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
 
 ## Access
 
-With `"access": true`, the platform keeps who may do what to the app's items:
+With `"access": true`, the platform keeps who may do what to the app's resources through control points:
 
-1. **Place every item** when it is created or moved, in the same transaction as the app's own row:
-   `await app.db.transaction(async (tx) => { ...insert...; await app.access.in(tx).place("note", id, "folder", folderId); })`.
-   The top of a tree is `"user", userId` or `"organization", orgId`; an item never placed is reachable by nobody.
+1. **A point per resource:** `await app.db.transaction(async (tx) => { ...insert...; await app.access.in(tx).create(row.id, { parent, inherit }); })`.
+   The id is the resource's own id, any globally unique string; ids starting `organization:` or `team:` are the platform's. Whoever creates it gets `manage`; creating needs a signed-in user and, with a `parent`, `create` on it.
 2. **Levels:** `read` < `create` < `write` < `delete` < `manage`; each includes those below.
-3. **Where they come from:** owning the item (`manage`), organization roles (member `read`, admin `delete`, owner `manage`), grants, and links; the highest wins, and a level on a folder covers everything inside it.
-4. **Grants:** `app.access.share(kind, id, { user | team | organization | email }, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `sharedWithMe(kind)`; sharing needs `manage`, and a new grant to a person emails them a link to `path` (`email: false` sends none).
-5. **Links:** `app.access.link(kind, id, level, { expires })` returns a token, at most `write`; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header. Endpoints a signed-out link holder uses go under `/api/public/`.
-6. **Restrict:** `app.access.restrict(kind, id)` stops levels from above reaching an item, except organization owners and admins.
-7. **Check:** `can(kind, id, level)` and `require(kind, id, level)` in hand-written routes; `require` throws a 404.
-8. **Lists:** `.where(await app.access.accessible("note", "read", notes.id))` filters in the same query.
-9. **Delete:** `app.access.remove(kind, id)` needs `delete` and refuses an item that still has children.
-10. **Kinds:** lowercase names the app chooses, never `user` or `organization`; ids are strings.
+3. **Principals:** a person (`{ user }` or a confirmed `{ email }`), `{ team }`, `{ organization }` and `{ everyone: true }` (read only, signed in or not).
+4. **Inheritance:** with `inherit: true` a point also uses its parent's grants, up to the first point that does not inherit. Each principal stops at its nearest grant and the highest wins, so a grant to a person on a note can lower that person there, while a grant to a whole organization never lowers its teams.
+5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
+6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header. Endpoints a signed-out link holder uses go under `/api/public/`.
+7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }` or `access: "none"`; the app refuses every request until each one does.
+8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
+9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
+10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
+11. **Static points:** `defineApp(handler, { access: { points: { settings: { grants: [{ to: { email: "boss@x.com" }, level: "manage" }] } } } })`, applied at every start; their grants change only in code.
+12. **Organizations:** each has the point `organizationPoint(id)` granting its members `read`, and each team `teamPoint(id)` granting the team `write`; members of the built-in Admins team get `manage` on everything under their organization.
+13. **As the app:** `app.access.asApp()` passes every check, for work no person asked for; never use it for a request's own data.
+
+## Organizations
+
+With `"auth": { "organizations": true }`, the platform keeps organizations, teams, members and invitations itself, with no roles:
+
+1. **In code:** `app.organizations` has `create`, `list`, `get`, `rename`, `remove`, `requireMember`, `members`, `removeMember`, `invite`, `invitations`, `revokeInvitation`, `accept`, `myInvitations`, `decline`, `teams`, `team`, `createTeam`, `renameTeam`, `removeTeam`, `teamMembers`, `addToTeam` and `removeFromTeam`.
+2. **From browsers:** the same under `/api/platform/`: `organizations`, `organizations/:id`, `organizations/:id/members`, `organizations/:id/invitations`, `invitations` (the caller's own), `invitations/:id/accept`, `invitations/:id` (decline), `organizations/:id/teams`, `teams/:id` and `teams/:id/members`.
+3. **Who may:** reading needs `read` on the organization's point, renaming `write`, deleting `delete`, inviting and removing others `manage`, creating teams `create`; a team's members need `manage` on its point. Anyone may leave, except the last admin.
+4. **Admins:** the creator is the first member of the Admins team; add others with `addToTeam(adminsTeamId, userId)`.
+5. **Invitations:** emailed with a link to `/login?invitation=<id>`, accepted by whoever signs in with that confirmed address; an invitation can name a team.
 
 ## Tables and migrations
 
@@ -95,11 +107,11 @@ With `"access": true`, the platform keeps who may do what to the app's items:
 
 1. **`database`:** a Neon project id; prod, each preview and `dev` get their own branch.
 2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
-3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds teams. Needs `database` and `email`.
+3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams; see Organizations above. Needs `database` and `email`.
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
-6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth. Needs `auth`.
-7. **`access`:** `app.access`, for who may do what to the app's items; see Access above. Needs `auth`.
+6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
+7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 
 ## Commands
 

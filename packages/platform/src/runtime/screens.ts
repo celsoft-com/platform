@@ -158,7 +158,7 @@ function follow(data) {
 
 async function finish() {
   const invitation = params.get("invitation");
-  if (invitation) await post("/api/auth/organization/accept-invitation", { invitationId: invitation }).catch(() => {});
+  if (invitation) await post("/api/platform/invitations/" + encodeURIComponent(invitation) + "/accept", {}).catch(() => {});
   location.assign(next);
 }
 

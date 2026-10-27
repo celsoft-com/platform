@@ -126,17 +126,23 @@ flowchart LR
 1. **On:** `"mcp": true` in `platform.jsonc`, with auth on.
 2. **Tools:** each endpoint with `serve: ["mcp"]` or `serve: ["api", "mcp"]` is a tool named after the endpoint, described by its `description` and input schema.
 3. **Connecting:** an AI client such as Claude is given `https://<hostname>/mcp`; it registers itself, sends the person to `/login` and `/consent`, and gets a token.
-4. **As the user:** every call runs with `app.requireUser()` returning the person who approved the client.
+4. **As the user:** every call runs with `app.requireUser()` returning the person who approved the client, and gets the same control point checks the API does.
 5. **Errors:** bad input, `EndpointError` and other failures come back as tool errors with a message, so the AI can correct itself.
 
 ### Access
 
 1. **On:** `"access": true` in `platform.jsonc`, with auth on.
-2. **Items:** the app tells the platform where each item sits with `app.access.place(kind, id, parentKind, parentId)`, under another item or at the top under a user or organization.
-3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from owning the item, an organization role, grants to people, teams, organizations or emails, and links.
-4. **Checks:** an endpoint declares `access: { kind, id, level }`, hand-written routes call `app.access.can`, and lists filter with `app.access.accessible`; anything short is a 404.
+2. **Control points:** the app creates a point for each resource it wants to gate with `app.access.create(id, { parent, inherit })`; the creator gets `manage`, and fixed sections are static points declared in `defineApp`.
+3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from grants to people, emails, teams, organizations and Everyone, links, and an organization's Admins team; each principal counts its nearest grant up the inherited parents, and the highest wins.
+4. **Checks:** every endpoint declares `access: { point, level }` or `access: "none"`, hand-written routes call `app.access.check`, and lists filter with `app.access.readable`; anything short is a 404.
 5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`.
 6. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
+
+### Organizations
+
+1. **On:** `"auth": { "organizations": true }` in `platform.jsonc`.
+2. **The platform's own:** organizations, teams, members and invitations through `app.organizations` and `/api/platform/`; Better Auth's organization plugin is not used.
+3. **No roles:** each organization's built-in Admins team gets `manage` on everything under it, and its creator is the first admin; every other permission is a control point grant.
 
 ### Live rooms
 

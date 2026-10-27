@@ -23,7 +23,7 @@ check "create note with attachment" "$([ -n "$id" ] && echo "id $id" || echo "$n
 check "list notes" "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
 check "download attachment" "$(curl -s -b "$jar" "$base/api/notes/$id/attachment")"
 
-# Access: the note is an item under its author, shared and linked through the demo's endpoints.
+# Access: the note is a control point its author manages, shared and linked through the demo's endpoints.
 json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
 status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" "$@"; }
 level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
@@ -45,9 +45,31 @@ check "read link cannot edit (404)" "$(status -X PUT -H "x-access-link: $read_to
 check "write link edits signed out" "$(json -X PUT -H "x-access-link: $write_token" -d '{"body":"edited by link"}' "$note_url" | grep -c 'edited by link')"
 check "altered link refused (404)" "$(status -H "x-access-link: x$write_token" "$note_url")"
 check "no link, no note (404)" "$(status "$note_url")"
+check "permissions panel for the owner" "$(json -b "$jar" "$base/api/notes/$id/access" | grep -c '"inherits":false')"
+check "permissions panel refused to others (404)" "$(status -b "$jar2" "$base/api/notes/$id/access")"
+check "grant Everyone read" "$(status -b "$jar" -d '{"to":{"kind":"everyone"},"level":"read"}' "$base/api/notes/$id/grants")"
+check "Everyone reads it signed out" "$(json "$note_url" | level)"
+check "revoke Everyone" "$(status -b "$jar" -d '{"to":{"kind":"everyone"}}' "$base/api/notes/$id/grants/revoke")"
+check "static point readable by everyone" "$(json "$base/api/public/about" | level)"
 
-org='{"name":"Team","slug":"team-'$RANDOM'"}'
-check "create organization" "$(curl -s -b "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$org" "$base/api/auth/organization/create" | grep -c '"slug":"team-')"
+# Organizations: the platform's own, with the creator as its first admin; members add notes.
+org_id=$(json -b "$jar" -d '{"name":"Smoke"}' "$base/api/organizations" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+check "create organization" "$([ -n "$org_id" ] && echo "id $org_id" || echo "none")"
+check "creator is an admin" "$(json -b "$jar" "$base/api/platform/organizations/$org_id/members" | grep -c '"admin":true')"
+check "Admins team exists" "$(json -b "$jar" "$base/api/platform/organizations/$org_id/teams" | grep -c '"name":"Admins"')"
+check "outsider cannot see it (404)" "$(status -b "$jar2" "$base/api/platform/organizations/$org_id")"
+check "outsider cannot invite (404)" "$(status -b "$jar2" -d '{"email":"x@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
+check "outsider cannot read its notes (404)" "$(status -b "$jar2" "$base/api/organizations/$org_id/notes")"
+check "outsider cannot add notes (404)" "$(status -b "$jar2" -d '{"body":"sneaky"}' "$base/api/organizations/$org_id/notes")"
+check "admin invites (201)" "$(status -b "$jar" -d '{"email":"invitee@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
+check "last admin cannot leave (409)" "$(status -b "$jar" -X DELETE "$base/api/platform/organizations/$org_id/members/$(json -b "$jar" "$base/api/auth/get-session" | sed -n 's/.*"user":{[^}]*"id":"\([^"]*\)".*/\1/p')")"
+team_id=$(json -b "$jar" -d '{"name":"Crew"}' "$base/api/platform/organizations/$org_id/teams" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+check "create team" "$([ -n "$team_id" ] && echo "id $team_id" || echo "none")"
+check "team note by an admin" "$(json -b "$jar" -d '{"body":"crew"}' "$base/api/teams/$team_id/notes" | grep -c '"body":"crew"')"
+check "outsider cannot read team notes (404)" "$(status -b "$jar2" "$base/api/teams/$team_id/notes")"
+check "move the note into the team" "$(status -b "$jar" -d '{"to":{"kind":"team","id":"'$team_id'"}}' "$base/api/notes/$id/move")"
+check "move it back" "$(status -b "$jar" -d '{"to":{"kind":"personal"}}' "$base/api/notes/$id/move")"
+check "Better Auth's organization routes are gone (404)" "$(status -b "$jar" -d '{"name":"x","slug":"x-'$RANDOM'"}' "$base/api/auth/organization/create")"
 
 cookie=$(awk '{ sub(/^#HttpOnly_/, "") } !/^#/ && NF >= 7 { printf "%s=%s; ", $6, $7 }' "$jar")
 node "$(dirname "$0")/_live.mjs" "$base" "$cookie"

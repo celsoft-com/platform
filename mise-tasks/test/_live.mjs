@@ -22,19 +22,21 @@ function open(room) {
 const client = await fetch(`${base}/api/live/client.js`);
 check("client script served", `${client.status} ${(await client.text()).startsWith("export function live(")}`);
 
-const team = await api("/api/auth/organization/create", { name: "Live", slug: `live-${Date.now()}` });
-const room = open(`team:${team.id}`);
+const org = await api("/api/organizations", { name: "Live" });
+const room = open(`organization:${org.id}`);
 // A preview's first room can take several seconds to start, so the first frame gets longer.
-check("join own team room", (await room.until((f) => f.type === "hello", 30000)) ? "hello" : `nothing; got ${room.frames.map((f) => f.type).join(",")}`);
+check("join own organization room", (await room.until((f) => f.type === "hello", 30000)) ? "hello" : `nothing; got ${room.frames.map((f) => f.type).join(",")}`);
 check("presence lists me", (await room.until((f) => f.type === "presence" && f.people.length === 1)) ? "yes" : "no");
 
-await api(`/api/teams/${team.id}/notes`, { body: "live note" });
+await api(`/api/organizations/${org.id}/notes`, { body: "live note" });
 const note = await room.until((f) => f.type === "message" && f.data?.type === "note");
-check("team note arrives live", note?.data?.note?.body ?? "nothing");
+check("organization note arrives live", note?.data?.note?.body ?? "nothing");
 
 room.socket.send(JSON.stringify({ data: { type: "typing" } }));
 check("browser message acknowledged", (await room.until((f) => f.type === "ack")) ? "ack" : "nothing");
 room.socket.close();
 
-const stranger = open(`team:${crypto.randomUUID()}`);
-check("someone else's team refused (4403)", await stranger.closed);
+const stranger = open(`organization:${crypto.randomUUID()}`);
+check("someone else's organization refused (4403)", await stranger.closed);
+const odd = open(`note:${crypto.randomUUID()}`);
+check("a room that is no organization refused (4403)", await odd.closed);

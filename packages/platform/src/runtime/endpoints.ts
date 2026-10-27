@@ -2,7 +2,7 @@ import { ORPCError, os, type Router } from "@orpc/server";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { experimental_ZodSmartCoercionPlugin } from "@orpc/zod/zod4";
 import type { z } from "zod";
-import type { Access, Level } from "./access.js";
+import { rank, type Access, type Level } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
 import type { AppContext } from "./index.js";
 
@@ -22,10 +22,13 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   description?: string;
   input: Input;
   output: Output;
-  // Checked before the function runs: the caller needs `level` on the `kind` item whose id is in
-  // the input field named `id`, or gets a 404.
-  access?: { kind: string; id: string; level: Level };
+  // Checked before the function runs: the caller needs `level` on the control point named by the
+  // input field `point`, or by what the function returns for the input, or gets a 404. "none"
+  // says the endpoint checks nothing itself; with access on, every endpoint says one or the other.
+  access?: EndpointAccess<z.output<Input>>;
 }
+
+export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | "none";
 
 export interface Endpoint<Input extends z.ZodType = z.ZodType, Output extends z.ZodType = z.ZodType, App = AnyApp> extends EndpointDefinition<Input, Output> {
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>;
@@ -36,18 +39,33 @@ export function endpoint<Input extends z.ZodType, Output extends z.ZodType, App 
   definition: EndpointDefinition<Input, Output>,
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>,
 ): Endpoint<Input, Output, App> {
-  if (definition.access) {
-    const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
-    if (!shape || !(definition.access.id in shape)) throw new Error(`an endpoint's access names input field ${definition.access.id}, which its input schema does not have`);
+  const access = definition.access;
+  if (access !== undefined && access !== "none") {
+    if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`an endpoint's access is { point, level } or "none"`);
+    rank(access.level);
+    if (typeof access.point === "string") {
+      const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
+      if (!shape || !(access.point in shape)) throw new Error(`an endpoint's access names input field ${access.point}, which its input schema does not have`);
+    } else if (typeof access.point !== "function") throw new Error("an endpoint's access point is an input field name or a function of the input");
   }
   return { ...definition, handler };
 }
 
+// The endpoints that say nothing about access, which an app with access on refuses to serve.
+export function undeclaredAccess(endpoints: Record<string, { access?: unknown }>): string[] {
+  return Object.entries(endpoints)
+    .filter(([, e]) => e.access === undefined)
+    .map(([name]) => name);
+}
+
 // Runs one endpoint's function for either door, after its access check.
 export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
-  if (e.access) {
-    const { kind, id, level } = e.access;
-    await (app as { access: Access }).access.require(kind, String((input as Record<string, unknown>)[id]), level);
+  if (e.access && e.access !== "none") {
+    const { point, level } = e.access;
+    const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
+    // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
+    if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new EndpointError(404, "not found");
+    await (app as { access: Access }).access.require(id, level);
   }
   return e.handler(input as z.output<z.ZodType>, app);
 }
