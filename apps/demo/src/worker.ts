@@ -46,20 +46,28 @@ async function sharedNote(app: App, id: string) {
   return { ...note, level: await app.access.check(id) };
 }
 
-// A grant with the name of whoever it is for, so the panel never shows a bare id.
-async function named(app: App, to: Grantee): Promise<{ kind: string; value: string | null; name: string }> {
-  if ("everyone" in to) return { kind: "everyone", value: null, name: "Everyone, signed in or not" };
-  if ("email" in to) return { kind: "email", value: to.email, name: to.email };
-  if ("user" in to) {
-    const [row] = await app.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, to.user));
-    return { kind: "user", value: to.user, name: row ? `${row.name} <${row.email}>` : "someone" };
-  }
-  if ("team" in to) {
-    const [row] = await app.db.select({ name: team.name }).from(team).where(eq(team.id, to.team));
-    return { kind: "team", value: to.team, name: `Team ${row?.name ?? "?"}` };
-  }
-  const [row] = await app.db.select({ name: organization.name }).from(organization).where(eq(organization.id, to.organization));
-  return { kind: "organization", value: to.organization, name: `Everyone in ${row?.name ?? "?"}` };
+// Grants with the name of whoever each is for, so the panel never shows a bare id: one query per
+// kind of grantee, never one per grant.
+async function named<G extends { to: Grantee }>(app: App, grants: G[]): Promise<(G & { kind: string; value: string | null; name: string })[]> {
+  const ids = (kind: "user" | "team" | "organization") => grants.flatMap((g) => (kind in g.to ? [(g.to as Record<string, string>)[kind]!] : []));
+  const [people, teams, orgs] = await Promise.all([
+    ids("user").length ? app.db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, ids("user"))) : [],
+    ids("team").length ? app.db.select({ id: team.id, name: team.name }).from(team).where(inArray(team.id, ids("team"))) : [],
+    ids("organization").length ? app.db.select({ id: organization.id, name: organization.name }).from(organization).where(inArray(organization.id, ids("organization"))) : [],
+  ]);
+  const by = <R extends { id: string }>(rows: R[]) => new Map(rows.map((r) => [r.id, r]));
+  const [person, group, org] = [by(people), by(teams), by(orgs)];
+  return grants.map((g) => {
+    const to = g.to;
+    if ("everyone" in to) return { ...g, kind: "everyone", value: null, name: "Everyone, signed in or not" };
+    if ("email" in to) return { ...g, kind: "email", value: to.email, name: to.email };
+    if ("user" in to) {
+      const row = person.get(to.user);
+      return { ...g, kind: "user", value: to.user, name: row ? `${row.name} <${row.email}>` : "someone" };
+    }
+    if ("team" in to) return { ...g, kind: "team", value: to.team, name: `Team ${group.get(to.team)?.name ?? "?"}` };
+    return { ...g, kind: "organization", value: to.organization, name: `Everyone in ${org.get(to.organization)?.name ?? "?"}` };
+  });
 }
 
 // A room is named after a control point, an organization's or a team's, so whoever can read it may join.
@@ -248,9 +256,8 @@ export default defineApp(
           access: { point: "id", level: "manage" },
         },
         async ({ id }, app) => {
-          const point = await app.access.point(id);
-          const grants = await Promise.all((await app.access.grants(id)).map(async (g) => ({ ...(await named(app, g.to)), level: g.level })));
-          return { level: await app.access.check(id), parent: point.parent, inherits: point.inherits, grants, links: await app.access.links(id) };
+          const [point, grants, links, level] = await Promise.all([app.access.point(id), app.access.grants(id).then((all) => named(app, all)), app.access.links(id), app.access.check(id)]);
+          return { level, parent: point.parent, inherits: point.inherits, grants: grants.map(({ kind, value, name, level: l }) => ({ kind, value, name, level: l })), links };
         },
       ),
       grantNote: endpoint(
