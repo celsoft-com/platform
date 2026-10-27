@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
 import { endpoint } from "./endpoints.js";
-import { serveMcp } from "./mcp.js";
+import { serveMcp } from "./mcp-server.js";
 
 const endpoints = {
   addNote: endpoint(

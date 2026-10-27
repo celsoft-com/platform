@@ -7,7 +7,7 @@ import { freshDatabase, world } from "../../test/database.js";
 import { applyStaticPoints, organizationPoint, type Access, type Level } from "./access.js";
 import { apiHandler, endpoint, undeclaredAccess } from "./endpoints.js";
 import { defineApp } from "./index.js";
-import { serveMcp } from "./mcp.js";
+import { serveMcp } from "./mcp-server.js";
 
 // Endpoints, lists and the Worker's wiring: rows N1 onward of docs/access-rules.md.
 

@@ -11,7 +11,7 @@ import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./
 import type { z } from "zod";
 import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
-import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
+import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { pageServer, type Page } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
@@ -458,6 +458,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   const { app: asUser, close } = createContext(request, env, ctx, options, once, known);
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
+    const { serveMcp } = await import("./mcp-server.js");
     return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
   } finally {
     close();
