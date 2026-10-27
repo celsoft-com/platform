@@ -39,15 +39,8 @@ export function endpoint<Input extends z.ZodType, Output extends z.ZodType, App 
   definition: EndpointDefinition<Input, Output>,
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>,
 ): Endpoint<Input, Output, App> {
-  const access = definition.access;
-  if (access !== undefined && access !== "none") {
-    if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`an endpoint's access is { point, level } or "none"`);
-    rank(access.level);
-    if (typeof access.point === "string") {
-      const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
-      if (!shape || !(access.point in shape)) throw new Error(`an endpoint's access names input field ${access.point}, which its input schema does not have`);
-    } else if (typeof access.point !== "function") throw new Error("an endpoint's access point is an input field name or a function of the input");
-  }
+  const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
+  checkAccessDeclaration(definition.access, shape && Object.keys(shape), "an endpoint");
   return { ...definition, handler };
 }
 
@@ -60,14 +53,30 @@ export function undeclaredAccess(endpoints: Record<string, { access?: unknown }>
 
 // Runs one endpoint's function for either door, after its access check.
 export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
-  if (e.access && e.access !== "none") {
-    const { point, level } = e.access;
-    const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
-    // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
-    if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new EndpointError(404, "not found");
-    await (app as { access: Access }).access.require(id, level);
-  }
+  await requireAccess(e.access, input, app);
   return e.handler(input as z.output<z.ZodType>, app);
+}
+
+// The check an endpoint or a page declares, run against its input.
+export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: unknown): Promise<void> {
+  if (!access || access === "none") return;
+  const { point, level } = access;
+  const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
+  // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
+  if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new EndpointError(404, "not found");
+  await (app as { access: Access }).access.require(id, level);
+}
+
+// Throws when an access declaration is neither { point, level } nor "none", or names a field
+// `fields` lacks; `what` names its owner in the message.
+export function checkAccessDeclaration(access: unknown, fields: readonly string[] | undefined, what: string): void {
+  if (access === undefined || access === "none") return;
+  if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`${what}'s access is { point, level } or "none"`);
+  const { point, level } = access as { point: unknown; level: Level };
+  rank(level);
+  if (typeof point === "string") {
+    if (!fields || !fields.includes(point)) throw new Error(`${what}'s access names ${point}, which it does not have`);
+  } else if (typeof point !== "function") throw new Error(`${what}'s access point is a field name or a function`);
 }
 
 export type Endpoints = Record<string, Endpoint<z.ZodType, z.ZodType, never>>;

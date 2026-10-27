@@ -15,6 +15,8 @@ export interface Context {
   repo: () => Promise<Repo>;
   // Which optional providers have keys; destroy skips one without.
   providers?: { neon: boolean; mail: boolean };
+  // The paths the app's pages claim, read from its Worker.
+  pages?: string[];
   now?: () => Date;
 }
 
@@ -127,7 +129,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   }
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined });
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages });
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
 
   // The old Worker kept writing to the old bucket until now, so what it added is copied before the old bucket goes.
@@ -246,6 +248,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     vars,
     // wrangler dev keeps this bucket on disk locally; nothing is created in Cloudflare.
     bucket: config.files ? `${config.name}-dev` : undefined,
+    pages: ctx.pages,
   }) as Record<string, unknown>;
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${appUrl}; email is captured to this terminal`);
