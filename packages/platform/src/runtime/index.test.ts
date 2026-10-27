@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import { defineApp, EndpointError } from "./index.js";
@@ -116,5 +117,22 @@ describe("with auth", () => {
     const response = await call("/api/auth/sign-in/email", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "A@B.com", password: "x" }) }, { AUTH_LIMIT });
     expect(response.status).toBe(429);
     expect(keys).toEqual(["/api/auth/sign-in/email:a@b.com"]);
+  });
+});
+
+describe("tracing", () => {
+  const pool = { query: async () => ({ rows: [], fields: [] }), end: async () => {} } as unknown as Pool;
+  const app = defineApp(async (_req, a) => {
+    await a.db.execute(sql`select 1 from access_point join access_grant on true`);
+    return new Response("ok");
+  }, { pool: () => pool });
+
+  it("with TRACE on, says where the time went in Server-Timing, each query by its verb and tables", async () => {
+    const timing = (await app.fetch(new Request("https://x/"), { ...env, TRACE: "on" }, fakeCtx().ctx)).headers.get("server-timing");
+    expect(timing).toMatch(/^total;dur=[\d.]+, db-all;dur=[\d.]+;desc="1 queries", db-1;dur=[\d.]+;desc="select access_point,access_grant"$/);
+  });
+
+  it("without it, sends no timing", async () => {
+    expect((await app.fetch(new Request("https://x/"), env, fakeCtx().ctx)).headers.get("server-timing")).toBeNull();
   });
 });

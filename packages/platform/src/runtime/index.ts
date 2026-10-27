@@ -15,6 +15,7 @@ import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizatio
 import { pageServer, type Page } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { Trace, withTiming } from "./trace.js";
 
 export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
@@ -39,6 +40,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   LIVE_ROOMS?: string;
   MCP?: string;
   ACCESS?: string;
+  // "on" on previews and in local dev: every response says where its time went, in Server-Timing.
+  TRACE?: string;
 }
 
 export interface ExecutionContext {
@@ -128,6 +131,56 @@ export function defineApp<
   const pages = pageServer(options.pages ?? []);
   const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
 
+  // One request, answered; `trace` collects where its time goes.
+  async function serve(request: Request, env: Env, ctx: ExecutionContext, trace: Trace | undefined): Promise<Response> {
+    const url = new URL(request.url);
+    // With access on, every endpoint says what it checks, so a forgotten check never ships open.
+    if (env.ACCESS === "on" && undeclared.length > 0) {
+      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
+      return json({ error: "this app is misconfigured; see its logs" }, 500);
+    }
+    const { app, close } = createContext(request, env, ctx, options, once, undefined, undefined, trace);
+    let closeToken: (() => void) | undefined;
+    try {
+      if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
+      // A request with an API token runs as the token's owner, capped at the token's level.
+      let current = app;
+      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
+      const token = apiToken(request, url, env, onPage);
+      if (token !== null) {
+        const holder = await tokenHolder(app, token);
+        if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
+        if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
+        const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap, trace);
+        current = made.app;
+        closeToken = made.close;
+      }
+      const live = await liveRoute(request, url, env, current, options);
+      if (live) return live;
+      if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
+        const answered = await mcpRoute(request, url, env, ctx, app, options, once);
+        if (answered) return answered;
+      }
+      if (env.BETTER_AUTH_SECRET) {
+        const platform = await platformRoute(request, url, env, current, options);
+        if (platform) return platform;
+      }
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET));
+      if (page) return page;
+      const answered = await api?.handle(request, current);
+      if (answered) return answered;
+      return await handle(request, current);
+    } catch (thrown) {
+      if (thrown instanceof Response) return thrown;
+      // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
+      if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
+      throw thrown;
+    } finally {
+      closeToken?.();
+      close();
+    }
+  }
+
   return {
     // Read by the package to generate the browser client's routes; the app's own types come from here.
     endpoints: (options.endpoints ?? {}) as E,
@@ -135,52 +188,8 @@ export function defineApp<
     pages: pages?.claims ?? [],
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-      const url = new URL(request.url);
-      // With access on, every endpoint says what it checks, so a forgotten check never ships open.
-      if (env.ACCESS === "on" && undeclared.length > 0) {
-        console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
-        return json({ error: "this app is misconfigured; see its logs" }, 500);
-      }
-      const { app, close } = createContext(request, env, ctx, options, once);
-      let closeToken: (() => void) | undefined;
-      try {
-        if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
-        // A request with an API token runs as the token's owner, capped at the token's level.
-        let current = app;
-        const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
-        const token = apiToken(request, url, env, onPage);
-        if (token !== null) {
-          const holder = await tokenHolder(app, token);
-          if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
-          if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
-          const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap);
-          current = made.app;
-          closeToken = made.close;
-        }
-        const live = await liveRoute(request, url, env, current, options);
-        if (live) return live;
-        if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
-          const answered = await mcpRoute(request, url, env, ctx, app, options, once);
-          if (answered) return answered;
-        }
-        if (env.BETTER_AUTH_SECRET) {
-          const platform = await platformRoute(request, url, env, current, options);
-          if (platform) return platform;
-        }
-        const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET));
-        if (page) return page;
-        const answered = await api?.handle(request, current);
-        if (answered) return answered;
-        return await handle(request, current);
-      } catch (thrown) {
-        if (thrown instanceof Response) return thrown;
-        // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
-        if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
-        throw thrown;
-      } finally {
-        closeToken?.();
-        close();
-      }
+      const trace = env.TRACE === "on" ? new Trace() : undefined;
+      return withTiming(await serve(request, env, ctx, trace), trace);
     },
 
     // The Durable Object class behind live rooms, exported by the deploy's generated entry module.
@@ -212,6 +221,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   knownSession?: () => Promise<Session | null>,
   // The level an API token is capped at, when the request carries one.
   cap?: Level,
+  trace?: Trace,
 ): { app: AppContext<Env, Schema>; close(): void } {
   const openPool = options.pool ?? defaultPool;
   let pool: Pool | undefined;
@@ -228,7 +238,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     env,
     get db() {
       if (!env.DB) throw new Error("this app has no database; add `database` to platform.jsonc");
-      return (db ??= drizzle((pool ??= openPool(env.DB.connectionString)), { schema: options.schema ?? ({} as Schema) }));
+      return (db ??= drizzle((pool ??= trace ? trace.wrap(openPool(env.DB.connectionString)) : openPool(env.DB.connectionString)), { schema: options.schema ?? ({} as Schema) }));
     },
     get email() {
       return (email ??= createEmail(env));
@@ -281,7 +291,8 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       ));
     },
     session() {
-      return (session ??= knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      return (session ??= trace ? trace.time("session", "find the session", find) : find());
     },
     async requireUser() {
       const current = await app.session();

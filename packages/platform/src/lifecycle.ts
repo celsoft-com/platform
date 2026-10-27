@@ -122,7 +122,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
   if (oldBucket) await copyFiles(ctx, oldBucket, n.bucket, false);
 
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, ...(target.kind === "preview" && { TRACE: "on" }) };
   if (config.email) {
     Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
     if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
@@ -238,7 +238,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
-  const vars: Record<string, string> = { APP_URL: appUrl, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
   const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
     config,
     worker: `${config.name}-dev`,
