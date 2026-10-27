@@ -215,6 +215,11 @@ describe("API tokens", () => {
     expect((await send("/api/auth/api-key/list", { cookie: a.cookie })).body.apiKeys).toEqual([]);
     await send("/api/auth/api-key/delete", { cookie: a.cookie, body: { keyId: theirs.id } });
     expect((await send("/api/me", { token: theirs.key })).body).toEqual({ id: b.id });
+    expect((await send(`/api/auth/api-key/get?id=${theirs.id}`, { cookie: a.cookie })).status).toBe(404);
+    for (const keyId of ["", "x", 7, null, uid()]) {
+      expect((await send("/api/auth/api-key/delete", { cookie: a.cookie, body: { keyId } })).status, String(keyId)).toBe(404);
+    }
+    expect((await send("/api/auth/api-key/get?id=nope", { cookie: a.cookie })).status).toBe(404);
   });
 
   it("T12: a token whose owner is deleted, or whose cap was changed in the table, is a 401", async () => {

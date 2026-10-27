@@ -290,6 +290,7 @@ async function sessionAs<Env, Schema extends Record<string, unknown>>(app: AppCo
 
 const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
 const TOKEN_ROUTES = ["create", "list", "delete", "get"];
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The API token a request carries, when tokens are on: only on /api/ outside /api/auth/, where
 // a token can never make more tokens or change the account.
@@ -398,6 +399,9 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
       const checked = await tokenCreateRequest(request);
       return checked instanceof Response ? checked : app.auth.handler(checked);
     }
+    // A token id that is not a UUID names nothing; Better Auth would fail on it instead.
+    const keyId = path.endsWith("/delete") ? ((await request.clone().json().catch(() => ({}))) as { keyId?: unknown }).keyId : path.endsWith("/get") ? url.searchParams.get("id") : undefined;
+    if (keyId !== undefined && (typeof keyId !== "string" || !UUID_TEXT.test(keyId))) return json({ error: "not found" }, 404);
   }
   if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
 

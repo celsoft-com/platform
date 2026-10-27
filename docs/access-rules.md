@@ -221,7 +221,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | T8 | Tokens off | A token is ignored; the token routes and screen answer 404 |
 | T9 | Lifetime | 90 days unless set; at most 365; never forever; updating a token is refused |
 | T10 | Making a token with other fields | Only name, lifetime and cap are kept; an unknown cap is a 400; signed out is a 401 |
-| T11 | Someone else's tokens | Not listed; cannot be revoked |
+| T11 | Someone else's tokens, or a token id that is no UUID | Not listed; cannot be read or revoked; a 404, never a server error |
 | T12 | Owner deleted, or cap changed in the table to no level | 401 |
 | T13 | Token on `/mcp` | 401; MCP takes only OAuth tokens |
 | T14 | `Authorization` that is not a bearer token | Ignored |

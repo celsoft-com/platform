@@ -58,7 +58,7 @@ check "tokens screen served" "$(curl -s "$base/tokens" | grep -c 'API tokens</h1
 read_key=$(json -b "$jar" -d '{"name":"smoke read","metadata":{"cap":"read"}}' "$base/api/auth/api-key/create" | key)
 write_key=$(json -b "$jar" -d '{"name":"smoke write","metadata":{"cap":"write"}}' "$base/api/auth/api-key/create" | key)
 check "token made" "$(echo "$write_key" | grep -c '^pat_')"
-check "token reads my notes" "$(curl -s -H "authorization: Bearer $write_key" "$base/api/notes" | grep -c 'first note')"
+check "token lists my notes" "$(curl -s -H "authorization: Bearer $write_key" "$base/api/notes" | grep -c "\"id\":\"$id\"")"
 check "token's level is its cap" "$(json -H "authorization: Bearer $write_key" "$note_url" | level)"
 check "write token cannot manage (404)" "$(status -H "authorization: Bearer $write_key" -d '{"level":"read"}' "$base/api/notes/$id/links")"
 check "read token cannot write (403)" "$(status -X PUT -H "authorization: Bearer $read_key" -d '{"body":"by token"}' "$note_url")"
@@ -66,7 +66,7 @@ check "token ignored on auth routes" "$(json -H "authorization: Bearer $write_ke
 check "token cannot make tokens (401)" "$(status -H "authorization: Bearer $write_key" -d '{"name":"more"}' "$base/api/auth/api-key/create")"
 check "altered token refused (401)" "$(status -H "authorization: Bearer ${write_key}x" "$base/api/notes")"
 check "unlimited token refused (400)" "$(status -b "$jar" -d '{"name":"forever","expiresIn":"never"}' "$base/api/auth/api-key/create")"
-write_id=$(json -b "$jar" "$base/api/auth/api-key/list" | tr '{' '\n' | grep '"name":"smoke write"' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+write_id=$(json -b "$jar" "$base/api/auth/api-key/list" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).apiKeys.find(k=>k.name==="smoke write")||{}).id||""))')
 check "revoke token" "$(status -b "$jar" -d '{"keyId":"'$write_id'"}' "$base/api/auth/api-key/delete")"
 check "revoked token refused (401)" "$(status -H "authorization: Bearer $write_key" "$base/api/notes")"
 
