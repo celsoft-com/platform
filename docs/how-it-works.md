@@ -143,7 +143,7 @@ flowchart LR
 2. **Control points:** the app creates a point for each resource it wants to gate with `app.access.create(id, { parent, inherit })`; the creator gets `manage`, and fixed sections are static points declared in `defineApp`.
 3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from grants to people, emails, teams, organizations and Everyone, links, and an organization's Admins team; each principal counts its nearest grant up the inherited parents, and the highest wins.
 4. **Checks:** every endpoint declares `access: { point, level }` or `access: "none"`, hand-written routes call `app.access.check`, and lists filter with `app.access.readable`; anything short is a 404.
-5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`.
+5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`, and is kept as a cookie so server pages and downloads count it too.
 6. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
 
 ### Organizations

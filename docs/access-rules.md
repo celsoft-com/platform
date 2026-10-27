@@ -112,6 +112,10 @@ checked against a plain reference version of these rules, in `access.model.test.
 | K7 | Making, listing, revoking links | Need `manage` |
 | K8 | Revoking with another point's link id | Revokes nothing |
 | K9 | Link and grant together | The higher wins |
+| K10 | Link token posted to `/api/platform/link` | Kept as an HttpOnly, same-site cookie for its point, until the link expires, at most 30 days; anything else is a 404 with no cookie |
+| K11 | Request with link cookies | Each counts like the header, on pages, downloads and the API; at most 20 per request |
+| K12 | Link cookie after the link is revoked or expires | Nothing, on the next request |
+| K13 | Link posted from another site's form | 403 |
 
 ## Inheritance
 
@@ -204,7 +208,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | N8 | Access on, an endpoint declares nothing | Every request answers 500, naming it in the logs |
 | N9 | Declared field missing, unknown level, bad shape | Error when the endpoint is defined |
 | N10 | Input gives no usable point id | 404, never a server error |
-| N11 | Link token | Read from the `x-access-link` header, never the query |
+| N11 | Link token | Read from the `x-access-link` header and link cookies, never the query |
 | N12 | `app.access` with access off | Error |
 
 ## API tokens

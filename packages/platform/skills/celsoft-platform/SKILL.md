@@ -91,7 +91,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 6. **Signed out:** `requireUser()` on a page redirects to `/login?next=<page>`, which returns there after sign-in.
 7. **Access:** with `access` on, every route declares `access: { point, level }` or `access: "none"`, as endpoints do; a refused signed-in caller gets a 404, a refused signed-out visitor is sent to sign in.
 8. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
-9. **Not on pages:** API tokens and share links; they work on `/api/` only.
+9. **Tokens and links:** API tokens are accepted on page GET and HEAD, capped; a refused page takes a `#link=` share link from its address, keeps it as a cookie and reloads, so `/print/7#link=<token>` opens for a link holder.
 10. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
 
 ## `app`
@@ -110,7 +110,7 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 3. **Principals:** a person (`{ user }` or a confirmed `{ email }`), `{ team }`, `{ organization }` and `{ everyone: true }` (read only, signed in or not).
 4. **Inheritance:** with `inherit: true` a point also uses its parent's grants, up to the first point that does not inherit. Each principal stops at its nearest grant and the highest wins, so a grant to a person on a note can lower that person there, while a grant to a whole organization never lowers its teams.
 5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
-6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header. Endpoints a signed-out link holder uses go under `/api/public/`.
+6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads and server pages count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
 7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }` or `access: "none"`; the app refuses every request until each one does.
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
@@ -134,7 +134,7 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
-2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`; `requireUser()` returns the token's owner.
+2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, and on page GET and HEAD; `requireUser()` returns the token's owner.
 3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `access: "none"` are limited only by that, so put writes behind a point when tokens should not reach them.
 4. **Lifetime:** 90 days unless chosen, at most 365.
 5. **Never:** on `/api/auth/*` or `/mcp`.
