@@ -14,9 +14,9 @@ command as `npx @celsoft/platform <command>` from the app's folder.
 | File | Who writes it | Rule |
 | --- | --- | --- |
 | `platform.jsonc` | The app | What the app turns on; validated on every run |
-| `src/worker.ts` | The app | `export default defineApp(handler, { schema, endpoints, live })` |
+| `src/worker.ts` | The app | `export default defineApp(handler, { schema, endpoints, pages, live })` |
 | `src/schema.ts` | The app | Drizzle tables; `id()` and `timestamps()` from `@celsoft/platform/schema` |
-| Frontend (`frontend` in `platform.jsonc`) | The app | Static files, or a `build` script's output |
+| Frontend (`frontend` in `platform.jsonc`) | The app | Static files, or a `build` script's output; anything rendered per request is a server page |
 | `drizzle/` | `db generate` | Commit; never edit |
 | `.github/workflows/platform.yml` | `init` | Commit; never edit |
 | `.platform/` | The platform | Gitignored; regenerated on install, `dev` and deploy; never edit |
@@ -59,6 +59,40 @@ export default defineApp(undefined, {
 5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "none"`; the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
+
+## Server pages
+
+Pages the Worker renders on each request, for share previews, pages search engines must read, or
+pages that need the session or database. A page claims a path and everything below it:
+
+```ts
+import { defineApp, page, route } from "@celsoft/platform";
+
+const notesPage = page({
+  path: "/notes",                       // claims /notes and /notes/*; no static file is served there
+  routes: {
+    "/": async (_, app) => `<h1>Hi ${(await app.requireUser()).name}</h1>`,
+    "/new": () => "<h1>New</h1>",       // text segments win over parameters
+    "/:id": route(
+      { params: z.object({ id: z.uuid() }), access: { point: "id", level: "read" } },
+      async ({ id }, app) => `<h1>${escape(await bodyOf(app, id))}</h1>`,
+    ),
+  },
+});
+
+export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
+```
+
+1. **Paths:** plain segments, never `/`, a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
+2. **Routes:** `"/"` is the claimed path itself; a route matching nothing under the claim is a 404. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
+3. **Answers:** return an HTML string, sent uncached as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
+4. **Methods:** GET and HEAD only; send changes to endpoints.
+5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
+6. **Signed out:** `requireUser()` on a page redirects to `/login?next=<page>`, which returns there after sign-in.
+7. **Access:** with `access` on, every route declares `access: { point, level }` or `access: "none"`, as endpoints do; a refused signed-in caller gets a 404, a refused signed-out visitor is sent to sign in.
+8. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
+9. **Not on pages:** API tokens and share links; they work on `/api/` only.
+10. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
 
 ## `app`
 
