@@ -50,9 +50,7 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     workers_dev: false,
     routes: [{ pattern: hostname, custom_domain: true }],
     observability: { enabled: true },
-    // A smaller script starts faster; source maps keep error stacks readable in the logs.
-    minify: true,
-    upload_source_maps: true,
+    // Never minified: the live room client is served from this script's own source, by name.
     // Every query is a round trip to the database, so the Worker runs next to it, not next to the visitor.
     ...(placement && { placement: { region: placement } }),
     vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) },
