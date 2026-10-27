@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { freshDatabase, world } from "../../test/database.js";
 import { createAccess } from "./access.js";
 
-// Rows M1 onward of docs/access-rules.md: a request asks about one point's level once, and never
+// Rows R1 onward of docs/access-rules.md: a request asks about one point's level once, and never
 // trusts a remembered level after anything that could change it.
 
 const { db, pool } = await freshDatabase();
@@ -29,7 +29,7 @@ function counted(user: string, memo = new Map<string, number>()) {
 }
 
 describe("Remembered levels", () => {
-  it("M1: repeated checks of one point in one request run one query, and agree", async () => {
+  it("R1: repeated checks of one point in one request run one query, and agree", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -41,7 +41,7 @@ describe("Remembered levels", () => {
     expect(queries()).toBe(1);
   });
 
-  it("M2: a refusal is remembered too, and stays a 404", async () => {
+  it("R2: a refusal is remembered too, and stays a 404", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -50,7 +50,7 @@ describe("Remembered levels", () => {
     expect(queries()).toBe(1);
   });
 
-  it("M3: a grant, revoke, link or inherit in the request forgets what was remembered", async () => {
+  it("R3: a grant, revoke, link or inherit in the request forgets what was remembered", async () => {
     const owner = await w.user();
     const reader = await w.user();
     const point = `m-${uid()}`;
@@ -65,7 +65,7 @@ describe("Remembered levels", () => {
     expect(await asReader.access.check(point)).toBe("write");
   });
 
-  it("M4: the caller's own write clears the memory, so a revoked level is never reused", async () => {
+  it("R4: the caller's own write clears the memory, so a revoked level is never reused", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -78,7 +78,7 @@ describe("Remembered levels", () => {
     expect(queries()).toBeGreaterThan(1);
   });
 
-  it("M5: inside a transaction, every check asks the database", async () => {
+  it("R5: inside a transaction, every check asks the database", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -91,7 +91,7 @@ describe("Remembered levels", () => {
     expect(queries()).toBe(1);
   });
 
-  it("M6: removing a point forgets its level, so it is a 404 at once", async () => {
+  it("R6: removing a point forgets its level, so it is a 404 at once", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -101,7 +101,7 @@ describe("Remembered levels", () => {
     await expect(access.check(point)).rejects.toMatchObject({ status: 404 });
   });
 
-  it("M7: two requests never share what they remember", async () => {
+  it("R7: two requests never share what they remember", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -112,7 +112,7 @@ describe("Remembered levels", () => {
     expect(second.queries()).toBe(1);
   });
 
-  it("M8: a remembered level for one caller is never another's", async () => {
+  it("R8: a remembered level for one caller is never another's", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);
@@ -120,7 +120,7 @@ describe("Remembered levels", () => {
     await expect(counted(await w.user()).access.check(point)).rejects.toMatchObject({ status: 404 });
   });
 
-  it("M9: as the app, nothing is remembered for the caller", async () => {
+  it("R9: as the app, nothing is remembered for the caller", async () => {
     const owner = await w.user();
     const point = `m-${uid()}`;
     await w.as(owner).create(point);

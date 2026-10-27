@@ -230,6 +230,39 @@ checked against a plain reference version of these rules, in `access.model.test.
 | T13 | Token on `/mcp` | 401; MCP takes only OAuth tokens |
 | T14 | `Authorization` that is not a bearer token | Ignored |
 | T15 | `/tokens` | The tokens screen |
+| T16 | A token request | One query reads the key and its owner; the last use is written at most hourly |
+| T17 | A disabled token, or a banned owner | 401; a ban that has lapsed is not a refusal |
+
+## Stored chains
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| H1 | Points that existed before the triggers | Their chains are filled by the next deploy; preparing again changes nothing |
+| H2 | A point moves or changes inheritance | Every chain through it is rewritten above it; below it stays |
+| H3 | A point is removed | Its chains and every chain through it go |
+| H4 | A chain longer than 64 points | Stops at 64, as the walk it replaced did |
+
+## Remembered levels
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| R1 | Several checks of one point in one request | One query, every answer the same |
+| R2 | A refusal | Remembered too, still a 404 |
+| R3 | A grant, revoke, link, inherit, move or remove in the request | Everything remembered is forgotten |
+| R4 | The caller's own change, then a check | Asks the database again |
+| R5 | Inside a transaction | Always asks the database |
+| R6 | A removed point | A 404 at once |
+| R7 | Two requests | Never share what they remember |
+| R8 | Two callers | Never share a level |
+| R9 | As the app | Nothing remembered for the caller |
+| R10 | An organization or team change in the request | Everything remembered is forgotten |
+
+## Cost per request
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| Q1 | A request with a fresh session cookie | Finds the caller with no query; a page read costs only its own queries |
+| U1 | The per-caller limit | Counts a signed-in person by id, a token by a hash of the token, otherwise the address |
 
 ## Attacks
 

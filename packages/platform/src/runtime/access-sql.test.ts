@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { freshDatabase, world } from "../../test/database.js";
 import { prepareAccess } from "./access-sql.js";
 
-// The stored chains: rows A1 onward of docs/access-rules.md.
+// The stored chains: rows H1 onward of docs/access-rules.md.
 
 const { db, pool } = await freshDatabase();
 const w = world(db, pool);
@@ -13,7 +13,7 @@ const chainOf = async (point: string) =>
   (await w.query(`select ancestor_id, depth from access_ancestor where point_id = $1 order by depth`, [point])).rows.map((r) => `${r.depth}:${r.ancestor_id}`);
 
 describe("Stored chains", () => {
-  it("A1: points made before the triggers existed get their chains, and preparing again changes nothing", async () => {
+  it("H1: points made before the triggers existed get their chains, and preparing again changes nothing", async () => {
     await w.query(`drop trigger platform_access_point_changed on access_point`);
     const [a, b, c, d] = [`a-${uid()}`, `b-${uid()}`, `c-${uid()}`, `d-${uid()}`];
     await w.query(`insert into access_point (id) values ($1)`, [a]);
@@ -31,7 +31,7 @@ describe("Stored chains", () => {
     expect((await w.query(`select count(*)::int as n from access_ancestor`)).rows[0].n).toBe(before);
   });
 
-  it("A2: a move or an inheritance change rewrites the chains of every point below it", async () => {
+  it("H2: a move or an inheritance change rewrites the chains of every point below it", async () => {
     const [a, b, c, d] = [`a-${uid()}`, `b-${uid()}`, `c-${uid()}`, `d-${uid()}`];
     await w.query(`insert into access_point (id) values ($1), ($2)`, [a, d]);
     await w.query(`insert into access_point (id, parent_id, inherits) values ($1, $2, true)`, [b, a]);
@@ -45,7 +45,7 @@ describe("Stored chains", () => {
     expect(await chainOf(c)).toEqual([`0:${c}`, `1:${b}`, `2:${d}`]);
   });
 
-  it("A3: removing a point removes its chains and every chain through it", async () => {
+  it("H3: removing a point removes its chains and every chain through it", async () => {
     const [a, b] = [`a-${uid()}`, `b-${uid()}`];
     await w.query(`insert into access_point (id) values ($1)`, [a]);
     await w.query(`insert into access_point (id, parent_id, inherits) values ($1, $2, true)`, [b, a]);
@@ -53,7 +53,7 @@ describe("Stored chains", () => {
     expect((await w.query(`select count(*)::int as n from access_ancestor where point_id in ($1, $2) or ancestor_id in ($1, $2)`, [a, b])).rows[0].n).toBe(0);
   });
 
-  it("A4: a chain stops at 64 points, as the walk it replaces did", async () => {
+  it("H4: a chain stops at 64 points, as the walk it replaces did", async () => {
     let parent: string | null = null;
     const ids: string[] = [];
     for (let i = 0; i < 70; i++) {

@@ -115,9 +115,21 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
 10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
-11. **Static points:** `defineApp(handler, { access: { points: { settings: { grants: [{ to: { email: "boss@x.com" }, level: "manage" }] } } } })`, applied at every start; their grants change only in code.
+11. **Static points:** `defineApp(handler, { access: { points: { settings: { grants: [{ to: { email: "boss@x.com" }, level: "manage" }] } } } })`, written by every deploy and `dev`; their grants change only in code.
 12. **Organizations:** each has the point `organizationPoint(id)` granting its members `read`, and each team `teamPoint(id)` granting the team `write`; members of the built-in Admins team get `manage` on everything under their organization.
 13. **As the app:** `app.access.asApp()` passes every check, for work no person asked for; never use it for a request's own data.
+
+## Speed
+
+The platform keeps its own work per request near zero; keep the app's the same:
+
+1. **Round trips:** every query is a trip to the database, and they add up; count them, not milliseconds.
+2. **Together:** run independent queries with `Promise.all`, never one after another.
+3. **Lists:** filter and page in the query, `.where(and(eq(notes.userId, me.id), await app.access.readable(notes.id))).limit(50)`, by an indexed column first; never check rows one by one in code.
+4. **Lookups:** load related names for many rows with one `inArray` query, never one query per row.
+5. **Checks:** asking the same point's level twice in a request costs nothing the second time.
+6. **Seeing it:** previews and `dev` answer every request with a `Server-Timing` header listing each query and its time; the browser's network panel shows it under Timing.
+7. **Pages:** the browser should make one request per action, and redraw only what changed.
 
 ## Organizations
 
@@ -156,6 +168,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
+8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out; over it, a 429 with `retry-after`.
 
 ## Commands
 

@@ -373,7 +373,7 @@ describe("Pages: sign-in and access", () => {
     }
   });
 
-  it("M10: leaving an organization in a request forgets the levels it found earlier in that request", async () => {
+  it("R10: leaving an organization in a request forgets the levels it found earlier in that request", async () => {
     const cookie = await signUp();
     const created = await wired.fetch(
       new Request("https://app.test/api/platform/organizations", { method: "POST", headers: { "content-type": "application/json", origin: "https://app.test", cookie }, body: JSON.stringify({ name: "Leave" }) }),
@@ -412,7 +412,7 @@ describe("Pages: sign-in and access", () => {
     expect(page.headers.get("server-timing")).toMatch(/desc="1 queries"/);
   });
 
-  it("R1: the rate limit counts a signed-in person by their id, and a token by the token", async () => {
+  it("U1: the rate limit counts a signed-in person by their id, and a token by the token", async () => {
     const keys: string[] = [];
     const API_LIMIT = { limit: async ({ key }: { key: string }) => (keys.push(key), { success: true }) };
     const cookie = await signUp();

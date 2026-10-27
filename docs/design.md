@@ -162,13 +162,13 @@ A published CLI, runtime library and app template that create and reuse each app
 
 1. **Push to main**: deploys prod.
     1. **Backup**: takes a Neon backup branch of prod, with no compute, keeping only the newest 3.
-    2. **Migrate**: runs migrations against prod.
+    2. **Migrate**: runs migrations against prod, then installs the platform's access triggers and functions, fills any missing stored chains, and writes the app's static points.
     3. **Connect**: ensures the prod Hyperdrive config.
     4. **Secrets**: loads `production` Environment secrets onto the Worker.
-    5. **Deploy**: deploys the Worker and attaches the prod hostname.
+    5. **Deploy**: deploys the Worker and attaches the prod hostname, with Cloudflare's placement hint set to the Neon project's region, so the Worker runs next to its database.
 2. **PR opened or pushed**: creates or updates that PR's preview.
     1. **Branch**: ensures a Neon branch for the PR, copied from prod; a new copy drops prod's auth signing keys, which only prod's secret can decrypt, and Better Auth makes the preview its own. A newly generated auth secret does the same anywhere, and so does a new `dev` branch.
-    2. **Migrate**: runs migrations against that branch.
+    2. **Migrate**: runs migrations against that branch, then the same access setup as prod.
     3. **Connect**: ensures a Hyperdrive config for that branch.
     4. **Secrets**: loads `preview` Environment secrets onto the preview Worker.
     5. **Deploy**: deploys the preview Worker and attaches its preview hostname.
@@ -228,7 +228,7 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
     6. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
     7. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
-5. **Platform provides**: through `defineApp` in the runtime library.
+5. **Platform provides**: through `defineApp` in the runtime library. How it stays fast on the same hardware is in [performance.md](performance.md).
     1. **Database**: `app.db`, a Drizzle client typed with the app's schema, over one `pg` pool shared with auth.
     2. **Auth routes**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset).
     3. **Session**: `app.session()`, looked up once per request, and `app.requireUser()`, which returns the user or answers 401.
@@ -251,8 +251,8 @@ A published CLI, runtime library and app template that create and reuse each app
 6. **Auth behavior**: set by the platform for every app with auth on.
     1. **Private by default**: every `/api/*` route needs a signed-in user except those under `/api/public/`.
     2. **Cross-site forms**: POST, PUT, PATCH and DELETE requests sent as forms are refused unless their Origin is the app's own.
-    3. **Cookie cache**: the session cookie carries a signed copy for 5 minutes, so most requests skip the session query; a revoked session lasts until it expires.
-    4. **Rate limits**: the Workers rate limiting binding guards sign-in and reset by email address and sign-up by client IP, with no database involved; counts are approximate per Cloudflare location.
+    3. **Cookie cache**: the session cookie carries a signed copy for 5 minutes, so a request with a fresh cookie finds its caller without a query; a revoked session lasts until it expires. Better Auth is built once per Worker instance, reaching each request's own connection, and the JWT plugin signs no `set-auth-jwt` header, so finding the session runs no plugin queries either.
+    4. **Rate limits**: the Workers rate limiting binding guards sign-in and reset by email address and sign-up by client IP, with no database involved; counts are approximate per Cloudflare location. Every app also limits each caller on `/api/*`, server pages and `/mcp` to `rateLimit` requests a minute from `platform.jsonc`, 1,200 by default, counted per signed-in person, per API token, or per address when signed out, and answers 429 over it, so one caller cannot spend everyone's capacity.
     5. **First owner**: the first account an app creates gets the owner role, through Better Auth's admin plugin.
     6. **Owner recovery**: `npx @celsoft/platform owner reset <email>` makes that account the owner and sets a password typed into the terminal; only people holding the project's tokens can run it, and they already control the app, so no recovery secret ever exists or appears on a screen.
     7. **Signup**: open to anyone.
@@ -273,6 +273,7 @@ A published CLI, runtime library and app template that create and reuse each app
         4. **Making**: only a name, a lifetime and a cap are taken; Better Auth's server-only settings are dropped.
         5. **Screen**: `/tokens`, styled like `/login`, lists the signed-in person's tokens with name, level, last use and expiry, makes one shown exactly once, and revokes; apps may build their own on the same routes, `/api/auth/api-key/create`, `list`, `get` and `delete`.
         6. **Refused**: an unknown, altered, expired or revoked token, one whose owner is gone, or one whose cap is no level, is a 401, even beside a good cookie.
+        7. **Checking**: one query reads the token and its owner, refusing a disabled, expired or revoked token and a banned owner; the last use is written at most hourly, which is the accuracy the screen shows.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
@@ -282,7 +283,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Control points**: a control point gates one resource, such as one note, and is where access is checked and where a permissions page appears.
     2. **Identity**: a control point is identified by its resource, any value the app chooses, as long as it is globally unique, such as a note's id.
     3. **Principals**: a person, a team, an organization, or Everyone, which matches every visitor, signed in or not and is granted `read` only; principals only describe who belongs to what.
-    4. **Static points**: declared in `defineApp` as `access: { points }`, applied once per Worker before its first check, with their grants replaced each time, so they are reviewed in code and reachable from the first start; at runtime their grants, links, parent and inheritance cannot change.
+    4. **Static points**: declared in `defineApp` as `access: { points }`, written by every deploy and `dev` after migrations, never by a request, with their grants replaced each time, so they are reviewed in code and exist before the new code serves; at runtime their grants, links, parent and inheritance cannot change.
     5. **Dynamic points**: created by the app at runtime with `app.access.create(id, { parent, inherit, grants })`, whenever it sees fit, by a signed-in user; whoever creates one is always granted `manage` on it. Ids starting `organization:` and `team:` belong to the platform's own points for organizations and teams, which move and go only with them.
     6. **Parents**: a dynamic point's parent must already exist, and naming it requires at least `create` on it.
     7. **Levels**: one fixed ladder, each level including the ones below it: `read`, `create` (add things under it, such as notes in a team), `write`, `delete`, `manage` (change grants). Apps declare no permissions; an unusual action is mapped onto a level or checked by the app.
@@ -302,7 +303,7 @@ A published CLI, runtime library and app template that create and reuse each app
     21. **Lists**: `await app.access.readable(column)` and `allows(level, column)` are filters for the app's own query, such as `.where(await app.access.readable(notes.id))`, so the database returns only readable rows in one query, with paging and counts still correct.
     22. **Moving**: a platform call changes a point's parent, requiring `manage` on the point and `create` on the new parent; its grants travel with it.
     23. **Deleting**: `app.access.remove(id)` needs `delete`, removes the point and every point under it with their grants and links, and returns their ids so the app deletes those resources in the same transaction; deleting a person, team or organization deletes every grant it holds, and an organization or team takes its points with it.
-    24. **Queries**: one recursive query walks up a point's parents, at most a fixed number of levels as a backstop, joining the grants for the user's principals and any link token the request carries; nothing is cached between requests, so a removed member or a revoked grant takes effect on the next request.
+    24. **Queries**: each point's chain is stored in `access_ancestor`, kept by triggers on `access_point` that the deploy installs, so a check reads it by index instead of walking parents, at most a fixed number of levels as a backstop; a move or an inheritance change rewrites only the chains above the changed point. The rules live in the PL/pgSQL function `platform_access_level`, which each database connection plans once; the caller's teams and organizations are worked out once per statement, so a list filter pays for them once. Within one request a point's level is asked once and remembered until the request changes any grant, link, point or membership; nothing is cached between requests, so a removed member or a revoked grant takes effect on the next request.
     25. **Files**: files are stored in R2 under keys that never change, such as `files/<id>`, and where they sit lives only in their points' parents, so moving a file or a whole folder is one row, never a copy.
     26. **Later**: a Durable Object store for grants stays an option if checks ever need to be faster than a Postgres query.
 9. **Escape hatches**: every helper exposes the tool underneath, so an app is never boxed in.
