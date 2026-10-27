@@ -119,8 +119,9 @@ export interface Migrator {
   generate(custom?: string): Promise<void>;
   upToDate(): Promise<boolean>;
   migrate(databaseUrl: string): Promise<void>;
-  // Writes the app's static control points, read from its Worker; run after migrations.
-  applyStaticPoints(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void>;
+  // Installs the platform's access triggers and writes the app's static control points, read from
+  // its Worker; run after migrations.
+  prepareAccess(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
   forgetSigningKeys(databaseUrl: string): Promise<void>;
 }

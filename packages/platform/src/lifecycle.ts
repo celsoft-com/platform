@@ -91,7 +91,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
     if (uri) {
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
-      await writeStaticPoints(ctx, uri, branch.name);
+      await prepareAccessOn(ctx, uri, branch.name);
       if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
     } else {
       run.note(`would run migrations on ${branch.name}`);
@@ -241,7 +241,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     uri = await ports.neon.connectionUri(project, branch.id);
     await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
-    await writeStaticPoints(ctx, uri, DEV_BRANCH);
+    await prepareAccessOn(ctx, uri, DEV_BRANCH);
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
@@ -262,11 +262,13 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   await ports.wrangler.dev(local, devSecrets, uri);
 }
 
-// Static points change only with code, so they are written when code ships, never by requests.
-async function writeStaticPoints({ config, ports, run, staticPoints = {} }: Context, uri: string, branch: string): Promise<void> {
+// The access tables exist whenever auth is on; their triggers and the app's static points change
+// only with code, so they are written when code ships, never by requests.
+async function prepareAccessOn({ config, ports, run, staticPoints = {} }: Context, uri: string, branch: string): Promise<void> {
+  if (!config.auth) return;
   const names = Object.keys(staticPoints);
-  if (!config.auth || names.length === 0) return;
-  await run.mutate(`write static control points ${names.join(", ")} on ${branch}`, () => ports.migrator.applyStaticPoints(uri, staticPoints), undefined);
+  const what = names.length > 0 ? `access triggers and static control points ${names.join(", ")}` : "access triggers";
+  await run.mutate(`write ${what} on ${branch}`, () => ports.migrator.prepareAccess(uri, staticPoints), undefined);
 }
 
 // Resend chooses these records' names, so the comment is what ties each one to its app.

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { boolean, check, foreignKey, index, integer, jsonb, pgTable, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { boolean, check, foreignKey, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, unique, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 // Better Auth's tables, with its core and admin fields, transcribed from
 // getAuthTables() in the installed version; schema.test.ts fails when they drift apart.
@@ -400,6 +400,23 @@ export const accessPoint = pgTable(
   ],
 );
 
+// Each point's chain, stored: the point itself at depth 0 and, while each point inherits, its
+// parents above it. Kept by triggers on access_point that the platform installs after migrations,
+// so a check reads the chain with one index lookup instead of walking it.
+export const accessAncestor = pgTable(
+  "access_ancestor",
+  {
+    pointId: text("point_id")
+      .notNull()
+      .references(() => accessPoint.id, { onDelete: "cascade" }),
+    ancestorId: text("ancestor_id")
+      .notNull()
+      .references(() => accessPoint.id, { onDelete: "cascade" }),
+    depth: smallint("depth").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.pointId, t.ancestorId] }), index("access_ancestor_ancestor_idx").on(t.ancestorId)],
+);
+
 export const accessGrant = pgTable(
   "access_grant",
   {
@@ -427,6 +444,12 @@ export const accessGrant = pgTable(
     index("access_grant_team_idx").on(t.teamId),
     index("access_grant_organization_idx").on(t.organizationId),
     index("access_grant_email_idx").on(t.email),
+    // A check looks up each kind of grantee on each point of a chain.
+    index("access_grant_point_user_idx").on(t.pointId, t.userId).where(sql`${t.userId} is not null`),
+    index("access_grant_point_team_idx").on(t.pointId, t.teamId).where(sql`${t.teamId} is not null`),
+    index("access_grant_point_organization_idx").on(t.pointId, t.organizationId).where(sql`${t.organizationId} is not null`),
+    index("access_grant_point_email_idx").on(t.pointId, t.email).where(sql`${t.email} is not null`),
+    index("access_grant_point_everyone_idx").on(t.pointId).where(sql`${t.everyone}`),
   ],
 );
 
@@ -465,4 +488,4 @@ export const authSchema = {
 
 export const organizationSchema = { organization, member, team, teamMember, invitation };
 
-export const accessSchema = { accessPoint, accessGrant, accessLink };
+export const accessSchema = { accessPoint, accessAncestor, accessGrant, accessLink };

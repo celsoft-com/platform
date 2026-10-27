@@ -10,6 +10,7 @@ import { Client } from "pg";
 import type { Config } from "../config.js";
 import type { Migrator } from "../ports.js";
 import { applyStaticPoints as writeStaticPoints, type StaticPoint } from "../runtime/access.js";
+import { prepareAccess } from "../runtime/access-sql.js";
 
 export const APP_SCHEMA = "src/schema.ts";
 export const MIGRATIONS_DIR = "drizzle";
@@ -51,11 +52,13 @@ export class DrizzleMigrator implements Migrator {
     }
   }
 
-  async applyStaticPoints(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void> {
+  async prepareAccess(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void> {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
     try {
-      await writeStaticPoints(drizzle(client) as never, points);
+      const db = drizzle(client) as never;
+      await prepareAccess(db);
+      await writeStaticPoints(db, points);
     } finally {
       await client.end();
     }

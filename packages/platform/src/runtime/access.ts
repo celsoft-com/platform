@@ -196,44 +196,48 @@ function levelSql(point: SQL, who: Who): SQL {
 function uncappedLevelSql(point: SQL, who: Who): SQL {
   if (who.app) return sql`(select case when exists (select 1 from access_point where id = (${point})) then ${MANAGE} else 0 end)`;
   const userId = userParam(who.userId);
+  // The caller's principals are subqueries that never read the point, so Postgres works each out
+  // once per statement, however many rows a list filter checks.
+  const email = sql`(select case when _ac_u.email_verified then lower(_ac_u.email) end from "user" _ac_u where _ac_u.id = ${userId}::uuid)`;
+  const orgs = sql`array(select _ac_m.organization_id from member _ac_m where _ac_m.user_id = ${userId}::uuid)`;
+  const memberTeams = (admins: boolean) => sql`
+    from team_member _ac_tm
+    join team _ac_t on _ac_t.id = _ac_tm.team_id ${admins ? sql`and _ac_t.admins` : sql``}
+    join member _ac_m on _ac_m.organization_id = _ac_t.organization_id and _ac_m.user_id = _ac_tm.user_id
+    where _ac_tm.user_id = ${userId}::uuid`;
+  const teams = sql`array(select _ac_tm.team_id ${memberTeams(false)})`;
+  const adminOrgs = sql`array(select _ac_t.organization_id ${memberTeams(true)})`;
+  // A grant to an organization or a team counts only on points of that organization or of none.
+  const sameOrganization = (organization: SQL) => sql`(_ac_c.organization_id is null or _ac_c.organization_id = ${organization})`;
   // The point is read once, in a query with no tables of its own, so a column the app passes,
   // such as `p.id`, always means the app's row; every name inside starts with `_ac` for the same reason.
   return sql`(
-    with recursive _ac_target as (select (${point}) as id),
+    with _ac_target as (select (${point}) as id),
     _ac_chain as (
-      select _ac_p.id, _ac_p.parent_id, _ac_p.inherits, _ac_p.organization_id, 0 as depth
-      from access_point _ac_p where _ac_p.id = (select id from _ac_target)
-      union all
-      select _ac_q.id, _ac_q.parent_id, _ac_q.inherits, _ac_q.organization_id, _ac_c.depth + 1
-      from _ac_chain _ac_c join access_point _ac_q on _ac_q.id = _ac_c.parent_id
-      where _ac_c.inherits and _ac_c.depth < ${MAX_DEPTH - 1}
-    ),
-    _ac_me as (select _ac_u.id, case when _ac_u.email_verified then lower(_ac_u.email) end as email from "user" _ac_u where _ac_u.id = ${userId}::uuid),
-    _ac_orgs as (select _ac_m.organization_id from member _ac_m join _ac_me on _ac_m.user_id = _ac_me.id),
-    _ac_teams as (
-      select _ac_tm.team_id, _ac_t.admins, _ac_t.organization_id from team_member _ac_tm
-      join _ac_me on _ac_tm.user_id = _ac_me.id
-      join team _ac_t on _ac_t.id = _ac_tm.team_id
-      join _ac_orgs on _ac_orgs.organization_id = _ac_t.organization_id
+      select _ac_a.ancestor_id as id, _ac_a.depth, _ac_p.organization_id
+      from access_ancestor _ac_a join access_point _ac_p on _ac_p.id = _ac_a.ancestor_id
+      where _ac_a.point_id = (select id from _ac_target)
     ),
     _ac_matched as (
-      select _ac_c.depth, _ac_g.level,
-        case when _ac_g.user_id is not null or _ac_g.email is not null then 'person'
-             when _ac_g.team_id is not null then 'team ' || _ac_g.team_id
-             when _ac_g.organization_id is not null then 'organization ' || _ac_g.organization_id
-             else 'everyone' end as principal
-      from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id
-      where _ac_g.everyone
-         or _ac_g.user_id = (select id from _ac_me)
-         or _ac_g.email = (select email from _ac_me)
-         or (_ac_g.organization_id in (select organization_id from _ac_orgs) and (_ac_c.organization_id is null or _ac_c.organization_id = _ac_g.organization_id))
-         or exists (select 1 from _ac_teams _ac_x where _ac_x.team_id = _ac_g.team_id and (_ac_c.organization_id is null or _ac_c.organization_id = _ac_x.organization_id))
+      select _ac_c.depth, _ac_g.level, 'person' as principal from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.user_id = ${userId}::uuid
+      union all
+      select _ac_c.depth, _ac_g.level, 'person' from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.email = ${email}
+      union all
+      select _ac_c.depth, _ac_g.level, 'everyone' from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.everyone
+      union all
+      select _ac_c.depth, _ac_g.level, 'organization ' || _ac_g.organization_id from _ac_chain _ac_c
+      join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.organization_id = any(${orgs})
+      where ${sameOrganization(sql`_ac_g.organization_id`)}
+      union all
+      select _ac_c.depth, _ac_g.level, 'team ' || _ac_g.team_id from _ac_chain _ac_c
+      join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.team_id = any(${teams})
+      where ${sameOrganization(sql`(select _ac_x.organization_id from team _ac_x where _ac_x.id = _ac_g.team_id)`)}
     ),
     _ac_nearest as (select distinct on (principal) level from _ac_matched order by principal, depth, level desc),
     _ac_levels as (
       select level from _ac_nearest
       union all
-      select ${MANAGE} from _ac_chain _ac_c join _ac_teams _ac_x on _ac_x.admins and _ac_x.organization_id = _ac_c.organization_id where _ac_c.depth = 0
+      select ${MANAGE} from _ac_chain _ac_c where _ac_c.depth = 0 and _ac_c.organization_id = any(${adminOrgs})
       union all
       select _ac_l.level from access_link _ac_l
       where _ac_l.point_id = (select id from _ac_target) and ${who.linkHashes.length > 0 ? sql`_ac_l.token_hash in ${who.linkHashes}` : sql`false`} and (_ac_l.expires_at is null or _ac_l.expires_at > now())

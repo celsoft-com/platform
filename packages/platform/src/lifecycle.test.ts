@@ -149,17 +149,18 @@ describe("auth and email", () => {
     expect(ports.wrangler.deploys[2]!.config.placement).toBeUndefined();
   });
 
-  it("writes the app's static points after migrations, on prod and previews, and never without auth", async () => {
+  it("writes the access triggers and the app's static points after migrations, on prod and previews, and never without auth", async () => {
     const points = { about: { grants: [{ to: { everyone: true as const }, level: "read" as const }] } };
     await deploy({ ...authCtx(), staticPoints: points }, { kind: "prod" });
     expect(ports.migrator.points).toEqual([{ databaseUrl: ports.migrator.runs.at(-1), points }]);
-    expect(log.some((line) => line.includes("write static control points about"))).toBe(true);
+    expect(log.some((line) => line.includes("write access triggers and static control points about"))).toBe(true);
     await deploy({ ...authCtx(), staticPoints: points }, { kind: "preview", pr: 7 });
     expect(ports.migrator.points).toHaveLength(2);
     expect(ports.migrator.points[1]!.databaseUrl).toBe(ports.migrator.runs.at(-1));
     await deploy({ ...ctx(), staticPoints: points }, { kind: "prod" });
-    await deploy({ ...authCtx(), staticPoints: {} }, { kind: "prod" });
     expect(ports.migrator.points).toHaveLength(2);
+    await deploy({ ...authCtx(), staticPoints: {} }, { kind: "prod" });
+    expect(ports.migrator.points.at(-1)!.points).toEqual({});
   });
 
   it("routes each path the app's pages claim, and everything below it, to the Worker before static files", async () => {
