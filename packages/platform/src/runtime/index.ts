@@ -11,6 +11,7 @@ import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH,
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
+import { pageServer, type Page } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
 
@@ -19,6 +20,7 @@ export type { Invitation, Member, Organization, Organizations, Team } from "./or
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
 export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
+export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
 export type { Live } from "./live.js";
@@ -83,6 +85,8 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   schema?: Schema;
   // Typed functions served over the API, MCP or both; see `endpoint`.
   endpoints?: Record<string, Endpoint<any, any, AppContext<Env, Schema>>>;
+  // Paths the Worker renders on each request; see `page`.
+  pages?: Page[];
   screens?: { stylesheet?: string };
   live?: LiveOptions<Env, Schema>;
   // Control points declared in code, applied at every start; see StaticPoint.
@@ -120,17 +124,20 @@ export function defineApp<
   const handle = handler ?? (notFound as Handler<Env, Schema>);
   const api = apiHandler(options.endpoints ?? {});
   const once: Once = {};
-  const undeclared = undeclaredAccess(options.endpoints ?? {});
+  const pages = pageServer(options.pages ?? []);
+  const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
 
   return {
     // Read by the package to generate the browser client's routes; the app's own types come from here.
     endpoints: (options.endpoints ?? {}) as E,
+    // Read by the deploy, which routes these paths to the Worker before static files.
+    pages: pages?.claims ?? [],
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const url = new URL(request.url);
       // With access on, every endpoint says what it checks, so a forgotten check never ships open.
       if (env.ACCESS === "on" && undeclared.length > 0) {
-        console.error(`endpoints ${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
+        console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
         return json({ error: "this app is misconfigured; see its logs" }, 500);
       }
       const { app, close } = createContext(request, env, ctx, options, once);
@@ -158,6 +165,8 @@ export function defineApp<
           const platform = await platformRoute(request, url, env, current, options);
           if (platform) return platform;
         }
+        const page = await pages?.handle(request, url, current, env.BETTER_AUTH_SECRET ? () => signInRedirect(url) : undefined);
+        if (page) return page;
         const answered = await api?.handle(request, current);
         if (answered) return answered;
         return await handle(request, current);
@@ -273,7 +282,12 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     async requireUser() {
       const current = await app.session();
-      if (!current) throw json({ error: "sign in first" }, 401);
+      if (!current) {
+        // A page sends the visitor to sign in and come back; the API answers 401.
+        const url = new URL(request.url);
+        if (env.BETTER_AUTH_SECRET && !url.pathname.startsWith("/api/") && url.pathname !== MCP_PATH && READ_METHODS.includes(request.method)) throw signInRedirect(url);
+        throw json({ error: "sign in first" }, 401);
+      }
       return current.user;
     },
     waitUntil: (promise) => ctx.waitUntil(promise),
@@ -289,6 +303,8 @@ async function sessionAs<Env, Schema extends Record<string, unknown>>(app: AppCo
 }
 
 const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
+
+const signInRedirect = (url: URL) => new Response(null, { status: 302, headers: { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" } });
 const TOKEN_ROUTES = ["create", "list", "delete", "get"];
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

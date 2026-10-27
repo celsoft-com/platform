@@ -138,6 +138,14 @@ describe("auth and email", () => {
   const authConfig: Config = { ...config, auth: { organizations: false, apiTokens: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
 
+  it("routes each path the app's pages claim, and everything below it, to the Worker before static files", async () => {
+    await deploy({ ...ctx(), pages: ["/notes", "/docs/guide"] }, { kind: "prod" });
+    const routed = (ports.wrangler.deploys[0]!.config.assets as { run_worker_first: string[] }).run_worker_first;
+    expect(routed).toEqual(expect.arrayContaining(["/notes", "/notes/*", "/docs/guide", "/docs/guide/*"]));
+    await deploy(ctx(), { kind: "prod" });
+    expect((ports.wrangler.deploys[1]!.config.assets as { run_worker_first: string[] }).run_worker_first).toEqual(["/api/*"]);
+  });
+
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
     await deploy(authCtx(), { kind: "prod" });
 

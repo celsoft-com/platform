@@ -87,9 +87,10 @@ flowchart LR
 2. **Served free:** files come straight from Cloudflare's asset store and never run the Worker.
 3. **Single-page apps:** a path with no matching file gets `index.html`, so client-side routing works.
 4. **Build:** when `package.json` has a `build` script, every deploy runs it first; a failed build stops the deploy.
-5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro.
+5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
-7. **Worker first:** `/api/*` and the sign-in screens always go to the Worker, even if a file has the same path.
+7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
+8. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file.
 
 ### Sign-in screens
 

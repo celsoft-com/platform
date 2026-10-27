@@ -37,6 +37,7 @@ async function renderNav() {
     item("Shared with me", "#/shared"),
     item("Organizations", "#/orgs"),
     item(count ? `Invitations (${count})` : "Invitations", "#/invitations"),
+    el("a", { href: "/print", textContent: "Print" }),
     el("a", { href: "/tokens", textContent: "API tokens" }),
     el("span", { className: "spacer" }),
     item(session.user.name, "#/settings"),

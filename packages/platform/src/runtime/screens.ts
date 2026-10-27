@@ -123,7 +123,8 @@ body.platform-screen{margin:0;min-height:100vh;display:grid;place-items:center;p
 const SCRIPT = `
 const page = document.body.dataset.page;
 const params = new URLSearchParams(location.search);
-const next = (p => p && p.startsWith("/") && !p.startsWith("//") ? p : "/")(params.get("next"));
+// Only a path on this site, as the browser itself reads it, so "//x", "/\\x" and the like stay here.
+const next = (p => { try { const u = new URL(p, location.origin); return p[0] === "/" && u.origin === location.origin ? u.pathname + u.search + u.hash : "/"; } catch { return "/"; } })(params.get("next") || "/");
 // An AI client signing in through OAuth arrives with a signed query; it rides along on sign-in,
 // sign-up and consent, and the answer says where to go next. Kept to the signed parameters only.
 const oauthQuery = (() => {

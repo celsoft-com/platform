@@ -73,7 +73,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command.name === "generate") {
-    for (const file of await generate(appDir)) console.log(`✓ ${file}`);
+    for (const file of (await generate(appDir)).files) console.log(`✓ ${file}`);
     return;
   }
 
@@ -103,9 +103,9 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
   // The app's code imports these, so they are fresh for every run that builds or serves it.
-  if (command.name === "dev" || command.name === "deploy" || command.name === "preview") await generate(appDir);
+  const pages = command.name === "dev" || command.name === "deploy" || command.name === "preview" ? (await generate(appDir)).pages : [];
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
-  const ctx = await context(appDir, app.config, dryRun);
+  const ctx = { ...(await context(appDir, app.config, dryRun)), pages };
   if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
 
   if (command.name === "cleanup") {

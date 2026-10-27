@@ -136,7 +136,7 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **App name**: unique within the Cloudflare account; every resource name derives from it, as Resource Identity describes.
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Worker**: the path to the Worker's entry module.
-    4. **Frontend**: the directory holding the built static files, if any; when `package.json` has a `build` script, every deploy runs it first, and a failed build stops the deploy with the running version left in place. Output is static: pages search engines must read without JavaScript are rendered at build time by the app's own tool, such as SvelteKit's static adapter or Astro, and nothing renders on the server, since the platform owns the Worker.
+    4. **Frontend**: the directory holding the built static files, if any; when `package.json` has a `build` script, every deploy runs it first, and a failed build stops the deploy with the running version left in place. Output is static: pages search engines must read without JavaScript are rendered at build time by the app's own tool, such as SvelteKit's static adapter or Astro; anything rendered per request is a server page in the platform's Worker (section 13, item 14).
     5. **Database**: the app's Neon project id; its tables are found in `src/schema.ts` by convention.
     6. **Auth**: on or off, and whether organizations are on; either can change at any time.
     7. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
@@ -276,7 +276,7 @@ A published CLI, runtime library and app template that create and reuse each app
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.
     2. **Data**: tables in `src/schema.ts`, reviewed migrations, and every query.
-    3. **Pages**: the frontend, and any styling of the auth screens.
+    3. **Pages**: the frontend, any server pages, and any styling of the auth screens.
     4. **Content**: what its own emails say and how its files are organized.
 8. **Access**: who may do what to an app's resources, through control points, kept in the app's Postgres database and reached through `app.access`, behind `"access": true` in `platform.jsonc`, which needs auth; its tables exist whenever auth is on.
     1. **Control points**: a control point gates one resource, such as one note, and is where access is checked and where a permissions page appears.
@@ -331,6 +331,21 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Tokens**: JWTs bound to the app's `/mcp`, checked against signing keys read from the app's own database, since a Worker cannot fetch its own hostname.
     4. **Screens**: AI clients sign in through the built-in `/login`, which carries the OAuth request through, then approve on a built-in `/consent` screen.
     5. **Tables**: the JWT and MCP plugins' tables are installed for every app with auth, so turning MCP on never needs a migration.
+
+14. **Server pages**: pages the Worker renders on each request, for share previews, pages search engines must read with per-request content, and pages that need the session or the database.
+    1. **Claiming a path**: the app claims a path such as `/notes`, and the Worker answers it and everything below it, such as `/notes/7/edit`, with no static file ever served under it and no `*` to write; every path not claimed is still served from the static files.
+    2. **Claimable**: plain segments, never the root, a parameter or a trailing slash, never under a path the platform answers itself, such as `/api`, `/mcp`, `/.well-known` or the sign-in and tokens screens, and never the same as or nested in another claim.
+    3. **Pages in code**: `defineApp`'s `pages` declares each with `page({ path, routes })`, such as `routes: { "/": ..., "/:id": ..., "/:id/edit": ... }`, where `"/"` is the claimed path itself; text segments win over parameters, so `/new` beats `/:id`, and a path under the claim that no route matches is a 404.
+    4. **Deploy**: the platform reads the claims from the Worker's code, as it reads the endpoints for the browser client, and routes each claim and everything below it to the Worker before static files.
+    5. **Parameters**: a route is a function getting its `:name` segments decoded as strings, or `route({ params, access }, handler)`, whose Zod `params` checks and converts them as an endpoint's input does; a value it refuses is a 404.
+    6. **Rendering**: a handler returns HTML as a string, sent uncached as `text/html`, or a whole `Response` such as a redirect; it renders with any library the app likes, with `app.db`, `app.session()` and `app.access` available.
+    7. **Methods**: pages answer GET and HEAD only; changes go through endpoints.
+    8. **Assets**: a claimed page links its CSS, scripts and images from unclaimed paths such as `/assets/`, as the auth screens do with an app stylesheet.
+    9. **Errors**: a thrown `EndpointError` is a small HTML page with its status and escaped message.
+    10. **Signed-out visitors**: `requireUser()` outside `/api/` redirects to `/login?next=<the page>`, and `/login` returns there after signing in, only ever to a path on the same site.
+    11. **Access**: with access on, every route declares `access: { point, level }`, the point a parameter or a function of the parameters, or `access: "none"`, as endpoints do; a refused signed-in caller gets a 404, and a refused signed-out visitor is sent to sign in, whether or not the point exists.
+    12. **Tokens and links**: API tokens are accepted only on `/api/`, never on pages; a link's token rides in a header pages never receive, so a link opens a note in the app, not a page.
+    13. **No framework server builds**: framework apps use their static or build-time output, and anything rendered per request is a server page in the platform's Worker.
 
 ## 14. Upgrades
 
