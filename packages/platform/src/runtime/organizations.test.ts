@@ -145,6 +145,35 @@ describe("Organizations", () => {
     expect(await w.orgs(person).accept(id)).toBe(c.org);
   });
 
+  it("O18: people see the invitations sent to their confirmed address, and can decline them", async () => {
+    const c = await company();
+    const team = await w.team(c.org, c.admin);
+    const address = `${uid()}@example.com`;
+    const person = await w.user({ email: address.toUpperCase() });
+    const unconfirmed = await w.user({ email: `${uid()}@example.com`, verified: false });
+    const { id } = await w.orgs(c.admin).invite(c.org, address, { team });
+    await w.orgs(c.admin).invite(c.org, (await w.query(`select email from "user" where id = $1`, [unconfirmed])).rows[0].email);
+    expect(await w.orgs(person).myInvitations()).toEqual([{ id, organizationId: c.org, organization: "Org", teamId: team, team: "Team", invitedBy: "Test", expiresAt: expect.any(Date) }]);
+    expect(await w.orgs(unconfirmed).myInvitations()).toEqual([]);
+    expect(await w.orgs(c.outsider).myInvitations()).toEqual([]);
+    await refused(w.orgs(c.outsider).decline(id));
+    await refused(w.orgs(null).myInvitations(), 401);
+    await w.orgs(person).decline(id);
+    expect(await w.orgs(person).myInvitations()).toEqual([]);
+    await refused(w.orgs(person).accept(id));
+  });
+
+  it("O19: one team, for those who can read its point", async () => {
+    const c = await company();
+    const team = await w.team(c.org, c.admin);
+    expect(await w.orgs(c.admin).team(team)).toEqual({ id: team, name: "Team", admins: false, organizationId: c.org });
+    await refused(w.orgs(c.member).team(team));
+    await refused(w.orgs(c.outsider).team(team));
+    await w.join(team, c.member);
+    expect((await w.orgs(c.member).team(team)).id).toBe(team);
+    await refused(w.orgs(c.member).team(uid()));
+  });
+
   it("O7: an invitation into a team adds the person to that team", async () => {
     const c = await company();
     const team = await w.team(c.org, c.admin);
@@ -302,7 +331,10 @@ describe("Organization routes", () => {
     const person = await w.user({ email: address });
     const invited = await call(c.admin, "POST", `/api/platform/organizations/${c.org}/invitations`, { email: address });
     expect(invited.status).toBe(201);
+    expect((await call(person, "GET", "/api/platform/invitations")).body.map((i: { id: string }) => i.id)).toEqual([invited.body.id]);
     expect(await call(person, "POST", `/api/platform/invitations/${invited.body.id}/accept`, {})).toEqual({ status: 200, body: { organizationId: c.org } });
+    const again = await call(c.admin, "POST", `/api/platform/organizations/${c.org}/invitations`, { email: "someone@example.com" });
+    expect((await call(person, "DELETE", `/api/platform/invitations/${again.body.id}`)).status).toBe(404);
     expect((await call(c.admin, "GET", `/api/platform/organizations/${c.org}/members`)).body).toHaveLength(3);
   });
 

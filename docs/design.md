@@ -264,7 +264,7 @@ A published CLI, runtime library and app template that create and reuse each app
         5. **Owner columns**: `...owner()` from `@celsoft/platform/schema` adds `userId` and an optional `organizationId`, each referencing the platform's tables and deleted with them, for the app's own queries.
         6. **Calls**: `app.organizations` creates, lists, renames and deletes organizations, invites and removes members, and creates teams and changes their members; browsers reach the same under `/api/platform/`, answered by the platform before the app.
         7. **Who may**: each call checks the organization's or the team's point: reading needs `read`, renaming `write`, deleting `delete`, creating teams `create`, and inviting, removing others and changing a team's members `manage`; anyone may leave, except the last admin.
-        8. **Invitations**: emailed with a link to `/login?invitation=<id>` and accepted by whoever signs in with that confirmed address, so the id is no secret; an invitation can also name a team.
+        8. **Invitations**: emailed with a link to `/login?invitation=<id>` and accepted by whoever signs in with that confirmed address, so the id is no secret; an invitation can also name a team. People see the invitations sent to their confirmed address and may accept or decline them.
     9. **Access**: who may do what to an app's resources, through control points in `app.access`; see App Code, Access.
 7. **App writes**:
     1. **API**: routes, request handling and validation, with public routes under `/api/public/`.

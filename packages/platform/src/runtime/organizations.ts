@@ -37,6 +37,17 @@ export interface Invitation {
   expiresAt: Date;
 }
 
+// An invitation as the person it was sent to sees it.
+export interface MyInvitation {
+  id: string;
+  organizationId: string;
+  organization: string;
+  teamId: string | null;
+  team: string | null;
+  invitedBy: string | null;
+  expiresAt: Date;
+}
+
 export interface InvitationNotice {
   to: string;
   organization: string;
@@ -62,7 +73,13 @@ export interface Organizations {
   // Joins the organization the invitation is for, when the signed-in user's confirmed email is
   // the one it was sent to; returns the organization's id.
   accept(invitationId: string): Promise<string>;
+  // Invitations to the signed-in user's confirmed email that have not expired.
+  myInvitations(): Promise<MyInvitation[]>;
+  // Turns down an invitation sent to the signed-in user's confirmed email.
+  decline(invitationId: string): Promise<void>;
   teams(id: string): Promise<Team[]>;
+  // One team, for those who can read its point.
+  team(teamId: string): Promise<Team & { organizationId: string }>;
   createTeam(id: string, name: string): Promise<Team>;
   renameTeam(teamId: string, name: string): Promise<void>;
   removeTeam(teamId: string): Promise<void>;
@@ -280,6 +297,36 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
       });
     },
 
+    async myInvitations() {
+      const userId = await me();
+      const found = await rows<{ id: string; organization_id: string; organization: string; team_id: string | null; team: string | null; invited_by: string | null; expires_at: Date }>(
+        db,
+        sql`select i.id, i.organization_id, o.name as organization, i.team_id, t.name as team, inviter.name as invited_by, i.expires_at
+            from invitation i join "user" u on u.id = ${userId}::uuid and u.email_verified and lower(u.email) = i.email
+            join organization o on o.id = i.organization_id
+            left join team t on t.id = i.team_id
+            left join "user" inviter on inviter.id = i.inviter_id
+            where i.expires_at > now() order by i.created_at, i.id`,
+      );
+      return found.map((r) => ({ id: r.id, organizationId: r.organization_id, organization: r.organization, teamId: r.team_id, team: r.team, invitedBy: r.invited_by, expiresAt: new Date(r.expires_at) }));
+    },
+
+    async decline(invitationId) {
+      const userId = await me();
+      const [row] = await rows(
+        db,
+        sql`delete from invitation i using "user" u where i.id = ${uuid(invitationId)}::uuid and u.id = ${userId}::uuid and u.email_verified and lower(u.email) = i.email returning i.id`,
+      );
+      if (!row) throw notFound();
+    },
+
+    async team(teamId) {
+      await access.check(teamPoint(uuid(teamId)));
+      const [found] = await rows<Team & { organization_id: string }>(db, sql`select id, name, admins, organization_id from team where id = ${uuid(teamId)}::uuid`);
+      if (!found) throw notFound();
+      return { id: found.id, name: found.name, admins: found.admins, organizationId: found.organization_id };
+    },
+
     async teams(id) {
       await access.check(organizationPoint(uuid(id)));
       return rows<Team>(db, sql`select id, name, admins from team where organization_id = ${uuid(id)}::uuid order by admins desc, name, id`);
@@ -350,9 +397,12 @@ const ROUTES: Route[] = [
   ["GET", /^organizations\/([^/]+)\/invitations$/, (o, [id]) => o.invitations(id!)],
   ["POST", /^organizations\/([^/]+)\/invitations$/, (o, [id], b) => o.invite(id!, b.email as string, { team: b.team as string | undefined })],
   ["DELETE", /^organizations\/([^/]+)\/invitations\/([^/]+)$/, (o, [id, inv]) => o.revokeInvitation(id!, inv!)],
+  ["GET", /^invitations$/, (o) => o.myInvitations()],
   ["POST", /^invitations\/([^/]+)\/accept$/, async (o, [inv]) => ({ organizationId: await o.accept(inv!) })],
+  ["DELETE", /^invitations\/([^/]+)$/, (o, [inv]) => o.decline(inv!)],
   ["GET", /^organizations\/([^/]+)\/teams$/, (o, [id]) => o.teams(id!)],
   ["POST", /^organizations\/([^/]+)\/teams$/, (o, [id], b) => o.createTeam(id!, b.name as string)],
+  ["GET", /^teams\/([^/]+)$/, (o, [team]) => o.team(team!)],
   ["PATCH", /^teams\/([^/]+)$/, (o, [team], b) => o.renameTeam(team!, b.name as string)],
   ["DELETE", /^teams\/([^/]+)$/, (o, [team]) => o.removeTeam(team!)],
   ["GET", /^teams\/([^/]+)\/members$/, (o, [team]) => o.teamMembers(team!)],

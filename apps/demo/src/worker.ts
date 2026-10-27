@@ -6,7 +6,7 @@ import * as schema from "./schema";
 
 const { notes } = schema;
 const MAX_ATTACHMENT = 10 * 1024 * 1024;
-const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt };
+const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt, organizationId: notes.organizationId, teamId: notes.teamId };
 const groupColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
 const ROOM = /^(organization|team):[0-9a-f-]{36}$/;
 
@@ -18,7 +18,7 @@ type App = AppContext<PlatformBindings, typeof schema>;
 // Each note's permissions panel shows and changes its grants, links and inheritance.
 
 // A note as anyone who can open it sees it, with the level they have on it.
-const SharedNote = z.object({ id: z.uuid(), body: z.string(), attachmentName: z.string().nullable(), createdAt: z.date(), author: z.string(), level: z.string() });
+const SharedNote = z.object({ id: z.uuid(), body: z.string(), attachmentName: z.string().nullable(), createdAt: z.date(), organizationId: z.uuid().nullable(), teamId: z.uuid().nullable(), author: z.string(), level: z.string() });
 const NoteId = z.object({ id: z.uuid() });
 const GroupNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
 const Org = z.object({ id: z.uuid(), name: z.string() });
@@ -228,7 +228,7 @@ export default defineApp(
       grantNote: endpoint(
         { method: "POST", path: "/api/notes/:id/grants", input: NoteId.extend({ to: To, level: Level }), output: z.object({}), access: { point: "id", level: "manage" } },
         async ({ id, to, level }, app) => {
-          await app.access.grant(id, grantee(to), level, { email: { path: `/#note=${id}` } });
+          await app.access.grant(id, grantee(to), level, { email: { path: `/#/notes/${id}` } });
           return {};
         },
       ),
@@ -255,7 +255,7 @@ export default defineApp(
           access: { point: "id", level: "manage" },
         },
         async ({ id, email, level }, app) => {
-          await app.access.grant(id, { email }, level, { email: { path: `/#note=${id}` } });
+          await app.access.grant(id, { email }, level, { email: { path: `/#/notes/${id}` } });
           return {};
         },
       ),
@@ -269,7 +269,7 @@ export default defineApp(
         },
         async ({ id, level }, app) => {
           const { token } = await app.access.link(id, level);
-          return { path: `/#note=${id}&link=${token}` };
+          return { path: `/#/notes/${id}&link=${token}` };
         },
       ),
       revokeLink: endpoint(

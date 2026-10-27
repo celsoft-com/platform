@@ -89,8 +89,8 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 
 With `"auth": { "organizations": true }`, the platform keeps organizations, teams, members and invitations itself, with no roles:
 
-1. **In code:** `app.organizations` has `create`, `list`, `get`, `rename`, `remove`, `requireMember`, `members`, `removeMember`, `invite`, `invitations`, `revokeInvitation`, `accept`, `teams`, `createTeam`, `renameTeam`, `removeTeam`, `teamMembers`, `addToTeam` and `removeFromTeam`.
-2. **From browsers:** the same under `/api/platform/`: `organizations`, `organizations/:id`, `organizations/:id/members`, `organizations/:id/invitations`, `invitations/:id/accept`, `organizations/:id/teams`, `teams/:id` and `teams/:id/members`.
+1. **In code:** `app.organizations` has `create`, `list`, `get`, `rename`, `remove`, `requireMember`, `members`, `removeMember`, `invite`, `invitations`, `revokeInvitation`, `accept`, `myInvitations`, `decline`, `teams`, `team`, `createTeam`, `renameTeam`, `removeTeam`, `teamMembers`, `addToTeam` and `removeFromTeam`.
+2. **From browsers:** the same under `/api/platform/`: `organizations`, `organizations/:id`, `organizations/:id/members`, `organizations/:id/invitations`, `invitations` (the caller's own), `invitations/:id/accept`, `invitations/:id` (decline), `organizations/:id/teams`, `teams/:id` and `teams/:id/members`.
 3. **Who may:** reading needs `read` on the organization's point, renaming `write`, deleting `delete`, inviting and removing others `manage`, creating teams `create`; a team's members need `manage` on its point. Anyone may leave, except the last admin.
 4. **Admins:** the creator is the first member of the Admins team; add others with `addToTeam(adminsTeamId, userId)`.
 5. **Invitations:** emailed with a link to `/login?invitation=<id>`, accepted by whoever signs in with that confirmed address; an invitation can name a team.

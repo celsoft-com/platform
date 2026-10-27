@@ -181,6 +181,8 @@ checked against a plain reference version of these rules, in `access.model.test.
 | O15 | Ids that are not UUIDs | 404, never a server error |
 | O16 | Organization deleted | Its teams, members, invitations and points go |
 | O17 | Routes under `/api/platform/` | Same rules; 401 signed out; bad JSON 400; unknown paths and bad encodings 404 |
+| O18 | A person's own invitations | Those sent to their confirmed address, unexpired; they may decline them; others' are 404 |
+| O19 | One team | For those who can read its point; 404 otherwise |
 
 ## Endpoints, lists and wiring
 
