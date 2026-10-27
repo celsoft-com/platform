@@ -18,7 +18,7 @@ function counted(user: string, memo = new Map<string, number>()) {
     client: {
       query: (...args: unknown[]) => {
         const text = typeof args[0] === "string" ? args[0] : ((args[0] as { text?: string })?.text ?? "");
-        if (text.includes("_ac_target")) queries++;
+        if (text.includes("platform_access_level")) queries++;
         return (pool.query as (...a: unknown[]) => unknown)(...args);
       },
       connect: () => pool.connect(),

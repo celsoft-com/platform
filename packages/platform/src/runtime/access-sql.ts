@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { MAX_DEPTH } from "./access.js";
+import { MANAGE, MAX_DEPTH } from "./access.js";
 
 // The platform's own SQL beside its tables: the triggers that keep each point's stored chain in
 // access_ancestor. Drizzle's migrations create tables, not triggers, so every deploy, `dev` and the
@@ -44,6 +44,50 @@ const STATEMENTS = [
         end if;
       end if;
       return null;
+    end $$`),
+  // A caller's level on a point, 0 for none, given their principals: the person's id and confirmed
+  // email, the organizations they belong to, their teams in those organizations, the organizations
+  // whose Admins they are in, and the link tokens' hashes they carry. Each principal stops at its
+  // nearest grant on the point's chain and the highest wins; organization and team grants count
+  // only on points of their own organization or of none; Admins get manage; a link counts only on
+  // its own point. In PL/pgSQL, so each database connection plans the query once and reuses it.
+  sql.raw(`
+    create or replace function platform_access_level(
+      target text, me uuid, my_email text, my_orgs uuid[], my_teams uuid[], admin_orgs uuid[], link_hashes text[]
+    ) returns int stable parallel safe language plpgsql as $$
+    declare result int;
+    begin
+      with chain as (
+        select a.ancestor_id as id, a.depth, p.organization_id
+        from access_ancestor a join access_point p on p.id = a.ancestor_id
+        where a.point_id = target
+      ),
+      matched as (
+        select c.depth, g.level, 'person' as principal from chain c join access_grant g on g.point_id = c.id and g.user_id = me
+        union all
+        select c.depth, g.level, 'person' from chain c join access_grant g on g.point_id = c.id and g.email = my_email
+        union all
+        select c.depth, g.level, 'everyone' from chain c join access_grant g on g.point_id = c.id and g.everyone
+        union all
+        select c.depth, g.level, 'organization ' || g.organization_id from chain c
+        join access_grant g on g.point_id = c.id and g.organization_id = any(my_orgs)
+        where c.organization_id is null or c.organization_id = g.organization_id
+        union all
+        select c.depth, g.level, 'team ' || g.team_id from chain c
+        join access_grant g on g.point_id = c.id and g.team_id = any(my_teams)
+        where c.organization_id is null or c.organization_id = (select t.organization_id from team t where t.id = g.team_id)
+      ),
+      nearest as (select distinct on (principal) level from matched order by principal, depth, level desc),
+      levels as (
+        select level from nearest
+        union all
+        select ${MANAGE} from chain c where c.depth = 0 and c.organization_id = any(admin_orgs)
+        union all
+        select l.level from access_link l
+        where l.point_id = target and l.token_hash = any(link_hashes) and (l.expires_at is null or l.expires_at > now())
+      )
+      select coalesce(max(level), 0) into result from levels;
+      return result;
     end $$`),
   sql.raw(`
     create or replace trigger platform_access_point_changed after insert or update of parent_id, inherits on access_point

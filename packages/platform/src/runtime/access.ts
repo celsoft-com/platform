@@ -114,7 +114,7 @@ export const organizationPoint = (organizationId: string) => `organization:${org
 export const teamPoint = (teamId: string) => `team:${teamId}`;
 
 const RESERVED = /^(organization|team):/;
-const [READ, CREATE, WRITE, DELETE, MANAGE] = [1, 2, 3, 4, 5];
+export const [READ, CREATE, WRITE, DELETE, MANAGE] = [1, 2, 3, 4, 5];
 
 type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute" | "transaction">;
 
@@ -182,12 +182,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A user id that is not a UUID can match nobody, so it is treated as no user at all.
 const userParam = (userId: string | null) => (userId && UUID.test(userId) ? userId : null);
 
-// The caller's level on one point, 0 for none, as a scalar subquery. The chain is the point and,
-// while each point inherits, its parents. Each of the caller's principals (the person, by user id
-// or confirmed email, each team, each organization, and Everyone) stops at its nearest grant on
-// the chain, and the highest of those wins; organization and team grants count only on points of
-// their own organization or none. The organization's Admins get `manage`, and a link counts only
-// on the point it was made for.
+// The caller's level on one point, 0 for none, as an expression any query can use: a call of
+// platform_access_level, which access-sql.ts installs and which holds the rules.
 function levelSql(point: SQL, who: Who): SQL {
   const level = uncappedLevelSql(point, who);
   return who.cap === null ? level : sql`least(${level}, ${who.cap})`;
@@ -196,53 +192,25 @@ function levelSql(point: SQL, who: Who): SQL {
 function uncappedLevelSql(point: SQL, who: Who): SQL {
   if (who.app) return sql`(select case when exists (select 1 from access_point where id = (${point})) then ${MANAGE} else 0 end)`;
   const userId = userParam(who.userId);
+  if (!userId && who.linkHashes.length === 0) {
+    // Signed out with no link: only Everyone's grants can count, so no principal is looked up.
+    return sql`platform_access_level((${point})::text, null, null, '{}', '{}', '{}', '{}')`;
+  }
   // The caller's principals are subqueries that never read the point, so Postgres works each out
-  // once per statement, however many rows a list filter checks.
-  const email = sql`(select case when _ac_u.email_verified then lower(_ac_u.email) end from "user" _ac_u where _ac_u.id = ${userId}::uuid)`;
-  const orgs = sql`array(select _ac_m.organization_id from member _ac_m where _ac_m.user_id = ${userId}::uuid)`;
+  // once per statement, however many rows a list filter checks; platform_access_level does the rest.
   const memberTeams = (admins: boolean) => sql`
     from team_member _ac_tm
     join team _ac_t on _ac_t.id = _ac_tm.team_id ${admins ? sql`and _ac_t.admins` : sql``}
     join member _ac_m on _ac_m.organization_id = _ac_t.organization_id and _ac_m.user_id = _ac_tm.user_id
     where _ac_tm.user_id = ${userId}::uuid`;
-  const teams = sql`array(select _ac_tm.team_id ${memberTeams(false)})`;
-  const adminOrgs = sql`array(select _ac_t.organization_id ${memberTeams(true)})`;
-  // A grant to an organization or a team counts only on points of that organization or of none.
-  const sameOrganization = (organization: SQL) => sql`(_ac_c.organization_id is null or _ac_c.organization_id = ${organization})`;
-  // The point is read once, in a query with no tables of its own, so a column the app passes,
-  // such as `p.id`, always means the app's row; every name inside starts with `_ac` for the same reason.
-  return sql`(
-    with _ac_target as (select (${point}) as id),
-    _ac_chain as (
-      select _ac_a.ancestor_id as id, _ac_a.depth, _ac_p.organization_id
-      from access_ancestor _ac_a join access_point _ac_p on _ac_p.id = _ac_a.ancestor_id
-      where _ac_a.point_id = (select id from _ac_target)
-    ),
-    _ac_matched as (
-      select _ac_c.depth, _ac_g.level, 'person' as principal from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.user_id = ${userId}::uuid
-      union all
-      select _ac_c.depth, _ac_g.level, 'person' from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.email = ${email}
-      union all
-      select _ac_c.depth, _ac_g.level, 'everyone' from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.everyone
-      union all
-      select _ac_c.depth, _ac_g.level, 'organization ' || _ac_g.organization_id from _ac_chain _ac_c
-      join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.organization_id = any(${orgs})
-      where ${sameOrganization(sql`_ac_g.organization_id`)}
-      union all
-      select _ac_c.depth, _ac_g.level, 'team ' || _ac_g.team_id from _ac_chain _ac_c
-      join access_grant _ac_g on _ac_g.point_id = _ac_c.id and _ac_g.team_id = any(${teams})
-      where ${sameOrganization(sql`(select _ac_x.organization_id from team _ac_x where _ac_x.id = _ac_g.team_id)`)}
-    ),
-    _ac_nearest as (select distinct on (principal) level from _ac_matched order by principal, depth, level desc),
-    _ac_levels as (
-      select level from _ac_nearest
-      union all
-      select ${MANAGE} from _ac_chain _ac_c where _ac_c.depth = 0 and _ac_c.organization_id = any(${adminOrgs})
-      union all
-      select _ac_l.level from access_link _ac_l
-      where _ac_l.point_id = (select id from _ac_target) and ${who.linkHashes.length > 0 ? sql`_ac_l.token_hash in ${who.linkHashes}` : sql`false`} and (_ac_l.expires_at is null or _ac_l.expires_at > now())
-    )
-    select coalesce(max(level), 0) from _ac_levels
+  return sql`platform_access_level(
+    (${point})::text,
+    ${userId}::uuid,
+    (select case when _ac_u.email_verified then lower(_ac_u.email) end from "user" _ac_u where _ac_u.id = ${userId}::uuid),
+    array(select _ac_m.organization_id from member _ac_m where _ac_m.user_id = ${userId}::uuid),
+    array(select _ac_tm.team_id ${memberTeams(false)}),
+    array(select _ac_t.organization_id ${memberTeams(true)}),
+    ${`{${who.linkHashes.join(",")}}`}::text[]
   )`;
 }
 
