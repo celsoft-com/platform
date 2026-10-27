@@ -42,6 +42,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | P10 | Chain would be deeper than 64 | 409 |
 | P11 | The app acting as itself creates | No creator grant; the app passes every check |
 | P12 | Ids with quotes, `%`, `_`, other scripts | Taken literally; never match another point |
+| P13 | Reading a point's own settings | Parent, inheritance, static and organization, for those with `read`; 404 otherwise |
 
 ## Static points
 

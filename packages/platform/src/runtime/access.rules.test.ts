@@ -210,6 +210,13 @@ describe("Points", () => {
     expect(await w.as(someone).asApp().level(id)).toBe("manage");
   });
 
+  it("P13: a point's own settings are shown to those who can read it", async () => {
+    const c = await company();
+    expect(await w.as(c.teammate).point(c.page)).toEqual({ id: c.page, parent: c.folder, inherits: true, static: false, organizationId: c.org });
+    await refused(w.as(c.outsider).point(c.page));
+    await refused(w.as(c.outsider).point(`page-${uid()}`));
+  });
+
   it("P12: ids with quotes, wildcards and other scripts are taken literally", async () => {
     const owner = w.as(await w.user());
     const stranger = w.as(await w.user());

@@ -54,7 +54,17 @@ export interface StaticPoint {
   grants?: { to: Grantee; level: Level }[];
 }
 
+export interface PointInfo {
+  id: string;
+  parent: string | null;
+  inherits: boolean;
+  static: boolean;
+  organizationId: string | null;
+}
+
 export interface Access {
+  // A point's own settings, for callers with `read`; a 404 otherwise.
+  point(point: string): Promise<PointInfo>;
   // The caller's level on a point, or null for none; a point that does not exist is also null.
   level(point: string): Promise<Level | null>;
   can(point: string, level: Level): Promise<boolean>;
@@ -264,11 +274,12 @@ interface PointRow {
   organization_id: string | null;
   for_organization: string | null;
   for_team: string | null;
+  inherits: boolean;
   static: boolean;
 }
 
 const pointRow = async (on: Db, id: string): Promise<PointRow | undefined> =>
-  (await rows<PointRow>(on, sql`select id, parent_id, organization_id, for_organization, for_team, static from access_point where id = ${id}`))[0];
+  (await rows<PointRow>(on, sql`select id, parent_id, organization_id, for_organization, for_team, inherits, static from access_point where id = ${id}`))[0];
 
 // One structural change at a time per database, so two moves can never pass each other's loop check.
 const lockTree = (tx: Db) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('@celsoft/platform access tree'))`);
@@ -395,6 +406,11 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
     }
 
     return {
+      async point(point) {
+        await need(on, point, READ);
+        const row = (await pointRow(on, point))!;
+        return { id: row.id, parent: row.parent_id, inherits: row.inherits, static: row.static, organizationId: row.organization_id };
+      },
       level: async (point) => named(await levelOf(on, point)),
       can: async (point, level) => (await levelOf(on, point)) >= rank(level),
       check: async (point) => named(await need(on, point, READ))!,

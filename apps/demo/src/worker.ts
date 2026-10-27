@@ -1,24 +1,44 @@
-import { defineApp, endpoint, EndpointError, organizationPoint, type AppContext, type PlatformBindings } from "@celsoft/platform";
-import { user as users } from "@celsoft/platform/schema";
-import { and, desc, eq, isNull, ne } from "drizzle-orm";
+import { defineApp, endpoint, EndpointError, organizationPoint, teamPoint, type AppContext, type Grantee, type PlatformBindings } from "@celsoft/platform";
+import { organization, team, user as users } from "@celsoft/platform/schema";
+import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
 
 const { notes } = schema;
 const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt };
-const orgColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
-const ORG_ROOM = /^organization:[0-9a-f-]{36}$/;
+const groupColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
+const ROOM = /^(organization|team):[0-9a-f-]{36}$/;
 
 type App = AppContext<PlatformBindings, typeof schema>;
 
-// Every note is a control point named by its id. A personal note stands alone, so only its author
-// and whoever they share it with can see it; an organization's note inherits from the
-// organization's point, which the demo grants its members `create` on.
+// The demo is where people try every access feature by hand. Every note is a control point named
+// by its id. A personal note stands alone, so only its author and whoever they share it with can
+// see it; an organization's or a team's note inherits from that organization's or team's point.
+// Each note's permissions panel shows and changes its grants, links and inheritance.
 
 // A note as anyone who can open it sees it, with the level they have on it.
 const SharedNote = z.object({ id: z.uuid(), body: z.string(), attachmentName: z.string().nullable(), createdAt: z.date(), author: z.string(), level: z.string() });
 const NoteId = z.object({ id: z.uuid() });
+const GroupNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
+const Org = z.object({ id: z.uuid(), name: z.string() });
+const OrgId = z.object({ organization: z.uuid() });
+const TeamId = z.object({ team: z.uuid() });
+const Level = z.enum(["read", "create", "write", "delete", "manage"]);
+// Who a grant is for, as the permissions panel names it.
+const To = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("email"), value: z.email() }),
+  z.object({ kind: z.literal("user"), value: z.uuid() }),
+  z.object({ kind: z.literal("team"), value: z.uuid() }),
+  z.object({ kind: z.literal("organization"), value: z.uuid() }),
+  z.object({ kind: z.literal("everyone") }),
+]);
+const Destination = z.discriminatedUnion("kind", [z.object({ kind: z.literal("personal") }), z.object({ kind: z.literal("organization"), id: z.uuid() }), z.object({ kind: z.literal("team"), id: z.uuid() })]);
+
+function grantee(to: z.infer<typeof To>): Grantee {
+  if (to.kind === "everyone") return { everyone: true };
+  return { [to.kind]: to.value } as Grantee;
+}
 
 async function sharedNote(app: App, id: string) {
   const [note] = await app.db.select({ ...columns, author: users.name }).from(notes).innerJoin(users, eq(users.id, notes.userId)).where(eq(notes.id, id));
@@ -26,17 +46,56 @@ async function sharedNote(app: App, id: string) {
   return { ...note, level: await app.access.check(id) };
 }
 
-const OrgNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
-const Org = z.object({ id: z.uuid(), name: z.string() });
-const OrgId = z.object({ organization: z.uuid() });
-
-// Everything said in an organization's room: new notes from the server, typing notices from browsers.
-const OrgMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: OrgNote }), z.object({ type: z.literal("typing") })]);
-
-// An organization's room is named after its control point, so whoever can read the organization may join.
-async function inOrgRoom(room: string, _user: unknown, app: App): Promise<boolean> {
-  return ORG_ROOM.test(room) && (await app.access.level(room)) !== null;
+// A grant with the name of whoever it is for, so the panel never shows a bare id.
+async function named(app: App, to: Grantee): Promise<{ kind: string; value: string | null; name: string }> {
+  if ("everyone" in to) return { kind: "everyone", value: null, name: "Everyone, signed in or not" };
+  if ("email" in to) return { kind: "email", value: to.email, name: to.email };
+  if ("user" in to) {
+    const [row] = await app.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, to.user));
+    return { kind: "user", value: to.user, name: row ? `${row.name} <${row.email}>` : "someone" };
+  }
+  if ("team" in to) {
+    const [row] = await app.db.select({ name: team.name }).from(team).where(eq(team.id, to.team));
+    return { kind: "team", value: to.team, name: `Team ${row?.name ?? "?"}` };
+  }
+  const [row] = await app.db.select({ name: organization.name }).from(organization).where(eq(organization.id, to.organization));
+  return { kind: "organization", value: to.organization, name: `Everyone in ${row?.name ?? "?"}` };
 }
+
+// A room is named after a control point, an organization's or a team's, so whoever can read it may join.
+async function inRoom(room: string, _user: unknown, app: App): Promise<boolean> {
+  return ROOM.test(room) && (await app.access.level(room)) !== null;
+}
+
+const noteFolder = (userId: string, noteId: string) => `notes/${userId}/${noteId}`;
+
+// Notes in an organization or a team, newest first, only those the caller can read.
+async function groupNotes(app: App, where: ReturnType<typeof eq>) {
+  return app.db
+    .select(groupColumns)
+    .from(notes)
+    .innerJoin(users, eq(users.id, notes.userId))
+    .where(and(where, await app.access.readable(notes.id)))
+    .orderBy(desc(notes.createdAt))
+    .limit(100);
+}
+
+// A new note under a group's point, inheriting from it, announced to the group's room.
+async function addGroupNote(app: App, values: { organizationId: string; teamId: string | null }, point: string, body: string) {
+  const user = await app.requireUser();
+  const inserted = await app.db.transaction(async (tx) => {
+    const [row] = await tx.insert(notes).values({ body, userId: user.id, ...values }).returning({ id: notes.id, body: notes.body, createdAt: notes.createdAt });
+    await app.access.in(tx).create(row!.id, { parent: point, inherit: true });
+    return row!;
+  });
+  const note = { ...inserted, author: user.name };
+  // Saved first; the announcement only tells the group's open pages.
+  await app.live.publish(point, { type: "note", note });
+  return note;
+}
+
+// Everything said in a room: new notes from the server, typing notices from browsers.
+const RoomMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: GroupNote }), z.object({ type: z.literal("typing") })]);
 
 // Every hand-written /api route here is private, so the platform has already checked the session.
 export default defineApp(
@@ -44,7 +103,6 @@ export default defineApp(
     const { db, files, requireUser } = app;
     const url = new URL(request.url);
     const user = await requireUser();
-    const folder = (noteId: string) => `notes/${user.id}/${noteId}`;
 
     if (url.pathname === "/api/notes" && request.method === "GET") {
       const mine = and(eq(notes.userId, user.id), isNull(notes.organizationId));
@@ -71,7 +129,7 @@ export default defineApp(
         await app.access.in(tx).create(inserted!.id);
         return inserted;
       });
-      if (attachment) await files.put(`${folder(note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
+      if (attachment) await files.put(`${noteFolder(user.id, note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
       return Response.json(note, { status: 201 });
     }
 
@@ -80,15 +138,22 @@ export default defineApp(
       await app.access.check(download[1]!);
       const [note] = await db.select({ ...columns, userId: notes.userId }).from(notes).where(eq(notes.id, download[1]!));
       if (!note?.attachmentName) return new Response("not found", { status: 404 });
-      return files.response(`notes/${note.userId}/${note.id}/${note.attachmentName}`);
+      return files.response(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`);
     }
 
     return new Response("not found", { status: 404 });
   },
   {
     schema,
-    live: { message: OrgMessage, canJoin: inOrgRoom, canSend: inOrgRoom },
+    // A static point, declared here and applied at every start: anyone may read the about line.
+    access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
+    live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
     endpoints: {
+      about: endpoint(
+        { method: "GET", path: "/api/public/about", input: z.object({}), output: z.object({ level: z.string() }), access: { point: () => "about", level: "read" } },
+        async (_, app) => ({ level: await app.access.check("about") }),
+      ),
+
       // Public paths, so a signed-out visitor holding a link can read or edit the note it opens.
       getNote: endpoint({ method: "GET", path: "/api/public/notes/:id", input: NoteId, output: SharedNote, access: { point: "id", level: "read" } }, ({ id }, app) => sharedNote(app, id)),
       editNote: endpoint(
@@ -102,6 +167,83 @@ export default defineApp(
         async ({ id, body }, app) => {
           await app.db.update(notes).set({ body, updatedAt: new Date() }).where(eq(notes.id, id));
           return sharedNote(app, id);
+        },
+      ),
+      // Removes the note's point and every point under it, then those notes and their files.
+      deleteNote: endpoint({ method: "DELETE", path: "/api/notes/:id", input: NoteId, output: z.object({ deleted: z.number() }), access: { point: "id", level: "delete" } }, async ({ id }, app) => {
+        const gone = await app.db.transaction(async (tx) => {
+          const ids = (await app.access.in(tx).remove(id)).filter((x) => z.uuid().safeParse(x).success);
+          if (ids.length === 0) return [];
+          return tx.delete(notes).where(inArray(notes.id, ids)).returning({ id: notes.id, userId: notes.userId, attachmentName: notes.attachmentName });
+        });
+        for (const note of gone) if (note.attachmentName) await app.files.delete(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`).catch(() => {});
+        return { deleted: gone.length };
+      }),
+      // Into an organization or a team the caller may add to, or back to the caller's own notes.
+      moveNote: endpoint(
+        { method: "POST", path: "/api/notes/:id/move", input: NoteId.extend({ to: Destination }), output: z.object({}), access: { point: "id", level: "manage" } },
+        async ({ id, to }, app) => {
+          let parent: string | null = null;
+          let place: { organizationId: string | null; teamId: string | null } = { organizationId: null, teamId: null };
+          if (to.kind === "organization") {
+            parent = organizationPoint(to.id);
+            place = { organizationId: to.id, teamId: null };
+          } else if (to.kind === "team") {
+            const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, to.id));
+            if (!row) throw new EndpointError(404, "not found");
+            parent = teamPoint(to.id);
+            place = { organizationId: row.organizationId, teamId: to.id };
+          }
+          await app.db.transaction(async (tx) => {
+            const access = app.access.in(tx);
+            await access.move(id, parent);
+            await access.inherit(id, parent !== null);
+            await tx.update(notes).set({ ...place, updatedAt: new Date() }).where(eq(notes.id, id));
+          });
+          return {};
+        },
+      ),
+
+      // The permissions panel: the note's place, grants and links, for those who manage it.
+      noteAccess: endpoint(
+        {
+          method: "GET",
+          path: "/api/notes/:id/access",
+          input: NoteId,
+          output: z.object({
+            level: z.string(),
+            parent: z.string().nullable(),
+            inherits: z.boolean(),
+            grants: z.array(z.object({ kind: z.string(), value: z.string().nullable(), name: z.string(), level: z.string() })),
+            links: z.array(z.object({ id: z.string(), level: z.string(), expiresAt: z.date().nullable() })),
+          }),
+          access: { point: "id", level: "manage" },
+        },
+        async ({ id }, app) => {
+          const point = await app.access.point(id);
+          const grants = await Promise.all((await app.access.grants(id)).map(async (g) => ({ ...(await named(app, g.to)), level: g.level })));
+          return { level: await app.access.check(id), parent: point.parent, inherits: point.inherits, grants, links: await app.access.links(id) };
+        },
+      ),
+      grantNote: endpoint(
+        { method: "POST", path: "/api/notes/:id/grants", input: NoteId.extend({ to: To, level: Level }), output: z.object({}), access: { point: "id", level: "manage" } },
+        async ({ id, to, level }, app) => {
+          await app.access.grant(id, grantee(to), level, { email: { path: `/#note=${id}` } });
+          return {};
+        },
+      ),
+      revokeNote: endpoint(
+        { method: "POST", path: "/api/notes/:id/grants/revoke", input: NoteId.extend({ to: To }), output: z.object({}), access: { point: "id", level: "manage" } },
+        async ({ id, to }, app) => {
+          await app.access.revoke(id, grantee(to));
+          return {};
+        },
+      ),
+      inheritNote: endpoint(
+        { method: "PUT", path: "/api/notes/:id/inherit", input: NoteId.extend({ inherit: z.boolean() }), output: z.object({}), access: { point: "id", level: "manage" } },
+        async ({ id, inherit }, app) => {
+          await app.access.inherit(id, inherit);
+          return {};
         },
       ),
       shareNote: endpoint(
@@ -121,13 +263,20 @@ export default defineApp(
         {
           method: "POST",
           path: "/api/notes/:id/links",
-          input: NoteId.extend({ level: z.enum(["read", "write"]) }),
+          input: NoteId.extend({ level: z.enum(["read", "create", "write"]) }),
           output: z.object({ path: z.string() }),
           access: { point: "id", level: "manage" },
         },
         async ({ id, level }, app) => {
           const { token } = await app.access.link(id, level);
           return { path: `/#note=${id}&link=${token}` };
+        },
+      ),
+      revokeLink: endpoint(
+        { method: "DELETE", path: "/api/notes/:id/links/:link", input: NoteId.extend({ link: z.string() }), output: z.object({}), access: { point: "id", level: "manage" } },
+        async ({ id, link }, app) => {
+          await app.access.revokeLink(id, link);
+          return {};
         },
       ),
       // Other people's personal notes the signed-in user can read, filtered by access in the query itself.
@@ -144,6 +293,7 @@ export default defineApp(
             .limit(100);
         },
       ),
+
       listMyOrganizations: endpoint(
         {
           serve: ["api", "mcp"],
@@ -170,18 +320,12 @@ export default defineApp(
           serve: ["api", "mcp"],
           method: "GET",
           path: "/api/organizations/:organization/notes",
-          description: "The newest 100 notes of an organization the signed-in user belongs to",
+          description: "The newest 100 organization-wide notes of an organization the signed-in user belongs to",
           input: OrgId,
-          output: z.array(OrgNote),
+          output: z.array(GroupNote),
           access: { point: ({ organization }) => organizationPoint(organization), level: "read" },
         },
-        async ({ organization }, app) => {
-          const orgNotes = app.db.select(orgColumns).from(notes).innerJoin(users, eq(users.id, notes.userId));
-          return orgNotes
-            .where(and(eq(notes.organizationId, organization), await app.access.readable(notes.id)))
-            .orderBy(desc(notes.createdAt))
-            .limit(100);
-        },
+        async ({ organization }, app) => groupNotes(app, and(eq(notes.organizationId, organization), isNull(notes.teamId)) as ReturnType<typeof eq>),
       ),
       addOrganizationNote: endpoint(
         {
@@ -190,20 +334,36 @@ export default defineApp(
           path: "/api/organizations/:organization/notes",
           description: "Add a note to an organization the signed-in user belongs to; its open pages see it live",
           input: OrgId.extend({ body: z.string().trim().min(1).max(10000) }),
-          output: OrgNote,
+          output: GroupNote,
           access: { point: ({ organization }) => organizationPoint(organization), level: "create" },
         },
-        async ({ organization, body }, app) => {
-          const user = await app.requireUser();
-          const inserted = await app.db.transaction(async (tx) => {
-            const [row] = await tx.insert(notes).values({ body, userId: user.id, organizationId: organization }).returning({ id: notes.id, body: notes.body, createdAt: notes.createdAt });
-            await app.access.in(tx).create(row!.id, { parent: organizationPoint(organization), inherit: true });
-            return row!;
-          });
-          const note = { ...inserted, author: user.name };
-          // Saved first; the announcement only tells the organization's open pages.
-          await app.live.publish(organizationPoint(organization), { type: "note", note });
-          return note;
+        async ({ organization, body }, app) => addGroupNote(app, { organizationId: organization, teamId: null }, organizationPoint(organization), body),
+      ),
+      listTeamNotes: endpoint(
+        {
+          serve: ["api", "mcp"],
+          method: "GET",
+          path: "/api/teams/:team/notes",
+          description: "The newest 100 notes of a team the signed-in user can read",
+          input: TeamId,
+          output: z.array(GroupNote),
+          access: { point: ({ team: id }) => teamPoint(id), level: "read" },
+        },
+        async ({ team: id }, app) => groupNotes(app, eq(notes.teamId, id)),
+      ),
+      addTeamNote: endpoint(
+        {
+          serve: ["api", "mcp"],
+          method: "POST",
+          path: "/api/teams/:team/notes",
+          description: "Add a note to a team the signed-in user can add to; the team's open pages see it live",
+          input: TeamId.extend({ body: z.string().trim().min(1).max(10000) }),
+          output: GroupNote,
+          access: { point: ({ team: id }) => teamPoint(id), level: "create" },
+        },
+        async ({ team: id, body }, app) => {
+          const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, id));
+          return addGroupNote(app, { organizationId: row!.organizationId, teamId: id }, teamPoint(id), body);
         },
       ),
     },

@@ -13,7 +13,7 @@ import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.j
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { isScreen, renderScreen } from "./screens.js";
 
-export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
+export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";

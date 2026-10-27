@@ -6,25 +6,30 @@
   <title>Notes</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    body { max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
     form { display: grid; gap: .5rem; margin-bottom: 1rem; }
-    input, textarea, button { font: inherit; padding: .4rem; }
+    form.row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    input, textarea, button, select { font: inherit; padding: .4rem; }
     textarea { min-height: 3rem; }
     header { display: flex; justify-content: space-between; align-items: baseline; }
     ul { list-style: none; padding: 0; }
-    li { border-bottom: 1px solid #8884; padding: .75rem 0; white-space: pre-wrap; }
-    time { display: block; font-size: .8rem; opacity: .7; }
+    li { border-bottom: 1px solid #8884; padding: .6rem 0; white-space: pre-wrap; }
+    time, .meta { display: block; font-size: .8rem; opacity: .7; }
     #message { min-height: 1.5rem; }
     [hidden] { display: none !important; }
-    .actions { display: flex; gap: .5rem; margin-top: .4rem; }
-    .actions button { font-size: .8rem; padding: .2rem .5rem; }
-    #opened { border: 1px solid #8886; border-radius: .4rem; padding: .75rem; margin-bottom: 1rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+    .actions button, li button { font-size: .8rem; padding: .2rem .5rem; }
+    .panel { border: 1px solid #8886; border-radius: .4rem; padding: .75rem; margin: 1rem 0; }
+    .tag { font-size: .7rem; border: 1px solid #8888; border-radius: .3rem; padding: 0 .3rem; margin-left: .3rem; }
+    h3 { margin-top: 1.2rem; }
   </style>
 </head>
 <body>
   <header><h1>Notes</h1><span id="who"></span></header>
   <p id="message" role="status"></p>
-  <section id="opened" hidden>
+  <p id="about" class="meta"></p>
+
+  <section id="opened" class="panel" hidden>
     <p id="opened-meta"></p>
     <form id="edit-opened">
       <textarea name="body" required maxlength="10000"></textarea>
@@ -38,6 +43,40 @@
   </section>
 
   <section id="signed-in" hidden>
+    <section id="permissions" class="panel" hidden>
+      <header><h2>Permissions</h2><button id="close-permissions" type="button">Close</button></header>
+      <p id="perm-summary" class="meta"></p>
+      <label><input id="perm-inherit" type="checkbox"> Inherit from where it sits</label>
+      <h3>Grants</h3>
+      <ul id="perm-grants"></ul>
+      <form id="perm-grant" class="row">
+        <select name="kind">
+          <option value="email">Person, by email</option>
+          <option value="team">Team</option>
+          <option value="organization">Organization</option>
+          <option value="everyone">Everyone (read only)</option>
+        </select>
+        <input name="email" type="email" placeholder="email">
+        <select name="group" hidden></select>
+        <select name="level">
+          <option>read</option><option>create</option><option>write</option><option>delete</option><option>manage</option>
+        </select>
+        <button>Grant</button>
+      </form>
+      <h3>Links</h3>
+      <ul id="perm-links"></ul>
+      <form id="perm-link" class="row">
+        <select name="level"><option>read</option><option>create</option><option>write</option></select>
+        <button>Make a link</button>
+      </form>
+      <h3>Place</h3>
+      <form id="perm-move" class="row">
+        <select name="to"></select>
+        <button>Move</button>
+      </form>
+    </section>
+
+    <h2>My notes</h2>
     <form id="new">
       <textarea name="body" placeholder="Write a note" required maxlength="10000"></textarea>
       <label>Attach a file (up to 10 MB) <input name="file" type="file"></label>
@@ -49,25 +88,54 @@
     <ul id="shared"></ul>
 
     <h2>Organizations</h2>
-    <form id="new-org">
+    <form id="new-org" class="row">
       <input name="name" placeholder="New organization name" required maxlength="60">
       <button>Create organization</button>
     </form>
     <ul id="org-list"></ul>
-    <div id="org" hidden>
-      <h3 id="org-name"></h3>
-      <p id="here"></p>
-      <form id="invite">
-        <input name="email" type="email" placeholder="Invite someone by email (admins only)" required>
+
+    <section id="org" class="panel" hidden>
+      <header><h2 id="org-name"></h2><button id="leave-org" type="button">Leave</button></header>
+      <p id="here" class="meta"></p>
+      <h3>Members</h3>
+      <ul id="org-members"></ul>
+      <form id="invite" class="row">
+        <input name="email" type="email" placeholder="Invite by email (admins only)" required>
+        <select name="team"></select>
         <button>Invite</button>
       </form>
+      <ul id="org-invitations"></ul>
+      <h3>Teams</h3>
+      <ul id="org-teams"></ul>
+      <form id="new-team" class="row">
+        <input name="name" placeholder="New team name" required maxlength="100">
+        <button>Create team</button>
+      </form>
+      <h3>Organization notes</h3>
       <form id="new-org-note">
-        <textarea name="body" placeholder="Write a note for the organization" required maxlength="10000"></textarea>
+        <textarea name="body" placeholder="Write a note for the whole organization" required maxlength="10000"></textarea>
         <button>Add</button>
       </form>
-      <p id="typing"></p>
+      <p id="typing" class="meta"></p>
       <ul id="org-notes"></ul>
-    </div>
+    </section>
+
+    <section id="team" class="panel" hidden>
+      <header><h2 id="team-name"></h2><button id="leave-team" type="button">Leave team</button></header>
+      <p id="team-here" class="meta"></p>
+      <h3>Team members</h3>
+      <ul id="team-members"></ul>
+      <form id="add-member" class="row">
+        <select name="user"></select>
+        <button>Add to team</button>
+      </form>
+      <h3>Team notes</h3>
+      <form id="new-team-note">
+        <textarea name="body" placeholder="Write a note for this team" required maxlength="10000"></textarea>
+        <button>Add</button>
+      </form>
+      <ul id="team-notes"></ul>
+    </section>
   </section>
 
   <script type="module">
@@ -78,12 +146,48 @@
     const $ = (id) => document.getElementById(id);
     const say = (text) => ($("message").textContent = text);
     const show = (id) => ["signed-out", "signed-in"].forEach((s) => ($(s).hidden = s !== id));
+    const el = (tag, props = {}, ...children) => {
+      const e = Object.assign(document.createElement(tag), props);
+      e.append(...children);
+      return e;
+    };
+    const button = (text, onclick) => el("button", { type: "button", textContent: text, onclick });
+    // Runs an action, reporting its error instead of failing silently.
+    const attempt = (work) => async (...args) => { try { await work(...args); } catch (error) { say(error.message); } };
 
-    async function request(path, body) {
-      const response = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+    // The platform's organization routes, answered as JSON.
+    async function request(path, body, method) {
+      const init = body !== undefined ? { method: method ?? "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : { method: method ?? "GET" };
+      const response = await fetch(path, init);
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.message ?? data?.error ?? `request failed (${response.status})`);
       return data;
+    }
+
+    let me;
+    let orgs = [];
+    let org;
+    let orgTeams = [];
+    let team;
+    let permissionsFor;
+    let refresh = async () => {};
+
+    // A note with its actions; the permissions panel shows only what the signed-in person may manage.
+    function noteItem(note, { author } = {}) {
+      const li = el("li", {}, note.body);
+      if (note.attachmentName) li.append(el("a", { href: `/api/notes/${note.id}/attachment`, textContent: `Attachment: ${note.attachmentName}`, style: "display:block" }));
+      li.append(el("time", { textContent: `${author ? `${author}, ` : ""}${new Date(note.createdAt).toLocaleString()}` }));
+      li.append(el("div", { className: "actions" },
+        button("Open", () => { location.hash = `note=${note.id}`; }),
+        button("Permissions", attempt(() => openPermissions(note.id))),
+        button("Delete", attempt(async () => {
+          if (!confirm("Delete this note?")) return;
+          await call("deleteNote", { id: note.id });
+          say("Deleted.");
+          await refresh();
+        })),
+      ));
+      return li;
     }
 
     $("new").addEventListener("submit", async (event) => {
@@ -97,63 +201,80 @@
 
     async function loadNotes() {
       const notes = await request("/api/notes");
-      $("notes").replaceChildren(...notes.map((note) => {
-        const li = document.createElement("li");
-        const time = document.createElement("time");
-        time.textContent = new Date(note.createdAt).toLocaleString();
-        li.append(note.body);
-        if (note.attachmentName) {
-          const link = document.createElement("a");
-          link.href = `/api/notes/${note.id}/attachment`;
-          link.textContent = `Attachment: ${note.attachmentName}`;
-          link.style.display = "block";
-          li.append(link);
-        }
-        li.append(time, noteActions(note));
-        return li;
-      }));
+      $("notes").replaceChildren(...notes.map((note) => noteItem(note)));
       const shared = await call("sharedNotes", {});
-      $("shared").replaceChildren(...shared.map((note) => {
-        const li = document.createElement("li");
-        const open = document.createElement("a");
-        open.href = `#note=${note.id}`;
-        open.textContent = note.body;
-        const meta = document.createElement("time");
-        meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
-        li.append(open, meta);
-        return li;
-      }));
+      $("shared").replaceChildren(...shared.map((note) => noteItem(note, { author: note.author })));
     }
 
-    // Sharing a note with someone by email, or making a link anyone holding it can open.
-    function noteActions(note) {
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      const share = document.createElement("button");
-      share.textContent = "Share";
-      share.onclick = async () => {
-        const email = prompt("Share with which email address?");
-        if (!email) return;
-        const level = confirm("Let them edit it? Cancel shares it read-only.") ? "write" : "read";
-        try {
-          await call("shareNote", { id: note.id, email, level });
-          say(`Shared with ${email}; they can open it once they sign in with a confirmed address.`);
-        } catch (error) { say(error.message); }
-      };
-      const link = document.createElement("button");
-      link.textContent = "Copy link";
-      link.onclick = async () => {
-        const level = confirm("Let link holders edit it? Cancel makes a read-only link.") ? "write" : "read";
-        try {
-          const { path } = await call("linkNote", { id: note.id, level });
-          const url = new URL(path, location.origin).toString();
-          await navigator.clipboard?.writeText(url).catch(() => {});
-          say(`Link: ${url}`);
-        } catch (error) { say(error.message); }
-      };
-      actions.append(share, link);
-      return actions;
+    // The permissions panel for one note: its grants, links, inheritance and place.
+    async function openPermissions(id) {
+      permissionsFor = id;
+      const access = await call("noteAccess", { id });
+      $("permissions").hidden = false;
+      const place = access.parent ? (access.parent.startsWith("team:") ? "a team" : "an organization") : "your own notes";
+      $("perm-summary").textContent = `Your level: ${access.level}. It sits in ${place}.`;
+      $("perm-inherit").checked = access.inherits;
+      $("perm-inherit").disabled = !access.parent;
+      $("perm-grants").replaceChildren(...access.grants.map((g) => el("li", {}, `${g.name}: ${g.level} `,
+        button("Revoke", attempt(async () => {
+          await call("revokeNote", { id, to: g.kind === "everyone" ? { kind: "everyone" } : { kind: g.kind, value: g.value } });
+          await openPermissions(id);
+        })))));
+      $("perm-links").replaceChildren(...access.links.map((l) => el("li", {}, `${l.level} link `,
+        button("Revoke", attempt(async () => { await call("revokeLink", { id, link: l.id }); await openPermissions(id); })))));
+      const groups = [["", "Choose a team or organization"], ...orgs.map((o) => [`organization:${o.id}`, o.name]), ...orgTeams.map((t) => [`team:${t.id}`, `${org?.name} / ${t.name}`])];
+      $("perm-grant").group.replaceChildren(...groups.map(([value, label]) => el("option", { value, textContent: label })));
+      const destinations = [["personal", "Your own notes"], ...orgs.map((o) => [`organization:${o.id}`, `Organization ${o.name}`]), ...orgTeams.map((t) => [`team:${t.id}`, `Team ${org?.name} / ${t.name}`])];
+      $("perm-move").to.replaceChildren(...destinations.map(([value, label]) => el("option", { value, textContent: label })));
+      $("permissions").scrollIntoView({ behavior: "smooth" });
     }
+
+    $("close-permissions").onclick = () => { $("permissions").hidden = true; };
+
+    $("perm-inherit").addEventListener("change", attempt(async () => {
+      await call("inheritNote", { id: permissionsFor, inherit: $("perm-inherit").checked });
+      await openPermissions(permissionsFor);
+    }));
+
+    $("perm-grant").kind.addEventListener("change", () => {
+      const kind = $("perm-grant").kind.value;
+      $("perm-grant").email.hidden = kind !== "email";
+      $("perm-grant").group.hidden = kind !== "team" && kind !== "organization";
+    });
+
+    $("perm-grant").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      const form = $("perm-grant");
+      const kind = form.kind.value;
+      let to = { kind };
+      if (kind === "email") to = { kind, value: form.email.value };
+      if (kind === "team" || kind === "organization") {
+        const [groupKind, value] = form.group.value.split(":");
+        if (groupKind !== kind) throw new Error(`choose a ${kind} from the list`);
+        to = { kind, value };
+      }
+      await call("grantNote", { id: permissionsFor, to, level: kind === "everyone" ? "read" : form.level.value });
+      form.email.value = "";
+      await openPermissions(permissionsFor);
+    }));
+
+    $("perm-link").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      const { path } = await call("linkNote", { id: permissionsFor, level: $("perm-link").level.value });
+      const url = new URL(path, location.origin).toString();
+      await navigator.clipboard?.writeText(url).catch(() => {});
+      say(`Link, copied: ${url}`);
+      await openPermissions(permissionsFor);
+    }));
+
+    $("perm-move").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      const [kind, id] = $("perm-move").to.value.split(":");
+      await call("moveNote", { id: permissionsFor, to: kind === "personal" ? { kind } : { kind, id } });
+      say("Moved.");
+      await openPermissions(permissionsFor);
+      await refresh();
+    }));
 
     // A note opened from an address such as /#note=<id>&link=<token>; the generated client sends the
     // link token with every call, so this works signed out too.
@@ -164,7 +285,7 @@
       try {
         const note = await call("getNote", { id });
         const editable = ["write", "delete", "manage"].includes(note.level);
-        $("opened-meta").textContent = `${note.author}'s note, ${new Date(note.createdAt).toLocaleString()} (you can ${editable ? "edit" : "read"} it)`;
+        $("opened-meta").textContent = `${note.author}'s note, ${new Date(note.createdAt).toLocaleString()} (your level: ${note.level})`;
         $("edit-opened").hidden = !editable;
         $("opened-body").hidden = editable;
         $("edit-opened").body.value = note.body;
@@ -175,100 +296,117 @@
       }
     }
 
-    $("edit-opened").addEventListener("submit", async (event) => {
+    $("edit-opened").addEventListener("submit", attempt(async (event) => {
       event.preventDefault();
       const id = new URLSearchParams(location.hash.slice(1)).get("note");
-      try {
-        await call("editNote", { id, body: $("edit-opened").body.value });
-        say("Saved.");
-      } catch (error) { say(error.message); }
-    });
+      await call("editNote", { id, body: $("edit-opened").body.value });
+      say("Saved.");
+    }));
 
     addEventListener("hashchange", openFromAddress);
 
-    // Organization notes: saved through the API, announced to the organization's room, with who is here and who is typing.
+    // Organizations and teams: the platform's own, through /api/platform/, with live rooms named
+    // after their control points.
     let room;
-    let org;
+    let teamRoom;
     let typingTimer;
     let lastTyping = 0;
 
-    function orgNote(note) {
-      const li = document.createElement("li");
-      const meta = document.createElement("time");
-      meta.textContent = `${note.author}, ${new Date(note.createdAt).toLocaleString()}`;
-      li.append(note.body, meta);
-      return li;
-    }
-
-    async function loadOrgNotes() {
-      const list = await call("listOrganizationNotes", { organization: org.id });
-      $("org-notes").replaceChildren(...list.map(orgNote));
-    }
-
-    async function loadOrgs() {
-      const orgs = await call("listMyOrganizations", {});
-      $("org-list").replaceChildren(...orgs.map((o) => {
-        const li = document.createElement("li");
-        const open = document.createElement("button");
-        open.textContent = o.name;
-        open.onclick = () => openOrg(o);
-        li.append(open);
-        return li;
-      }));
-    }
-
-    async function openOrg(next) {
-      room?.close();
-      org = next;
-      $("org").hidden = false;
-      $("org-name").textContent = org.name;
-      $("here").textContent = "";
-      await loadOrgNotes();
-      room = live(`organization:${org.id}`, {
+    function liveRoom(name, list, here) {
+      return live(name, {
         onMessage(data, { from }) {
-          if (data.type === "note") $("org-notes").prepend(orgNote(data.note));
+          if (data.type === "note") list.prepend(noteItem(data.note, { author: data.note.author }));
           if (data.type === "typing" && from) {
             $("typing").textContent = `${from.name} is typing`;
             clearTimeout(typingTimer);
             typingTimer = setTimeout(() => ($("typing").textContent = ""), 3000);
           }
         },
-        onPresence(people, anonymous) {
-          $("here").textContent = `Here now: ${people.map((p) => p.name).join(", ")}`;
-        },
-        onReload: loadOrgNotes,
+        onPresence(people) { here.textContent = `Here now: ${people.map((p) => p.name).join(", ")}`; },
       });
     }
 
-    $("new-org").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const name = new FormData($("new-org")).get("name").trim();
-      try {
-        await call("createOrganization", { name });
-        $("new-org").reset();
-        await loadOrgs();
-      } catch (error) { say(error.message); }
+    async function loadOrgs() {
+      orgs = await call("listMyOrganizations", {});
+      $("org-list").replaceChildren(...orgs.map((o) => el("li", {}, button(o.name, attempt(() => openOrg(o))))));
+    }
+
+    async function openOrg(next) {
+      room?.close();
+      org = next;
+      team = undefined;
+      $("team").hidden = true;
+      $("org").hidden = false;
+      $("org-name").textContent = org.name;
+      $("here").textContent = "";
+      room = liveRoom(`organization:${org.id}`, $("org-notes"), $("here"));
+      await loadOrg();
+    }
+
+    async function loadOrg() {
+      const [members, teams, notes] = await Promise.all([
+        request(`/api/platform/organizations/${org.id}/members`),
+        request(`/api/platform/organizations/${org.id}/teams`),
+        call("listOrganizationNotes", { organization: org.id }),
+      ]);
+      orgTeams = teams;
+      const iAmAdmin = members.some((m) => m.userId === me.id && m.admin);
+      $("org-members").replaceChildren(...members.map((m) => el("li", {}, `${m.name} <${m.email}>`,
+        ...(m.admin ? [el("span", { className: "tag", textContent: "admin" })] : []), " ",
+        ...(m.userId !== me.id ? [button("Remove", attempt(async () => {
+          await request(`/api/platform/organizations/${org.id}/members/${m.userId}`, undefined, "DELETE");
+          await loadOrg();
+        }))] : []))));
+      $("invite").team.replaceChildren(el("option", { value: "", textContent: "No team" }), ...teams.map((t) => el("option", { value: t.id, textContent: t.name })));
+      if (iAmAdmin) {
+        const invitations = await request(`/api/platform/organizations/${org.id}/invitations`);
+        $("org-invitations").replaceChildren(...invitations.map((i) => el("li", {}, `Invited ${i.email}, until ${new Date(i.expiresAt).toLocaleDateString()} `,
+          button("Revoke", attempt(async () => { await request(`/api/platform/organizations/${org.id}/invitations/${i.id}`, undefined, "DELETE"); await loadOrg(); })))));
+      } else $("org-invitations").replaceChildren();
+      $("org-teams").replaceChildren(...teams.map((t) => el("li", {},
+        button(t.name, attempt(() => openTeam(t, members))),
+        ...(t.admins ? [el("span", { className: "tag", textContent: "manages everything here" })] : []))));
+      $("org-notes").replaceChildren(...notes.map((n) => noteItem(n, { author: n.author })));
+    }
+
+    $("leave-org").onclick = attempt(async () => {
+      if (!confirm(`Leave ${org.name}?`)) return;
+      await request(`/api/platform/organizations/${org.id}/members/${me.id}`, undefined, "DELETE");
+      room?.close();
+      $("org").hidden = $("team").hidden = true;
+      await loadOrgs();
     });
 
-    $("invite").addEventListener("submit", async (event) => {
+    $("new-org").addEventListener("submit", attempt(async (event) => {
       event.preventDefault();
-      const email = new FormData($("invite")).get("email");
-      try {
-        await request(`/api/platform/organizations/${org.id}/invitations`, { email });
-        $("invite").reset();
-        say(`Invited ${email}; they get an email with a link to join.`);
-      } catch (error) { say(error.message); }
-    });
+      await call("createOrganization", { name: new FormData($("new-org")).get("name").trim() });
+      $("new-org").reset();
+      await loadOrgs();
+    }));
 
-    $("new-org-note").addEventListener("submit", async (event) => {
+    $("invite").addEventListener("submit", attempt(async (event) => {
       event.preventDefault();
-      const body = new FormData($("new-org-note")).get("body");
-      try {
-        const note = await call("addOrganizationNote", { organization: org.id, body });
-        $("org-notes").prepend(orgNote(note));
-        $("new-org-note").reset();
-      } catch (error) { say(error.message); }
-    });
+      const form = new FormData($("invite"));
+      const email = form.get("email");
+      await request(`/api/platform/organizations/${org.id}/invitations`, { email, ...(form.get("team") && { team: form.get("team") }) });
+      $("invite").reset();
+      say(`Invited ${email}; they get an email with a link to join.`);
+      await loadOrg();
+    }));
+
+    $("new-team").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      await request(`/api/platform/organizations/${org.id}/teams`, { name: new FormData($("new-team")).get("name").trim() });
+      $("new-team").reset();
+      await loadOrg();
+    }));
+
+    $("new-org-note").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      const note = await call("addOrganizationNote", { organization: org.id, body: new FormData($("new-org-note")).get("body") });
+      $("org-notes").prepend(noteItem(note, { author: note.author }));
+      $("new-org-note").reset();
+    }));
 
     $("new-org-note").body.addEventListener("input", () => {
       if (Date.now() - lastTyping < 2000) return;
@@ -276,16 +414,71 @@
       room?.send({ type: "typing" });
     });
 
+    async function openTeam(next, orgMembers) {
+      teamRoom?.close();
+      team = next;
+      $("team").hidden = false;
+      $("team-name").textContent = `${org.name} / ${team.name}`;
+      $("team-here").textContent = "";
+      teamRoom = liveRoom(`team:${team.id}`, $("team-notes"), $("team-here"));
+      await loadTeam(orgMembers);
+      $("team").scrollIntoView({ behavior: "smooth" });
+    }
+
+    async function loadTeam(orgMembers) {
+      orgMembers ??= await request(`/api/platform/organizations/${org.id}/members`);
+      const members = await request(`/api/platform/teams/${team.id}/members`);
+      $("team-members").replaceChildren(...members.map((m) => el("li", {}, `${m.name} <${m.email}> `,
+        ...(m.userId !== me.id ? [button("Remove", attempt(async () => { await request(`/api/platform/teams/${team.id}/members/${m.userId}`, undefined, "DELETE"); await loadTeam(); }))] : []))));
+      const outside = orgMembers.filter((m) => !members.some((t) => t.userId === m.userId));
+      $("add-member").user.replaceChildren(...outside.map((m) => el("option", { value: m.userId, textContent: `${m.name} <${m.email}>` })));
+      $("add-member").hidden = outside.length === 0;
+      try {
+        const notes = await call("listTeamNotes", { team: team.id });
+        $("team-notes").replaceChildren(...notes.map((n) => noteItem(n, { author: n.author })));
+        $("new-team-note").hidden = false;
+      } catch (error) {
+        $("team-notes").replaceChildren(el("li", { textContent: `You cannot read this team's notes (${error.message}).` }));
+        $("new-team-note").hidden = true;
+      }
+    }
+
+    $("add-member").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      await request(`/api/platform/teams/${team.id}/members`, { user: $("add-member").user.value });
+      await loadTeam();
+    }));
+
+    $("leave-team").onclick = attempt(async () => {
+      await request(`/api/platform/teams/${team.id}/members/${me.id}`, undefined, "DELETE");
+      teamRoom?.close();
+      $("team").hidden = true;
+      await loadOrg();
+    });
+
+    $("new-team-note").addEventListener("submit", attempt(async (event) => {
+      event.preventDefault();
+      const note = await call("addTeamNote", { team: team.id, body: new FormData($("new-team-note")).get("body") });
+      $("team-notes").prepend(noteItem(note, { author: note.author }));
+      $("new-team-note").reset();
+    }));
+
+    refresh = async () => {
+      await loadNotes();
+      if (org) await loadOrg().catch(() => {});
+      if (team) await loadTeam().catch(() => {});
+    };
+
     async function start() {
       await openFromAddress();
+      call("about", {}).then(({ level }) => ($("about").textContent = `This demo's about line is a static control point; everyone has ${level} on it.`)).catch(() => {});
       const session = await request("/api/auth/get-session");
       if (!session) {
         $("who").replaceChildren();
         return show("signed-out");
       }
-      const out = document.createElement("button");
-      out.textContent = "Sign out";
-      out.onclick = async () => { await request("/api/auth/sign-out", {}); say(""); start(); };
+      me = session.user;
+      const out = button("Sign out", async () => { await request("/api/auth/sign-out", {}); say(""); start(); });
       $("who").replaceChildren(`${session.user.email} `, out);
       show("signed-in");
       await loadNotes();

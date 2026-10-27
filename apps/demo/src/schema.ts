@@ -1,4 +1,4 @@
-import { id, organization, timestamps, user } from "@celsoft/platform/schema";
+import { id, organization, team, timestamps, user } from "@celsoft/platform/schema";
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, text, uuid } from "drizzle-orm/pg-core";
 
@@ -11,6 +11,8 @@ export const notes = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     // Set for an organization's note, whose control point inherits from the organization's; empty for a personal note.
     organizationId: uuid("organization_id").references(() => organization.id, { onDelete: "cascade" }),
+    // Set for a team's note, whose point inherits from the team's; the organization is set with it.
+    teamId: uuid("team_id").references(() => team.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
     attachmentName: text("attachment_name"),
     attachmentType: text("attachment_type"),
