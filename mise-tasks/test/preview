@@ -52,6 +52,18 @@ check "Everyone reads it signed out" "$(json "$note_url" | level)"
 check "revoke Everyone" "$(status -b "$jar" -d '{"to":{"kind":"everyone"}}' "$base/api/notes/$id/grants/revoke")"
 check "static point readable by everyone" "$(json "$base/api/public/about" | level)"
 
+# Server pages: /print is claimed by the Worker, which renders it on each request.
+page() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$@"; }
+check "page signed out goes to sign in" "$(page "$base/print" | sed "s|$base||")"
+check "page lists my notes" "$(curl -s -b "$jar" "$base/print" | grep -c "/print/$id")"
+check "page shows a note I can read" "$(curl -s -b "$jar" "$base/print/$id" | grep -c 'edited by link')"
+check "page refuses someone else (404)" "$(page -b "$jar2" "$base/print/$id")"
+check "page sends a signed-out visitor to sign in" "$(page "$base/print/$id" | sed "s|$base||")"
+check "page with a bad id (404)" "$(page -b "$jar" "$base/print/not-a-note")"
+check "page path not routed (404)" "$(page -b "$jar" "$base/print/$id/more")"
+check "page only reads (405)" "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/print")"
+check "unclaimed path still the app (200)" "$(page "$base/printer")"
+
 # API tokens: made with the cookie, sent as Authorization: Bearer, capped at their level.
 key() { sed -n 's/.*"key":"\([^"]*\)".*/\1/p'; }
 check "tokens screen served" "$(curl -s "$base/tokens" | grep -c 'API tokens</h1>')"

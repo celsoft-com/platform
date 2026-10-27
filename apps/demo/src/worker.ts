@@ -1,4 +1,4 @@
-import { defineApp, endpoint, EndpointError, organizationPoint, teamPoint, type AppContext, type Grantee, type PlatformBindings } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, organizationPoint, page, route, teamPoint, type AppContext, type Grantee, type PlatformBindings } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
 import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -94,6 +94,31 @@ async function addGroupNote(app: App, values: { organizationId: string; teamId: 
   return note;
 }
 
+const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+const printable = (title: string, body: string) =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>` +
+  `<style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}main{max-width:40rem;margin:2rem auto;padding:0 1rem}.body{white-space:pre-wrap}.meta{opacity:.7}</style></head>` +
+  `<body><main>${body}<p><a href="/#/notes">Back to the app</a></p></main></body></html>`;
+
+// Pages the Worker renders on each request: /print lists the signed-in person's own notes, sending
+// anyone signed out to sign in first, and /print/<id> shows one note to whoever can read it.
+const print = page({
+  path: "/print",
+  routes: {
+    "/": route({ access: "none" }, async (_, app: App) => {
+      const me = await app.requireUser();
+      const mine = await app.db.select(columns).from(notes).where(and(eq(notes.userId, me.id), isNull(notes.organizationId))).orderBy(desc(notes.createdAt)).limit(100);
+      const items = mine.map((n) => `<li><a href="/print/${n.id}">${escape(n.body.slice(0, 80))}</a></li>`).join("");
+      return printable("Your notes", `<h1>Your notes</h1>${items ? `<ul>${items}</ul>` : "<p>You have no notes of your own yet.</p>"}`);
+    }),
+    "/:id": route({ params: NoteId, access: { point: "id", level: "read" } }, async ({ id }, app: App) => {
+      const note = await sharedNote(app, id);
+      return printable(note.body.slice(0, 60), `<h1>Note</h1><p class="meta">By ${escape(note.author)}, ${note.createdAt.toISOString().slice(0, 10)}; you may ${note.level} it.</p><p class="body">${escape(note.body)}</p>`);
+    }),
+  },
+});
+
 // Everything said in a room: new notes from the server, typing notices from browsers.
 const RoomMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: GroupNote }), z.object({ type: z.literal("typing") })]);
 
@@ -145,6 +170,7 @@ export default defineApp(
   },
   {
     schema,
+    pages: [print],
     // A static point, declared here and applied at every start: anyone may read the about line.
     access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
