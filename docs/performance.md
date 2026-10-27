@@ -279,6 +279,10 @@ Measured on the PR 18 preview before and the PR 19 preview after, same Neon comp
    below it: 2.2 seconds above 100,000 points, instant for a handful.
 5. **Browser wait:** about 120ms more than the server's time, from the visitor to Cloudflare and on to
    the Worker next to the database; that is distance, not the platform.
+6. **Fresh instances:** at low traffic, 30 to 45% of requests land on a Worker instance that just
+   started, which costs about 110ms of startup and one query, the MCP sign-in plugin checking its
+   `oauth_resource` row; busy apps keep instances warm, so both fade with volume. The smoke test's
+   budgets leave that one query out.
 
 ## 11. Open decisions
 
