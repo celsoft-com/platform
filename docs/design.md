@@ -334,7 +334,7 @@ A published CLI, runtime library and app template that create and reuse each app
 
 14. **Server pages**: pages the Worker renders on each request, for share previews, pages search engines must read with per-request content, and pages that need the session or the database.
     1. **Claiming a path**: the app claims a path such as `/notes`, and the Worker answers it and everything below it, such as `/notes/7/edit`, with no static file ever served under it and no `*` to write; every path not claimed is still served from the static files.
-    2. **Claimable**: plain segments, never the root, a parameter or a trailing slash, never under a path the platform answers itself, such as `/api`, `/mcp`, `/.well-known` or the sign-in and tokens screens, and never the same as or nested in another claim.
+    2. **Claimable**: plain segments, never a parameter or a trailing slash; the root `/` may be claimed, and then claims exactly `/`, with every path below it still served from the static files; never under a path the platform answers itself, such as `/api`, `/mcp`, `/.well-known` or the sign-in and tokens screens, and never the same as or nested in another claim.
     3. **Pages in code**: `defineApp`'s `pages` declares each with `page({ path, routes })`, such as `routes: { "/": ..., "/:id": ..., "/:id/edit": ... }`, where `"/"` is the claimed path itself; text segments win over parameters, so `/new` beats `/:id`, and a path under the claim that no route matches is a 404.
     4. **Deploy**: the platform reads the claims from the Worker's code, as it reads the endpoints for the browser client, and routes each claim and everything below it to the Worker before static files.
     5. **Parameters**: a route is a function getting its `:name` segments decoded as strings, or `route({ params, access }, handler)`, whose Zod `params` checks and converts them as an endpoint's input does; a value it refuses is a 404.
@@ -344,8 +344,9 @@ A published CLI, runtime library and app template that create and reuse each app
     9. **Errors**: a thrown `EndpointError` is a small HTML page with its status and escaped message.
     10. **Signed-out visitors**: `requireUser()` outside `/api/` redirects to `/login?next=<the page>`, and `/login` returns there after signing in, only ever to a path on the same site.
     11. **Access**: with access on, every route declares `access: { point, level }`, the point a parameter or a function of the parameters, or `access: "none"`, as endpoints do; a refused signed-in caller gets a 404, and a refused signed-out visitor is sent to sign in, whether or not the point exists.
-    12. **Tokens and links**: API tokens are accepted only on `/api/`, never on pages; a link's token rides in a header pages never receive, so a link opens a note in the app, not a page.
-    13. **No framework server builds**: framework apps use their static or build-time output, and anything rendered per request is a server page in the platform's Worker.
+    12. **API tokens**: `Authorization: Bearer` is accepted on page GET and HEAD, capped at the token's level as on the API.
+    13. **Links on pages**: a refused signed-out page visit answers a tiny page whose script, finding `#link=` in the fragment, posts the token to the platform, which sets an HttpOnly, same-site cookie holding it and reloads; every request with that cookie counts the link, on pages, downloads and the API alike, so the token never appears in a URL the server sees; with no link in the fragment, the script goes to `/login?next=`.
+    14. **No framework server builds**: framework apps use their static or build-time output, and anything rendered per request is a server page in the platform's Worker.
 
 ## 14. Upgrades
 
