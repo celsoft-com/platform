@@ -428,3 +428,86 @@ describe("Pages: sign-in and access", () => {
   });
 });
 
+
+describe("Pages: caching", () => {
+  const edge = new Map<string, Response>();
+  (globalThis as { caches?: unknown }).caches = {
+    default: {
+      match: async (key: string) => edge.get(key)?.clone(),
+      put: async (key: string, response: Response) => void edge.set(key, response),
+    },
+  };
+  let runs = 0;
+  const cached = defineApp(() => new Response("handler"), {
+    pages: [
+      page({
+        path: "/news",
+        routes: {
+          "/": route({ access: "none", cache: { seconds: 60 } }, () => `<h1>news ${++runs}</h1>`),
+          "/cookie": route({ access: "none", cache: { seconds: 60 } }, () => new Response("<p>set</p>", { headers: { "content-type": "text/html", "set-cookie": "a=1" } })),
+          "/gone": route({ access: "none", cache: { seconds: 60 } }, () => {
+            throw new EndpointError(410, "gone");
+          }),
+        },
+      }),
+    ],
+  });
+  const env = (id = "v1") => ({ CF_VERSION_METADATA: { id } });
+  const visit = async (path: string, init: RequestInit = {}, version = "v1") => {
+    const response = await cached.fetch(new Request(`https://app.test${path}`, init), env(version), ctx);
+    return { status: response.status, state: response.headers.get("platform-cache"), cacheControl: response.headers.get("cache-control"), body: await response.text() };
+  };
+
+  it("P38: only a route with access none may be cached, for 1 to 3600 whole seconds", () => {
+    expect(() => page({ path: "/a", routes: { "/": route({ access: { point: () => "x", level: "read" }, cache: { seconds: 60 } }, () => "") } })).toThrow(/access: "none"/);
+    expect(() => page({ path: "/a", routes: { "/": route({ cache: { seconds: 60 } }, () => "") } })).toThrow(/access: "none"/);
+    for (const seconds of [0, 1.5, 3601]) expect(() => page({ path: "/a", routes: { "/": route({ access: "none", cache: { seconds } }, () => "") } }), String(seconds)).toThrow(/cache.seconds/);
+    expect(() => page({ path: "/a", routes: { "/": route({ access: "none", cache: { seconds: 3600 } }, () => "") } })).not.toThrow();
+  });
+
+  it("P39: a signed-out visitor's answer is kept, and the next visitor gets it without the handler running; browsers keep nothing", async () => {
+    edge.clear();
+    runs = 0;
+    expect(await visit("/news")).toEqual({ status: 200, state: "miss", cacheControl: "no-store", body: "<h1>news 1</h1>" });
+    expect(await visit("/news")).toEqual({ status: 200, state: "hit", cacheControl: "no-store", body: "<h1>news 1</h1>" });
+    expect(runs).toBe(1);
+    expect([...edge.values()][0]!.headers.get("cache-control")).toBe("public, max-age=60");
+  });
+
+  it("P40: a session, a link or a token is always answered by the handler, and nothing it answers is kept", async () => {
+    edge.clear();
+    runs = 0;
+    await visit("/news");
+    for (const headers of [{ cookie: "__Secure-better-auth.session_token=abc" }, { cookie: "theme=dark; platform_link_0123456789abcdef=t" }, { "x-access-link": "t" }]) {
+      expect((await visit("/news", { headers })).state, JSON.stringify(headers)).toBeNull();
+    }
+    expect(runs).toBe(4);
+    expect(edge.size).toBe(1);
+    expect((await visit("/news", { headers: { cookie: "theme=dark" } })).state).toBe("hit");
+  });
+
+  it("P41: errors, answers that set a cookie, and HEAD are never kept", async () => {
+    edge.clear();
+    expect((await visit("/news/gone")).status).toBe(410);
+    expect((await visit("/news/cookie")).state).toBeNull();
+    expect((await visit("/news", { method: "HEAD" })).state).toBeNull();
+    expect(edge.size).toBe(0);
+  });
+
+  it("P42: each deploy starts with nothing kept, and each query string is kept apart", async () => {
+    edge.clear();
+    runs = 0;
+    await visit("/news");
+    expect((await visit("/news", {}, "v2")).state).toBe("miss");
+    expect((await visit("/news?page=2")).state).toBe("miss");
+    expect((await visit("/news?page=2")).state).toBe("hit");
+    expect(runs).toBe(3);
+  });
+
+  it("P43: without a deploy version, as in tests and local tools, pages run as before", async () => {
+    edge.clear();
+    const response = await cached.fetch(new Request("https://app.test/news"), {}, ctx);
+    expect(response.headers.get("platform-cache")).toBeNull();
+    expect(edge.size).toBe(0);
+  });
+});

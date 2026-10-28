@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
 import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
-import { LINK_EXCHANGE_PATH } from "./link-header.js";
+import { LINK_EXCHANGE_PATH, LINK_HEADER } from "./link-header.js";
 
 // Pages the Worker renders on each request. An app claims a path such as `/notes`; the Worker then
 // answers it and every path below it, and no static file is ever served there.
@@ -20,8 +20,21 @@ export interface PageRoute<Params = any, App = AnyApp> {
   params?: z.ZodType;
   // Checked before the handler runs, as for an endpoint; with access on, every route says it.
   access?: EndpointAccess<Params>;
+  // Keeps a signed-out visitor's answer for this many seconds, shared by every visitor; only a
+  // route with access "none" may, since a cached answer skips the access check.
+  cache?: { seconds: number };
   handler: PageHandler<Params, App>;
 }
+
+// Where cached answers live: Cloudflare's Cache API in a Worker, keyed with the deploy's version.
+export interface PageCache {
+  version: string;
+  match(key: string): Promise<Response | undefined>;
+  put(key: string, response: Response): void;
+}
+
+// The longest a page may be cached; a change between deploys shows within it.
+export const MAX_CACHE_SECONDS = 3600;
 
 export interface Page {
   path: string;
@@ -37,11 +50,11 @@ const RESERVED = ["/api", "/mcp", "/.well-known", "/login", "/signup", "/forgot"
 // One route with typed, checked parameters and an access check; plain functions in `routes` get
 // their parameters as strings and declare no access.
 export function route<Schema extends z.ZodType, App = AnyApp>(
-  definition: { params: Schema; access?: EndpointAccess<z.output<Schema>> },
+  definition: { params: Schema; access?: EndpointAccess<z.output<Schema>>; cache?: { seconds: number } },
   handler: PageHandler<z.output<Schema>, App>,
 ): PageRoute<z.output<Schema>, App>;
-export function route<App = AnyApp>(definition: { access?: EndpointAccess<Record<string, string>> }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
-export function route(definition: { params?: z.ZodType; access?: EndpointAccess }, handler: PageHandler): PageRoute {
+export function route<App = AnyApp>(definition: { access?: EndpointAccess<Record<string, string>>; cache?: { seconds: number } }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
+export function route(definition: { params?: z.ZodType; access?: EndpointAccess; cache?: { seconds: number } }, handler: PageHandler): PageRoute {
   return { ...definition, handler };
 }
 
@@ -62,6 +75,11 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
     const shape = (r.params as { shape?: Record<string, unknown> } | undefined)?.shape;
     if (r.params) for (const name of names) if (!shape || !(name in shape)) throw new Error(`page ${path}${key} has :${name}, which its params schema does not have`);
     checkAccessDeclaration(r.access, shape ? Object.keys(shape) : names, `page ${path}${key}`);
+    if (r.cache !== undefined) {
+      if (r.access !== "none") throw new Error(`page ${path}${key} asks to be cached, but a cached page is shared by every visitor and skips its access check; give it access: "none", or drop cache`);
+      const seconds = r.cache.seconds;
+      if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_CACHE_SECONDS) throw new Error(`page ${path}${key}: cache.seconds is a whole number from 1 to ${MAX_CACHE_SECONDS}`);
+    }
     routes[key] = r;
   }
   if (Object.keys(routes).length === 0) throw new Error(`page ${path} has no routes`);
@@ -107,8 +125,8 @@ export interface PageServer {
   // Whether a path is a claimed one.
   owns(pathname: string): boolean;
   // The answer for a claimed path, or undefined for any other. `canSignIn` says the app has a
-  // sign-in screen to send refused visitors to.
-  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean): Promise<Response | undefined>;
+  // sign-in screen to send refused visitors to; `cache` holds the answers of routes that ask.
+  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean, cache?: PageCache): Promise<Response | undefined>;
 }
 
 export function pageServer(pages: readonly Page[]): PageServer | undefined {
@@ -144,7 +162,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
     claims,
     undeclared,
     owns: (pathname) => claimOf(pathname) !== undefined,
-    async handle(request, url, app, canSignIn) {
+    async handle(request, url, app, canSignIn, cache) {
       const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
@@ -164,6 +182,12 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         if (!checked.success) return notFound();
         params = checked.data;
       }
+      const seconds = found.route.cache?.seconds;
+      const key = seconds && cache && request.method === "GET" && !personal(request) ? cacheKey(url, cache.version) : undefined;
+      if (key) {
+        const hit = await cache!.match(key);
+        if (hit) return withCacheState(hit, "hit");
+      }
       let answer: PageResult;
       try {
         await requireAccess(found.route.access, params, app);
@@ -175,9 +199,31 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         return html(errorPage(thrown.status, thrown.message), thrown.status);
       }
       const response = typeof answer === "string" ? html(answer, 200) : answer;
+      if (key && response.status === 200 && !response.headers.has("set-cookie")) {
+        const kept = new Response(response.clone().body, response);
+        kept.headers.set("cache-control", `public, max-age=${seconds}`);
+        cache!.put(key, kept);
+        return withCacheState(response, "miss");
+      }
       return request.method === "HEAD" ? new Response(null, response) : response;
     },
   };
+}
+
+// A request that says who is asking, by a session, a share link or a token, is always answered by
+// the handler, so nothing personal is ever stored and nothing stored is ever shown in its place.
+const personal = (request: Request) =>
+  request.headers.has("authorization") || request.headers.has(LINK_HEADER) || /(?:^|;\s*)(?:__Secure-)?[\w.-]*session_token=|(?:^|;\s*)platform_link_/.test(request.headers.get("cookie") ?? "");
+
+// Under a path no page can claim, since `!` is never in one, so a visitor can never ask for a key.
+const cacheKey = (url: URL, version: string) => `${url.origin}/!page-cache/${encodeURIComponent(version)}${url.pathname}${url.search}`;
+
+// The browser never keeps a page; only the edge does, so a visitor who signs in sees their own.
+function withCacheState(response: Response, state: "hit" | "miss"): Response {
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  headers.set("platform-cache", state);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 const notFound = () => html(errorPage(404, "There is nothing here."), 404);
