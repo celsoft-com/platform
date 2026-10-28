@@ -341,15 +341,21 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Pages in code**: `defineApp`'s `pages` declares each with `page({ path, routes })`, such as `routes: { "/": ..., "/:id": ..., "/:id/edit": ... }`, where `"/"` is the claimed path itself; text segments win over parameters, so `/new` beats `/:id`, and a path under the claim that no route matches is a 404.
     4. **Deploy**: the platform reads the claims from the Worker's code, as it reads the endpoints for the browser client, and routes each claim and everything below it to the Worker before static files.
     5. **Parameters**: a route is a function getting its `:name` segments decoded as strings, or `route({ params, access }, handler)`, whose Zod `params` checks and converts them as an endpoint's input does; a value it refuses is a 404.
-    6. **Rendering**: a handler returns HTML as a string, sent uncached as `text/html`; server pages are never cached, since only static files are, which Cloudflare serves without the Worker, and turning on Workers Cache would bill every static file request and make a signed-in page leaking to another visitor one platform bug away; or a whole `Response` such as a redirect; it renders with any library the app likes, with `app.db`, `app.session()` and `app.access` available.
-    7. **Methods**: pages answer GET and HEAD only; changes go through endpoints.
-    8. **Assets**: a claimed page links its CSS, scripts and images from unclaimed paths such as `/assets/`, as the auth screens do with an app stylesheet.
-    9. **Errors**: a thrown `EndpointError` is a small HTML page with its status and escaped message.
-    10. **Signed-out visitors**: `requireUser()` outside `/api/` redirects to `/login?next=<the page>`, and `/login` returns there after signing in, only ever to a path on the same site.
-    11. **Access**: with access on, every route declares `access: { point, level }`, the point a parameter or a function of the parameters, or `access: "none"`, as endpoints do; a refusal is one 404 whether or not the point exists, whose script takes a `#link=` token as item 13 says, and otherwise sends a signed-out visitor to sign in.
-    12. **API tokens**: `Authorization: Bearer` is accepted on page GET and HEAD, capped at the token's level as on the API.
-    13. **Links on pages**: a refused signed-out page visit answers a tiny page whose script, finding `#link=` in the fragment, posts the token to the platform, which sets an HttpOnly, same-site cookie holding it and reloads; every request with that cookie counts the link, on pages, downloads and the API alike, so the token never appears in a URL the server sees; with no link in the fragment, the script goes to `/login?next=`.
-    14. **No framework server builds**: framework apps use their static or build-time output, and anything rendered per request is a server page in the platform's Worker.
+    6. **Rendering**: a handler returns HTML as a string, sent as `text/html`, or a whole `Response` such as a redirect; it renders with any library the app likes, with `app.db`, `app.session()` and `app.access` available.
+    7. **Caching (proposed, not built)**: static files are cached by Cloudflare, free, without the Worker; auth and API responses are never cached; a server page is uncached unless its route opts in with `cache: { seconds }`.
+        1. **Public only**: only a route declared `access: "none"` or readable by everyone may opt in; asking on any other route stops the deploy with a fix, and per-person caching is not offered.
+        2. **Cache API**: the Worker stores and reads copies with Cloudflare's Cache API, so static files stay free; Workers Cache is not used, since turning it on bills every static file request.
+        3. **Never personal**: a request carrying a session or token is answered by the handler, not the cache, and a stored copy never carries `Set-Cookie`.
+        4. **Fresh on deploy**: the cache key includes the deploy's version, so every deploy starts empty with no purge call; between deploys a change shows within the route's `seconds`.
+        5. **Cost**: a hit is still a billed Worker request, the same as today, but skips the handler and its queries; the Worker runs next to the database, so one data center's cache serves every visitor.
+    8. **Methods**: pages answer GET and HEAD only; changes go through endpoints.
+    9. **Assets**: a claimed page links its CSS, scripts and images from unclaimed paths such as `/assets/`, as the auth screens do with an app stylesheet.
+    10. **Errors**: a thrown `EndpointError` is a small HTML page with its status and escaped message.
+    11. **Signed-out visitors**: `requireUser()` outside `/api/` redirects to `/login?next=<the page>`, and `/login` returns there after signing in, only ever to a path on the same site.
+    12. **Access**: with access on, every route declares `access: { point, level }`, the point a parameter or a function of the parameters, or `access: "none"`, as endpoints do; a refusal is one 404 whether or not the point exists, whose script takes a `#link=` token as item 13 says, and otherwise sends a signed-out visitor to sign in.
+    13. **API tokens**: `Authorization: Bearer` is accepted on page GET and HEAD, capped at the token's level as on the API.
+    14. **Links on pages**: a refused signed-out page visit answers a tiny page whose script, finding `#link=` in the fragment, posts the token to the platform, which sets an HttpOnly, same-site cookie holding it and reloads; every request with that cookie counts the link, on pages, downloads and the API alike, so the token never appears in a URL the server sees; with no link in the fragment, the script goes to `/login?next=`.
+    15. **No framework server builds**: framework apps use their static or build-time output, and anything rendered per request is a server page in the platform's Worker.
 
 ## 14. Upgrades
 
