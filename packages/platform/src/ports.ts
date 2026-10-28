@@ -1,3 +1,4 @@
+import type { StaticPoint } from "./runtime/access.js";
 export interface Branch {
   id: string;
   name: string;
@@ -8,6 +9,8 @@ export interface Neon {
   listsProjects(): Promise<boolean>;
   endpointHosts(project: string): Promise<string[]>;
   postgresVersion(project: string): Promise<number>;
+  // The project's region as Neon names it, such as aws-us-east-2.
+  region(project: string): Promise<string>;
   defaultBranch(project: string): Promise<Branch>;
   findBranch(project: string, name: string): Promise<Branch | undefined>;
   listBranches(project: string, namePrefix: string): Promise<Branch[]>;
@@ -116,6 +119,9 @@ export interface Migrator {
   generate(custom?: string): Promise<void>;
   upToDate(): Promise<boolean>;
   migrate(databaseUrl: string): Promise<void>;
+  // Installs the platform's access triggers and writes the app's static control points, read from
+  // its Worker; run after migrations.
+  prepareAccess(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
   forgetSigningKeys(databaseUrl: string): Promise<void>;
 }

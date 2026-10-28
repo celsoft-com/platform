@@ -228,21 +228,86 @@ and cost saved on every request.
 4. **Prod (proposed):** sampled timings, such as one request in a thousand, sent to the app's logs
    through Workers observability, never to the client.
 
-## 9. Order of work (proposed)
+## 9. Status
 
-Ordered by waste removed per change, each measured on its preview before the next:
+Built in PR 19, each measured on its preview before the next:
 
-1. **Remove waste:** static points at deploy, session without queries, checks once per request,
-   auth built once, demo refreshes only what changed.
-2. **Shorten distance:** placement next to the database.
-3. **Cut round trips:** access inside the app's query, batching, single-statement platform writes.
-4. **Cheaper checks:** the ancestor table.
-5. **Load test:** find the ceiling on today's hardware.
-6. **Access in memory:** only if the load test shows checks still bind.
+| # | Change | Section | Built |
+| --- | --- | --- | --- |
+| 1 | Better Auth built once per Worker instance, reaching each request's connection | 6.4, 6.5 | Yes |
+| 2 | No `set-auth-jwt` header, so a session lookup runs no query | 6.4 | Yes |
+| 3 | Each point's level asked once per request | 6.3.3 | Yes |
+| 4 | Static points and access triggers written at deploy | 6.5.1 | Yes |
+| 5 | Worker placed next to the database | 6.1 | Yes |
+| 6 | Stored chains (`access_ancestor`) and per-grantee indexes | 6.3.2 | Yes |
+| 7 | The rules in a PL/pgSQL function, planned once per connection | 6.6.3 | Yes, in place of prepared statements |
+| 8 | API tokens checked in one query, last use written hourly | 6.4 | Yes |
+| 9 | Per-caller rate limit, `rateLimit` in `platform.jsonc` | 6.11 | Yes |
+| 10 | MCP SDK loaded only on `/mcp`; the Worker minified and Kysely stubbed | 6.5.4 | Yes; the bundle went from 4.9 MB to 2.0 MB and loading it in Node from 96ms to 79ms |
+| 11 | Demo panel: one query per kind of name, reads together, redraws alone | 6.8.1 | Yes |
+| 12 | Server-Timing on previews and `dev`; budgets in the smoke test; `mise run test:perf` | 8 | Yes |
+| 13 | Access folded into the app's own query for single reads | 6.2.1 | Decided against: the check stays explicit, shaped to the points it checks, so an app can handle a refusal its own way; a read is 2 round trips |
+| 14 | Conditional requests | 6.8.2 | Yes: JSON reads carry an `ETag`, unchanged repeats answer 304 |
+| 15 | Prod sampling, `pg_stat_statements` in the load test | 8 | Yes: prod logs one request in 100; `test:perf` prints `db stats` |
+| 16 | Access in Durable Objects | 6.3.4 | Not needed: a check is 0.26ms of database time |
 
-## 10. Open decisions
+## 10. Results
 
-Sections 6.1, 6.3.3, 6.4, 6.5.1, 6.5.4 and 6.8.1, and the trace in 8.1, are items on the
-[performance decisions page](https://claude.ai/artifact/K11uC7jybNXceuoKYHajYR). The rule in
-section 2, the targets in section 3, and sections 6.2, 6.3.2, 6.3.4, 6.5.2, 6.6, 6.8.2 and 6.11,
-the smoke test budgets, the load test and the order of work are proposed here for the first time.
+Measured on the PR 18 preview before and the PR 19 preview after, same Neon compute, same region,
+`mise run test:perf`:
+
+| Request | Server time before | After | Queries before | After |
+| --- | --- | --- | --- | --- |
+| Session | 335ms | 0ms | 2 | 0 |
+| List my notes | 483ms | 18ms | 3 | 1 |
+| Read a note | 811ms | 30ms | 5 | 2 |
+| Permissions panel | 1,731ms | 47ms | 11 | 5 |
+| Make a link | 956ms | 52ms | 6 | 4 |
+| Server page | 427ms | 31ms | 5 | 2 |
+
+1. **Under load:** before, 150 reads at 10 at once ran at 12 a second with 22 failures; after, 6,000
+   reads at 300 at once ran at 563 a second with none, and at 150 at once the server's median was
+   60ms. Past that, the preview's small Neon compute is the limit: queries queue inside it.
+2. **Access at scale (local Postgres):** with 1,000 teams, a 20-deep chain and 10,000 grants on one
+   point, a check went from 400ms to 1.4ms; a 50-row page filtered from 100,000 points takes 9ms;
+   one check is 0.26ms of database time signed in, 0.035ms signed out.
+3. **Costs:** no new services or larger compute. Fewer queries and no planning lower Neon compute
+   time per request; placement and the rate limiting binding carry no listed charge. The one added
+   cost is storage: `access_ancestor` holds one row per point per level of its chain, so a million
+   points three deep is about three million small rows.
+4. **Writes that got dearer:** moving a point, or changing whether it inherits, rewrites the chains
+   below it: 2.2 seconds above 100,000 points, instant for a handful.
+5. **Browser wait:** about 120ms more than the server's time, from the visitor to Cloudflare and on to
+   the Worker next to the database; that is distance, not the platform.
+6. **Fresh instances:** at low traffic, 30 to 45% of requests land on a Worker instance that just
+   started, which costs about 110ms of startup and one query, the MCP sign-in plugin checking its
+   `oauth_resource` row; busy apps keep instances warm, so both fade with volume. The smoke test's
+   budgets leave that one query out.
+
+## 11. Open decisions
+
+The rule in section 2 and the targets in section 3 are proposed here. The
+[performance decisions page](https://claude.ai/artifact/K11uC7jybNXceuoKYHajYR) predates this work.
+
+Approved on a readiness decisions page, not built yet:
+
+1. **Inheritance lock:** `inherit` takes the same tree lock as create, move and remove, so two
+   changes at once cannot leave a stored chain stale.
+2. **Chains under concurrency:** a test runs many tree changes at once, then compares every stored
+   chain with a fresh walk of the tree.
+3. **Large data on previews:** `mise run test:perf` can seed the preview with a large tree before
+   its load test; opt-in, not part of every smoke test.
+4. **Startup:** profile what a fresh Worker loads, and load what a request does not need only when
+   first used.
+5. **Conditional requests:** reads answer with an ETag, and a matching `If-None-Match` gets a 304
+   (item 14 of section 9).
+6. **Prod sampling:** prod records Server-Timing for a small share of requests into the Worker's
+   logs, and the load test reads `pg_stat_statements` (item 15 of section 9).
+7. **Bad tokens:** a token's own allowance is still checked before any lookup; a token that fails
+   its check also spends from the caller's address allowance, and an address with none left gets a
+   429 for its tokens for a minute, before any lookup.
+8. **Session cache:** the signed cookie keeps a session for 1 minute instead of 5, so a revoke or
+   ban reaches every browser within a minute.
+9. **Live rate limit:** the preview smoke test makes one throwaway token and sends it past the
+   app's normal limit, about 1200 requests, expecting a 429 with `retry-after`; no preview-only
+   setting.

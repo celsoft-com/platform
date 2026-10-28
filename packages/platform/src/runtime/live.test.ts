@@ -168,7 +168,7 @@ describe("live routes", () => {
 
   it("serves the browser client as a module", async () => {
     const response = await defineApp(() => new Response("app")).fetch(new Request("https://x/api/live/client.js"), env, ctx);
-    expect(await response.text()).toMatch(/^export function live\(/);
+    expect(await response.text()).toMatch(/^export const live = function live\(/);
   });
 
   it("refuses to join unless the app's canJoin agrees", async () => {

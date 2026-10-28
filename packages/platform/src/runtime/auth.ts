@@ -42,7 +42,7 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     session: {
       // Most requests read the session from a signed cookie instead of the database; a revoked
       // session therefore keeps working until this copy expires.
-      cookieCache: { enabled: true, maxAge: 5 * 60 },
+      cookieCache: { enabled: true, maxAge: 60 },
     },
     emailAndPassword: {
       enabled: true,
@@ -88,7 +88,9 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
       }),
       // The OAuth server AI clients sign in through to reach the app's MCP endpoints; its tokens
       // are JWTs bound to the app's /mcp, signed with keys the JWT plugin keeps.
-      jwt(),
+      // Without this, every session lookup signs a JWT into a set-auth-jwt header, reading the
+      // signing keys from the database; nothing the platform serves reads that header.
+      jwt({ disableSettingJwtHeader: true }),
       mcp({
         loginPage: "/login",
         consentPage: "/consent",

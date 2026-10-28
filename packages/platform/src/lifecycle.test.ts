@@ -138,6 +138,31 @@ describe("auth and email", () => {
   const authConfig: Config = { ...config, auth: { organizations: false, apiTokens: false }, email: true };
   const authCtx = (dryRun = false): Context => ({ ...ctx(dryRun), config: authConfig });
 
+  it("runs the Worker next to the database: the Neon project's region becomes the placement hint", async () => {
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys[0]!.config.placement).toEqual({ region: "aws:us-east-2" });
+    ports.neon.regionId = "azure-gwc";
+    await deploy(ctx(), { kind: "preview", pr: 3 });
+    expect(ports.wrangler.deploys[1]!.config.placement).toEqual({ region: "azure:germanywestcentral" });
+    ports.neon.regionId = "elsewhere-1";
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys[2]!.config.placement).toBeUndefined();
+  });
+
+  it("writes the access triggers and the app's static points after migrations, on prod and previews, and never without auth", async () => {
+    const points = { about: { grants: [{ to: { everyone: true as const }, level: "read" as const }] } };
+    await deploy({ ...authCtx(), staticPoints: points }, { kind: "prod" });
+    expect(ports.migrator.points).toEqual([{ databaseUrl: ports.migrator.runs.at(-1), points }]);
+    expect(log.some((line) => line.includes("write access triggers and static control points about"))).toBe(true);
+    await deploy({ ...authCtx(), staticPoints: points }, { kind: "preview", pr: 7 });
+    expect(ports.migrator.points).toHaveLength(2);
+    expect(ports.migrator.points[1]!.databaseUrl).toBe(ports.migrator.runs.at(-1));
+    await deploy({ ...ctx(), staticPoints: points }, { kind: "prod" });
+    expect(ports.migrator.points).toHaveLength(2);
+    await deploy({ ...authCtx(), staticPoints: {} }, { kind: "prod" });
+    expect(ports.migrator.points.at(-1)!.points).toEqual({});
+  });
+
   it("routes each path the app's pages claim, and everything below it, to the Worker before static files", async () => {
     await deploy({ ...ctx(), pages: ["/notes", "/docs/guide"] }, { kind: "prod" });
     const routed = (ports.wrangler.deploys[0]!.config.assets as { run_worker_first: string[] }).run_worker_first;
@@ -155,6 +180,7 @@ describe("auth and email", () => {
     expect(Object.keys(first.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
     expect(first.config.vars).toEqual({
       APP_URL: "https://demo.example.com",
+      TRACE: "sample",
       APP_NAME: "demo",
       LIVE_ROOMS: "off",
       AUTH_ORGANIZATIONS: "off",
@@ -164,7 +190,14 @@ describe("auth and email", () => {
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
     });
-    expect(first.config.ratelimits).toEqual([{ name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } }]);
+    expect(first.config.ratelimits).toEqual([
+      { name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } },
+      { name: "API_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 1200, period: 60 } },
+    ]);
+    const [authLimit, apiLimit] = first.config.ratelimits as { namespace_id: string }[];
+    expect(authLimit!.namespace_id).not.toBe(apiLimit!.namespace_id);
+    expect(first.config.minify).toBe(true);
+    expect(first.config.alias).toEqual({ kysely: "./no-kysely.cjs", "@better-auth/kysely-adapter": "./no-kysely.cjs" });
     expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
     expect(first.config.main).toBe("entry.ts");
     expect(first.config.durable_objects).toEqual({ bindings: [{ name: "LIVE", class_name: "LiveRoom" }] });

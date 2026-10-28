@@ -101,8 +101,8 @@ export interface Access {
 
 export interface Caller {
   userId: string | null;
-  // A link token the request carries, as the `x-access-link` header.
-  link: string | null;
+  // The link tokens the request carries: the `x-access-link` header and the link cookies.
+  link: string | readonly string[] | null;
   // The highest level an API token may use, when the caller is one; every check gives at most this.
   cap?: Level | null;
 }
@@ -114,7 +114,7 @@ export const organizationPoint = (organizationId: string) => `organization:${org
 export const teamPoint = (teamId: string) => `team:${teamId}`;
 
 const RESERVED = /^(organization|team):/;
-const [READ, CREATE, WRITE, DELETE, MANAGE] = [1, 2, 3, 4, 5];
+export const [READ, CREATE, WRITE, DELETE, MANAGE] = [1, 2, 3, 4, 5];
 
 type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute" | "transaction">;
 
@@ -143,6 +143,24 @@ export function shareMessage(notice: ShareNotice, appName: string, origin: strin
   };
 }
 
+// At most this many link tokens count on one request, so a pile of cookies cannot slow every check.
+export const MAX_LINKS = 20;
+
+function linkTokens(link: Caller["link"]): string[] {
+  const all = link === null ? [] : typeof link === "string" ? [link] : [...link];
+  return [...new Set(all.filter((t) => typeof t === "string" && t.length > 0 && t.length <= 200))].slice(0, MAX_LINKS);
+}
+
+// The point a link token opens and when it stops, or null for a token that is unknown or expired.
+export async function linkTarget(db: Db, token: string): Promise<{ point: string; expires: Date | null } | null> {
+  if (token.length === 0 || token.length > 200) return null;
+  const [row] = await rows<{ point_id: string; expires_at: Date | string | null }>(
+    db,
+    sql`select point_id, expires_at from access_link where token_hash = ${await hashToken(token)} and (expires_at is null or expires_at > now())`,
+  );
+  return row ? { point: row.point_id, expires: row.expires_at === null ? null : new Date(row.expires_at) } : null;
+}
+
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -155,7 +173,7 @@ function newToken(): string {
 
 interface Who {
   userId: string | null;
-  linkHash: string | null;
+  linkHashes: string[];
   app: boolean;
   cap: number | null;
 }
@@ -164,12 +182,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A user id that is not a UUID can match nobody, so it is treated as no user at all.
 const userParam = (userId: string | null) => (userId && UUID.test(userId) ? userId : null);
 
-// The caller's level on one point, 0 for none, as a scalar subquery. The chain is the point and,
-// while each point inherits, its parents. Each of the caller's principals (the person, by user id
-// or confirmed email, each team, each organization, and Everyone) stops at its nearest grant on
-// the chain, and the highest of those wins; organization and team grants count only on points of
-// their own organization or none. The organization's Admins get `manage`, and a link counts only
-// on the point it was made for.
+// The caller's level on one point, 0 for none, as an expression any query can use: a call of
+// platform_access_level, which access-sql.ts installs and which holds the rules.
 function levelSql(point: SQL, who: Who): SQL {
   const level = uncappedLevelSql(point, who);
   return who.cap === null ? level : sql`least(${level}, ${who.cap})`;
@@ -178,49 +192,25 @@ function levelSql(point: SQL, who: Who): SQL {
 function uncappedLevelSql(point: SQL, who: Who): SQL {
   if (who.app) return sql`(select case when exists (select 1 from access_point where id = (${point})) then ${MANAGE} else 0 end)`;
   const userId = userParam(who.userId);
-  // The point is read once, in a query with no tables of its own, so a column the app passes,
-  // such as `p.id`, always means the app's row; every name inside starts with `_ac` for the same reason.
-  return sql`(
-    with recursive _ac_target as (select (${point}) as id),
-    _ac_chain as (
-      select _ac_p.id, _ac_p.parent_id, _ac_p.inherits, _ac_p.organization_id, 0 as depth
-      from access_point _ac_p where _ac_p.id = (select id from _ac_target)
-      union all
-      select _ac_q.id, _ac_q.parent_id, _ac_q.inherits, _ac_q.organization_id, _ac_c.depth + 1
-      from _ac_chain _ac_c join access_point _ac_q on _ac_q.id = _ac_c.parent_id
-      where _ac_c.inherits and _ac_c.depth < ${MAX_DEPTH - 1}
-    ),
-    _ac_me as (select _ac_u.id, case when _ac_u.email_verified then lower(_ac_u.email) end as email from "user" _ac_u where _ac_u.id = ${userId}::uuid),
-    _ac_orgs as (select _ac_m.organization_id from member _ac_m join _ac_me on _ac_m.user_id = _ac_me.id),
-    _ac_teams as (
-      select _ac_tm.team_id, _ac_t.admins, _ac_t.organization_id from team_member _ac_tm
-      join _ac_me on _ac_tm.user_id = _ac_me.id
-      join team _ac_t on _ac_t.id = _ac_tm.team_id
-      join _ac_orgs on _ac_orgs.organization_id = _ac_t.organization_id
-    ),
-    _ac_matched as (
-      select _ac_c.depth, _ac_g.level,
-        case when _ac_g.user_id is not null or _ac_g.email is not null then 'person'
-             when _ac_g.team_id is not null then 'team ' || _ac_g.team_id
-             when _ac_g.organization_id is not null then 'organization ' || _ac_g.organization_id
-             else 'everyone' end as principal
-      from _ac_chain _ac_c join access_grant _ac_g on _ac_g.point_id = _ac_c.id
-      where _ac_g.everyone
-         or _ac_g.user_id = (select id from _ac_me)
-         or _ac_g.email = (select email from _ac_me)
-         or (_ac_g.organization_id in (select organization_id from _ac_orgs) and (_ac_c.organization_id is null or _ac_c.organization_id = _ac_g.organization_id))
-         or exists (select 1 from _ac_teams _ac_x where _ac_x.team_id = _ac_g.team_id and (_ac_c.organization_id is null or _ac_c.organization_id = _ac_x.organization_id))
-    ),
-    _ac_nearest as (select distinct on (principal) level from _ac_matched order by principal, depth, level desc),
-    _ac_levels as (
-      select level from _ac_nearest
-      union all
-      select ${MANAGE} from _ac_chain _ac_c join _ac_teams _ac_x on _ac_x.admins and _ac_x.organization_id = _ac_c.organization_id where _ac_c.depth = 0
-      union all
-      select _ac_l.level from access_link _ac_l
-      where _ac_l.point_id = (select id from _ac_target) and _ac_l.token_hash = ${who.linkHash} and (_ac_l.expires_at is null or _ac_l.expires_at > now())
-    )
-    select coalesce(max(level), 0) from _ac_levels
+  if (!userId && who.linkHashes.length === 0) {
+    // Signed out with no link: only Everyone's grants can count, so no principal is looked up.
+    return sql`platform_access_level((${point})::text, null, null, '{}', '{}', '{}', '{}')`;
+  }
+  // The caller's principals are subqueries that never read the point, so Postgres works each out
+  // once per statement, however many rows a list filter checks; platform_access_level does the rest.
+  const memberTeams = (admins: boolean) => sql`
+    from team_member _ac_tm
+    join team _ac_t on _ac_t.id = _ac_tm.team_id ${admins ? sql`and _ac_t.admins` : sql``}
+    join member _ac_m on _ac_m.organization_id = _ac_t.organization_id and _ac_m.user_id = _ac_tm.user_id
+    where _ac_tm.user_id = ${userId}::uuid`;
+  return sql`platform_access_level(
+    (${point})::text,
+    ${userId}::uuid,
+    (select case when _ac_u.email_verified then lower(_ac_u.email) end from "user" _ac_u where _ac_u.id = ${userId}::uuid),
+    array(select _ac_m.organization_id from member _ac_m where _ac_m.user_id = ${userId}::uuid),
+    array(select _ac_tm.team_id ${memberTeams(false)}),
+    array(select _ac_t.organization_id ${memberTeams(true)}),
+    ${`{${who.linkHashes.join(",")}}`}::text[]
   )`;
 }
 
@@ -349,22 +339,32 @@ async function checkSameOrganization(on: Db, point: PointRow, g: GranteeColumns)
 export interface AccessOptions {
   // Announces a new grant to a person, after the answer.
   notify?: (notice: ShareNotice) => Promise<void>;
-  // Waited for before the first call, such as applying the app's static points.
-  ready?: () => Promise<void>;
+  // The caller's levels already found in this request, by point; any change to access clears it.
+  // Pass one to clear it from outside, as organization changes do.
+  memo?: Map<string, number>;
 }
 
+// The calls that change access, after which no level found earlier can be trusted.
+const WRITES = ["create", "move", "remove", "inherit", "grant", "revoke", "link", "revokeLink"] as const;
+
 export function createAccess(db: Db, caller: () => Promise<Caller>, options: AccessOptions = {}): Access {
-  const { notify, ready } = options;
+  const { notify } = options;
+  const memo = options.memo ?? new Map<string, number>();
   let human: Promise<Who> | undefined;
   const person = () =>
-    (human ??= Promise.all([caller(), ready?.()]).then(async ([{ userId, link, cap }]) => ({ userId, linkHash: link ? await hashToken(link) : null, app: false, cap: cap ? rank(cap) : null })));
-  const asApp: () => Promise<Who> = async () => (await ready?.(), { userId: null, linkHash: null, app: true, cap: null });
+    (human ??= caller().then(async ({ userId, link, cap }) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
+  const asApp: () => Promise<Who> = async () => ({ userId: null, linkHashes: [], app: true, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
+    // A request asks about one point once; inside a transaction or as the app, it always asks.
     async function levelOf(at: Db, point: string): Promise<number> {
       checkPointId(point);
+      const remembered = at === db && me === person;
+      if (remembered && memo.has(point)) return memo.get(point)!;
       const [row] = await rows<{ level: number }>(at, sql`select ${levelSql(sql`${point}`, await me())} as level`);
-      return Number(row?.level ?? 0);
+      const level = Number(row?.level ?? 0);
+      if (remembered) memo.set(point, level);
+      return level;
     }
 
     async function need(at: Db, point: string, level: number): Promise<number> {
@@ -413,7 +413,7 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       return { g, n };
     }
 
-    return {
+    const api: Access = {
       async point(point) {
         await need(on, point, READ);
         const row = (await pointRow(on, point))!;
@@ -493,8 +493,12 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       },
 
       async inherit(point, inherits) {
-        await changeable(on, point, MANAGE);
-        await on.execute(sql`update access_point set inherits = ${inherits}, updated_at = now() where id = ${point}`);
+        await on.transaction(async (raw) => {
+          const tx = raw as unknown as Db;
+          await lockTree(tx);
+          await changeable(tx, point, MANAGE);
+          await tx.execute(sql`update access_point set inherits = ${inherits}, updated_at = now() where id = ${point}`);
+        });
       },
 
       async grant(point, to, level, options = {}) {
@@ -565,13 +569,26 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       in: (tx) => bound(tx as Db, me),
       asApp: () => bound(on, asApp),
     };
+    for (const name of WRITES) {
+      const write = api[name] as (...args: unknown[]) => Promise<unknown>;
+      (api as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        memo.clear();
+        try {
+          return await write(...args);
+        } finally {
+          memo.clear();
+        }
+      };
+    }
+    return api;
   }
 
   return bound(db, person);
 }
 
 // Writes the app's static points, as declared in code: each is created or updated, and its grants
-// replaced. Points no longer declared are left alone. Run once per Worker start, before any check.
+// replaced. Points no longer declared are left alone. Run by every deploy after migrations, so
+// requests never write them.
 export async function applyStaticPoints(db: Db, points: Record<string, StaticPoint>): Promise<void> {
   const names = Object.keys(points);
   if (names.length === 0) return;

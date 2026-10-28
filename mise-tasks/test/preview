@@ -21,7 +21,7 @@ note=$(curl -s -b "$jar" -H "origin: $base" -F body="first note" -F "file=@$atta
 id=$(echo "$note" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 check "create note with attachment" "$([ -n "$id" ] && echo "id $id" || echo "$note")"
 check "list notes" "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
-check "download attachment" "$(curl -s -b "$jar" "$base/api/notes/$id/attachment")"
+check "download attachment" "$(curl -s -b "$jar" "$base/api/public/notes/$id/attachment")"
 
 # Access: the note is a control point its author manages, shared and linked through the demo's endpoints.
 json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
@@ -29,11 +29,14 @@ status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/
 level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
 note_url="$base/api/public/notes/$id"
 check "owner's level on own note" "$(json -b "$jar" "$note_url" | level)"
+etag=$(curl -s -D - -o /dev/null -b "$jar" "$note_url" | tr -d '\r' | awk 'tolower($1) == "etag:" { print $2 }')
+check "unchanged read answers 304" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
 jar2=$(mktemp)
 friend="friend-$RANDOM@example.com"
 json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null
 check "someone else's note refused (404)" "$(status -b "$jar2" "$note_url")"
-check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/notes/$id/attachment")"
+check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/public/notes/$id/attachment")"
+check "attachment refused signed out (404)" "$(status "$base/api/public/notes/$id/attachment")"
 check "share by email" "$(status -b "$jar" -d '{"email":"'$friend'","level":"write"}' "$base/api/notes/$id/shares")"
 check "unconfirmed address still refused (404)" "$(status -b "$jar2" "$note_url")"
 check "nothing shared with them yet" "$(json -b "$jar2" "$base/api/shared-notes")"
@@ -58,7 +61,13 @@ check "page signed out goes to sign in" "$(page "$base/print" | sed "s|$base||")
 check "page lists my notes" "$(curl -s -b "$jar" "$base/print" | grep -c "/print/$id")"
 check "page shows a note I can read" "$(curl -s -b "$jar" "$base/print/$id" | grep -c 'edited by link')"
 check "page refuses someone else (404)" "$(page -b "$jar2" "$base/print/$id")"
-check "page sends a signed-out visitor to sign in" "$(page "$base/print/$id" | sed "s|$base||")"
+check "page refuses a signed-out visitor (404)" "$(page "$base/print/$id")"
+check "refused page offers sign-in" "$(curl -s "$base/print/$id" | grep -c "/login?next=%2Fprint%2F$id")"
+jar3=$(mktemp)
+check "link kept as a cookie" "$(status -c "$jar3" -d '{"link":"'$read_token'"}' "$base/api/platform/link")"
+check "altered link not kept (404)" "$(status -d '{"link":"x'$read_token'"}' "$base/api/platform/link")"
+check "link cookie opens the page signed out" "$(curl -s -b "$jar3" "$base/print/$id" | grep -c 'edited by link')"
+check "link cookie downloads the attachment" "$(curl -s -b "$jar3" "$base/api/public/notes/$id/attachment")"
 check "page with a bad id (404)" "$(page -b "$jar" "$base/print/not-a-note")"
 check "page path not routed (404)" "$(page -b "$jar" "$base/print/$id/more")"
 check "page only reads (405)" "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/print")"
@@ -79,6 +88,8 @@ check "token cannot make tokens (401)" "$(status -H "authorization: Bearer $writ
 check "altered token refused (401)" "$(status -H "authorization: Bearer ${write_key}x" "$base/api/notes")"
 check "unlimited token refused (400)" "$(status -b "$jar" -d '{"name":"forever","expiresIn":"never"}' "$base/api/auth/api-key/create")"
 write_id=$(json -b "$jar" "$base/api/auth/api-key/list" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).apiKeys.find(k=>k.name==="smoke write")||{}).id||""))')
+check "read token reads a page" "$(page -H "authorization: Bearer $read_key" "$base/print/$id")"
+check "altered token refused on a page (401)" "$(page -H "authorization: Bearer ${read_key}x" "$base/print/$id")"
 check "revoke token" "$(status -b "$jar" -d '{"keyId":"'$write_id'"}' "$base/api/auth/api-key/delete")"
 check "revoked token refused (401)" "$(status -H "authorization: Bearer $write_key" "$base/api/notes")"
 
@@ -104,10 +115,13 @@ check "Better Auth's organization routes are gone (404)" "$(status -b "$jar" -d 
 cookie=$(awk '{ sub(/^#HttpOnly_/, "") } !/^#/ && NF >= 7 { printf "%s=%s; ", $6, $7 }' "$jar")
 node "$(dirname "$0")/_live.mjs" "$base" "$cookie"
 node "$(dirname "$0")/_mcp.mjs" "$base" "$email" "first-password-1"
+node "$(dirname "$0")/_budget.mjs" "$base" "$cookie" "$id"
+limit_key=$(json -b "$jar" -d '{"name":"smoke limit","metadata":{"cap":"read"}}' "$base/api/auth/api-key/create" | key)
+node "$(dirname "$0")/_limit.mjs" "$base" "$limit_key"
 
 signin='{"email":"'$email'","password":"second-password-2"}'
 check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
-check "old session (cached up to 5 minutes)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
+check "old session (cached up to 1 minute)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
 check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
 check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
-rm -f "$jar" "$jar2" "$attachment"
+rm -f "$jar" "$jar2" "$jar3" "$attachment"

@@ -54,7 +54,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 
 | # | Situation | Expected |
 | --- | --- | --- |
-| S1 | Points declared in `defineApp` | Exist with their grants before the first check |
+| S1 | Points declared in `defineApp` | Written with their grants by every deploy and `dev` after migrations; a request never writes them |
 | S2 | Declared grants change | Each start replaces them |
 | S3 | Runtime grant, revoke, inherit, link, move or remove | 409; they change only in code |
 | S4 | Parent not static, a loop, or a platform prefix | The start fails, nothing written |
@@ -62,7 +62,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | S6 | Runtime point under a static one | Allowed with `create` on it |
 | S7 | Everyone granted more than `read` | The start fails |
 | S8 | Several Workers start at once | One set of grants |
-| S9 | Applying fails | The check fails; the next one tries again |
+| S9 | Writing them fails | The deploy stops before the Worker ships, leaving the running version in place |
 
 ## Grants
 
@@ -112,6 +112,10 @@ checked against a plain reference version of these rules, in `access.model.test.
 | K7 | Making, listing, revoking links | Need `manage` |
 | K8 | Revoking with another point's link id | Revokes nothing |
 | K9 | Link and grant together | The higher wins |
+| K10 | Link token posted to `/api/platform/link` | Kept as an HttpOnly, same-site cookie for its point, until the link expires, at most 30 days; anything else is a 404 with no cookie |
+| K11 | Request with link cookies | Each counts like the header, on pages, downloads and the API; at most 20 per request |
+| K12 | Link cookie after the link is revoked or expires | Nothing, on the next request |
+| K13 | Link posted from another site's form | 403 |
 
 ## Inheritance
 
@@ -204,7 +208,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | N8 | Access on, an endpoint declares nothing | Every request answers 500, naming it in the logs |
 | N9 | Declared field missing, unknown level, bad shape | Error when the endpoint is defined |
 | N10 | Input gives no usable point id | 404, never a server error |
-| N11 | Link token | Read from the `x-access-link` header, never the query |
+| N11 | Link token | Read from the `x-access-link` header and link cookies, never the query |
 | N12 | `app.access` with access off | Error |
 
 ## API tokens
@@ -226,6 +230,41 @@ checked against a plain reference version of these rules, in `access.model.test.
 | T13 | Token on `/mcp` | 401; MCP takes only OAuth tokens |
 | T14 | `Authorization` that is not a bearer token | Ignored |
 | T15 | `/tokens` | The tokens screen |
+| T16 | A token request | One query reads the key and its owner; the last use is written at most hourly |
+| T17 | A disabled token, or a banned owner | 401; a ban that has lapsed is not a refusal |
+
+## Stored chains
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| H1 | Points that existed before the triggers | Their chains are filled by the next deploy; preparing again changes nothing |
+| H2 | A point moves or changes inheritance | Every chain through it is rewritten above it; below it stays |
+| H3 | A point is removed | Its chains and every chain through it go |
+| H4 | A chain longer than 64 points | Stops at 64, as the walk it replaced did |
+| H5 | A point is made under a point whose inheritance is changing | It waits for the change and gets the chain it leaves; every tree change takes one lock |
+| H6 | Many moves, inheritance changes, creates and removes at once | Every stored chain matches a fresh walk of the tree |
+
+## Remembered levels
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| R1 | Several checks of one point in one request | One query, every answer the same |
+| R2 | A refusal | Remembered too, still a 404 |
+| R3 | A grant, revoke, link, inherit, move or remove in the request | Everything remembered is forgotten |
+| R4 | The caller's own change, then a check | Asks the database again |
+| R5 | Inside a transaction | Always asks the database |
+| R6 | A removed point | A 404 at once |
+| R7 | Two requests | Never share what they remember |
+| R8 | Two callers | Never share a level |
+| R9 | As the app | Nothing remembered for the caller |
+| R10 | An organization or team change in the request | Everything remembered is forgotten |
+
+## Cost per request
+
+| # | Situation | Expected |
+| --- | --- | --- |
+| Q1 | A request with a fresh session cookie | Finds the caller with no query; a page read costs only its own queries |
+| U1 | The per-caller limit | Counts a signed-in person by id, a token by a hash of the token, otherwise the address |
 
 ## Attacks
 

@@ -1,10 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
+import type { StaticPoint } from "./runtime/access.js";
 import { LEGACY_BUCKET_MARKER, LEGACY_DNS_COMMENT, legacyNames } from "./legacy.js";
 import type { Branch, Hyperdrive, MailDomain, Ports, Repo, Zone } from "./ports.js";
 import type { Run } from "./run.js";
 import { names, originOf, previewHostname, previewPattern, type Target } from "./target.js";
-import { wranglerConfig } from "./wrangler-config.js";
+import { placementRegion, wranglerConfig } from "./wrangler-config.js";
 
 export interface Context {
   config: Config;
@@ -17,6 +18,8 @@ export interface Context {
   providers?: { neon: boolean; mail: boolean };
   // The paths the app's pages claim, read from its Worker.
   pages?: string[];
+  // The app's static control points, read from its Worker and written after migrations.
+  staticPoints?: Record<string, StaticPoint>;
   now?: () => Date;
 }
 
@@ -64,9 +67,11 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   }
 
   let hyperdriveId: string | undefined;
+  let placement: string | undefined;
   if (config.database) {
     const project = config.database.neonProject;
     await requirePostgres(ports.neon, project);
+    placement = placementRegion(await ports.neon.region(project));
     const prod = await ports.neon.defaultBranch(project);
 
     let copied = false;
@@ -86,6 +91,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
 
     if (uri) {
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
+      await prepareAccessOn(ctx, uri, branch.name);
       if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
     } else {
       run.note(`would run migrations on ${branch.name}`);
@@ -122,14 +128,14 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
   if (oldBucket) await copyFiles(ctx, oldBucket, n.bucket, false);
 
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}` };
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample" };
   if (config.email) {
     Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
     if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
   }
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages });
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
 
   // The old Worker kept writing to the old bucket until now, so what it added is copied before the old bucket goes.
@@ -235,10 +241,11 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     uri = await ports.neon.connectionUri(project, branch.id);
     await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
+    await prepareAccessOn(ctx, uri, DEV_BRANCH);
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
-  const vars: Record<string, string> = { APP_URL: appUrl, ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
   const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
     config,
     worker: `${config.name}-dev`,
@@ -253,6 +260,15 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${appUrl}; email is captured to this terminal`);
   await ports.wrangler.dev(local, devSecrets, uri);
+}
+
+// The access tables exist whenever auth is on; their triggers and the app's static points change
+// only with code, so they are written when code ships, never by requests.
+async function prepareAccessOn({ config, ports, run, staticPoints = {} }: Context, uri: string, branch: string): Promise<void> {
+  if (!config.auth) return;
+  const names = Object.keys(staticPoints);
+  const what = names.length > 0 ? `access triggers and static control points ${names.join(", ")}` : "access triggers";
+  await run.mutate(`write ${what} on ${branch}`, () => ports.migrator.prepareAccess(uri, staticPoints), undefined);
 }
 
 // Resend chooses these records' names, so the comment is what ties each one to its app.

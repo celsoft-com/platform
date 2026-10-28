@@ -14,6 +14,10 @@ export class FakeNeon implements Neon {
   async postgresVersion() {
     return this.pgVersion;
   }
+  regionId = "aws-us-east-2";
+  async region() {
+    return this.regionId;
+  }
   async endpointHosts() {
     return this.branches.map((b) => `${b.id}.neon.test`);
   }
@@ -250,6 +254,10 @@ export class FakeMigrator implements Migrator {
   async migrate(databaseUrl: string) {
     if (this.failWith) throw this.failWith;
     this.runs.push(databaseUrl);
+  }
+  points: { databaseUrl: string; points: Record<string, unknown> }[] = [];
+  async prepareAccess(databaseUrl: string, points: Record<string, unknown>) {
+    this.points.push({ databaseUrl, points });
   }
   dropped: string[] = [];
   async dropAll(databaseUrl: string) {

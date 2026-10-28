@@ -82,7 +82,7 @@ export async function notePage(call, id, ctx) {
       ),
     );
   } else page.append(section("Note", el("p", { className: "body", textContent: note.body })));
-  if (note.attachmentName) page.append(el("p", {}, link(`Download ${note.attachmentName}`, `/api/notes/${id}/attachment`)));
+  if (note.attachmentName) page.append(el("p", {}, link(`Download ${note.attachmentName}`, `/api/public/notes/${id}/attachment`)));
   // Rendered by the Worker, not this app: a page the platform serves at a claimed path.
   page.append(el("p", {}, link("Printable page", `/print/${id}`)));
 
@@ -106,11 +106,19 @@ export async function notePage(call, id, ctx) {
 }
 
 // Grants, links, inheritance and place: everything a manager can change on a control point.
-async function permissions(call, id, ctx) {
-  const access = await call("noteAccess", { id });
+// Where a note can move: the caller's organizations and their teams, fetched once per page.
+async function placesFor(call, ctx) {
   const orgs = ctx.me ? await call("listMyOrganizations", {}) : [];
   const teams = (await Promise.all(orgs.map(async (o) => (await request(`/api/platform/organizations/${o.id}/teams`).catch(() => [])).map((t) => ({ ...t, org: o }))))).flat();
-  const refresh = () => ctx.rerender();
+  return { orgs, teams };
+}
+
+// A change redraws only this panel, with one request; a move changes the page's header too, so
+// it redraws the page.
+async function permissions(call, id, ctx, places = placesFor(call, ctx)) {
+  const [access, { orgs, teams }] = await Promise.all([call("noteAccess", { id }), places]);
+  let panel;
+  const refresh = attempt(async () => panel.replaceWith(await permissions(call, id, ctx, places)));
 
   const grants = el(
     "ul",
@@ -197,10 +205,10 @@ async function permissions(call, id, ctx) {
     const [where, target] = to.split(":");
     await call("moveNote", { id, to: where === "personal" ? { kind: "personal" } : { kind: where, id: target } });
     flash("Moved.");
-    refresh();
+    ctx.rerender();
   }, "row");
 
-  return section(
+  return (panel = section(
     "Permissions",
     el("p", { className: "muted", textContent: "Each principal counts its nearest grant up the chain of points this note inherits from; the highest across principals wins. Organization admins always manage notes inside their organization." }),
     el("h3", { textContent: "Grants" }),
@@ -213,5 +221,5 @@ async function permissions(call, id, ctx) {
     el("label", {}, inherit, access.parent ? " Also use the grants of where this note sits" : " Personal notes sit nowhere, so there is nothing to inherit"),
     el("h3", { textContent: "Place" }),
     moveForm,
-  );
+  ));
 }

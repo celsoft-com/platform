@@ -4,10 +4,10 @@ import { Pool } from "pg";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { freshDatabase, world } from "../../test/database.js";
-import { organizationPoint, type Access, type Level } from "./access.js";
+import { applyStaticPoints, organizationPoint, type Access, type Level } from "./access.js";
 import { apiHandler, endpoint, undeclaredAccess } from "./endpoints.js";
 import { defineApp } from "./index.js";
-import { serveMcp } from "./mcp.js";
+import { serveMcp } from "./mcp-server.js";
 
 // Endpoints, lists and the Worker's wiring: rows N1 onward of docs/access-rules.md.
 
@@ -182,7 +182,10 @@ describe("Wiring", () => {
     expect(await get(`/api/public/pages/${page}`, {}, "off")).toMatchObject({ status: 500 });
   });
 
-  it("S1: the app's static points are applied before its first check", async () => {
+  it("S1: the app's static points are read by the deploy, and a request never writes them", async () => {
+    expect(app.staticPoints).toEqual({ [declared]: { grants: [{ to: { everyone: true }, level: "read" }] } });
+    expect(await get(`/api/public/pages/${declared}`, {})).toMatchObject({ status: 404 });
+    await applyStaticPoints(db, app.staticPoints);
     expect(await get(`/api/public/pages/${declared}`, {})).toEqual({ status: 200, body: { level: "read" } });
   });
 

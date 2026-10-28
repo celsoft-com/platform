@@ -46,6 +46,13 @@ export const configSchema = z
     live: z.boolean().default(false).describe("Live rooms: messages and presence over WebSockets, on Durable Objects"),
     mcp: z.boolean().default(false).describe("Serve endpoints marked for MCP at /mcp, to AI clients that sign in with OAuth; needs auth"),
     access: z.boolean().default(false).describe("Control points, grants and links through app.access; needs auth"),
+    rateLimit: z
+      .number()
+      .int()
+      .min(10)
+      .max(100_000)
+      .default(1200)
+      .describe("Requests a minute one caller may make to the API, server pages and /mcp: a signed-in person, an API token, or an address when signed out; the rest get 429"),
     previews: z
       .object({
         sendEmailTo: z

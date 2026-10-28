@@ -254,4 +254,36 @@ describe("API tokens", () => {
     expect(String(screen.body)).toContain("API tokens");
     expect(String(screen.body)).toContain("/api/auth/api-key/create");
   });
+
+  it("T16: a token request reads its key and owner in one query, and writes its last use at most hourly", async () => {
+    const p = await person();
+    const { key, id } = await token(p.cookie);
+    const traced = async () => {
+      const response = await app.fetch(new Request("https://app.test/api/me", { headers: { authorization: `Bearer ${key}` } }), env({ TRACE: "on" }) as never, ctx);
+      return response.headers.get("server-timing") ?? "";
+    };
+    await traced();
+    const lastUse = (await pool.query(`select last_request from apikey where id = $1`, [id])).rows[0].last_request;
+    expect(lastUse).not.toBeNull();
+    const timing = await traced();
+    expect(timing).toContain('desc="1 queries"');
+    expect(timing).not.toContain("update");
+    expect((await pool.query(`select last_request from apikey where id = $1`, [id])).rows[0].last_request).toEqual(lastUse);
+    await pool.query(`update apikey set last_request = now() - interval '2 hours' where id = $1`, [id]);
+    await traced();
+    expect((await pool.query(`select last_request from apikey where id = $1`, [id])).rows[0].last_request.getTime()).toBeGreaterThan(Date.now() - 60_000);
+  });
+
+  it("T17: a disabled token, or one whose owner is banned, is refused; a lapsed ban is not", async () => {
+    const p = await person();
+    const { key, id } = await token(p.cookie);
+    await pool.query(`update apikey set enabled = false where id = $1`, [id]);
+    expect((await send("/api/me", { token: key })).status).toBe(401);
+    await pool.query(`update apikey set enabled = true where id = $1`, [id]);
+    await pool.query(`update "user" set banned = true where id = $1`, [p.id]);
+    expect((await send("/api/me", { token: key })).status).toBe(401);
+    await pool.query(`update "user" set ban_expires = now() - interval '1 minute' where id = $1`, [p.id]);
+    expect(await send("/api/me", { token: key })).toMatchObject({ status: 200, body: { id: p.id } });
+  });
 });
+

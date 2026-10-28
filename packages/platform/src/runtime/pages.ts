@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
 import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
+import { LINK_EXCHANGE_PATH } from "./link-header.js";
 
 // Pages the Worker renders on each request. An app claims a path such as `/notes`; the Worker then
 // answers it and every path below it, and no static file is ever served there.
@@ -103,9 +104,11 @@ export interface PageServer {
   claims: string[];
   // Routes that say nothing about access, which an app with access on refuses to serve.
   undeclared: string[];
-  // The answer for a claimed path, or undefined for any other. `signIn` is the redirect to the
-  // sign-in screen, when the app has one.
-  handle(request: Request, url: URL, app: AnyApp, signIn: (() => Response) | undefined): Promise<Response | undefined>;
+  // Whether a path is a claimed one.
+  owns(pathname: string): boolean;
+  // The answer for a claimed path, or undefined for any other. `canSignIn` says the app has a
+  // sign-in screen to send refused visitors to.
+  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean): Promise<Response | undefined>;
 }
 
 export function pageServer(pages: readonly Page[]): PageServer | undefined {
@@ -136,11 +139,13 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
   }
   const undeclared = [...compiled.values()].flat().filter((c) => c.route.access === undefined).map((c) => `page ${c.path}${c.key === "/" ? "" : c.key}`);
 
+  const claimOf = (pathname: string) => claims.find((c) => pathname === c || pathname.startsWith(`${c}/`));
   return {
     claims,
     undeclared,
-    async handle(request, url, app, signIn) {
-      const claim = claims.find((c) => url.pathname === c || url.pathname.startsWith(`${c}/`));
+    owns: (pathname) => claimOf(pathname) !== undefined,
+    async handle(request, url, app, canSignIn) {
+      const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
       const rest = url.pathname.slice(claim.length).replace(/\/$/, "");
@@ -165,9 +170,9 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         answer = await found.route.handler(params, app, request);
       } catch (thrown) {
         if (!(thrown instanceof EndpointError)) throw thrown;
-        // Someone signed out may be refused only for that; signing in may show the page.
-        if (signIn && thrown.status === 404 && !(await app.session())) return signIn();
-        return html(errorPage(thrown.status, thrown.status === 404 ? "There is nothing here." : thrown.message), thrown.status);
+        // A share link in the fragment, which never reaches the server, or signing in may open it.
+        if (thrown.status === 404) return html(refusedPage(url, canSignIn && !(await app.session())), 404);
+        return html(errorPage(thrown.status, thrown.message), thrown.status);
       }
       const response = typeof answer === "string" ? html(answer, 200) : answer;
       return request.method === "HEAD" ? new Response(null, response) : response;
@@ -183,6 +188,26 @@ function html(body: string, status: number, headers: Record<string, string> = {}
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-function errorPage(status: number, message: string): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p><p><a href="/">Home</a></p></body></html>`;
+function errorPage(status: number, message: string, extra = ""): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
+}
+
+// A page the caller may not see, answered the same whether it exists or not. Its script takes a
+// `link=` token from the fragment, drops it from the address so a refused link never loops, and
+// has the platform keep it as a cookie, then reloads; with none, someone signed out goes to sign in.
+function refusedPage(url: URL, signedOut: boolean): string {
+  const login = `/login?next=${encodeURIComponent(url.pathname + url.search)}`;
+  const script = `<script>
+(() => {
+  const parts = location.hash.replace(/^#/, "").split("&");
+  const found = parts.find((p) => p.startsWith("link="));
+  const away = () => { ${signedOut ? `location.replace(${JSON.stringify(login)});` : ""} };
+  if (!found) return away();
+  const rest = parts.filter((p) => !p.startsWith("link=")).join("&");
+  history.replaceState(null, "", location.pathname + location.search + (rest ? "#" + rest : ""));
+  fetch(${JSON.stringify(LINK_EXCHANGE_PATH)}, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link: found.slice(5) }) })
+    .then((r) => (r.ok ? location.reload() : away()), away);
+})();
+</script>`;
+  return errorPage(404, "There is nothing here.", (signedOut ? `<p><a href="${escape(login)}">Sign in</a></p>` : "") + script);
 }

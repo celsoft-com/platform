@@ -340,18 +340,6 @@ describe("Static points", () => {
     await Promise.all(Array.from({ length: 6 }, () => applyStaticPoints(db, points)));
     expect(await count("access_grant", "point_id = $1", [id])).toBe(1);
   });
-
-  it("S9: the app's Access waits for static points before its first check, and retries after a failure", async () => {
-    const id = `static-${uid()}`;
-    let calls = 0;
-    const ready = async () => {
-      calls++;
-      if (calls === 1) throw new Error("database away");
-      await applyStaticPoints(db, { [id]: { grants: [{ to: { everyone: true }, level: "read" }] } });
-    };
-    await expect(w.as(null, null, { ready }).level(id)).rejects.toThrow("database away");
-    expect(await w.as(null, null, { ready }).level(id)).toBe("read");
-  });
 });
 
 describe("Grants", () => {

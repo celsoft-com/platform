@@ -1,6 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { and, eq, sql as drizzleSql } from "drizzle-orm";
+import { apikey, user } from "../schema.js";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { applyStaticPoints, createAccess, LEVELS, LINK_HEADER, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
 import { apiHandler, undeclaredAccess, type Endpoint } from "./endpoints.js";
@@ -9,11 +13,13 @@ import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./
 import type { z } from "zod";
 import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
-import { MCP_PATH, mcpChallenge, mcpUserId, serveMcp, WELL_KNOWN } from "./mcp.js";
+import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { pageServer, type Page } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { conditional } from "./conditional.js";
+import { Trace, withTiming } from "./trace.js";
 
 export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
@@ -34,10 +40,14 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   AUTH_ORGANIZATIONS?: string;
   AUTH_API_TOKENS?: string;
   AUTH_LIMIT?: RateLimiter;
+  API_LIMIT?: RateLimiter;
   LIVE?: LiveNamespace;
   LIVE_ROOMS?: string;
   MCP?: string;
   ACCESS?: string;
+  // "on" on previews and in local dev: every response says where its time went, in Server-Timing;
+  // "sample" in prod: one request in SAMPLE_EVERY logs it instead.
+  TRACE?: string;
 }
 
 export interface ExecutionContext {
@@ -89,15 +99,34 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   pages?: Page[];
   screens?: { stylesheet?: string };
   live?: LiveOptions<Env, Schema>;
-  // Control points declared in code, applied at every start; see StaticPoint.
+  // Control points declared in code, written by every deploy after migrations; see StaticPoint.
   access?: { points?: Record<string, StaticPoint> };
   pool?: (connectionString: string) => Pool;
 }
 
 // What one Worker instance does once: applying the app's static points before the first check.
 interface Once {
-  staticPoints?: Promise<void>;
+  // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
+  auth?: Map<string, Auth>;
 }
+
+type Db = NodePgDatabase<Record<string, unknown>>;
+
+// The database the request being served uses. Better Auth is built once per Worker instance, so
+// it reaches the database through requestDb, which hands each call to that request's own
+// connection; a Worker cannot share a connection between requests.
+interface DbSlot {
+  db?: () => Db;
+}
+const dbSlot = new AsyncLocalStorage<DbSlot>();
+const requestDb = new Proxy({} as Db, {
+  get(_target, key) {
+    const db = dbSlot.getStore()?.db?.();
+    if (!db) throw new Error("the auth database was used outside a request");
+    const value = Reflect.get(db, key);
+    return typeof value === "function" ? value.bind(db) : value;
+  },
+});
 
 const defaultPool = (connectionString: string) => new Pool({ connectionString, max: 5 });
 
@@ -127,58 +156,86 @@ export function defineApp<
   const pages = pageServer(options.pages ?? []);
   const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
 
+  // One request, answered; `trace` collects where its time goes.
+  async function serve(request: Request, env: Env, ctx: ExecutionContext, trace: Trace | undefined): Promise<Response> {
+    const url = new URL(request.url);
+    // With access on, every endpoint says what it checks, so a forgotten check never ships open.
+    if (env.ACCESS === "on" && undeclared.length > 0) {
+      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
+      return json({ error: "this app is misconfigured; see its logs" }, 500);
+    }
+    const { app, close } = createContext(request, env, ctx, options, once, undefined, undefined, trace);
+    let closeToken: (() => void) | undefined;
+    try {
+      if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
+      // A request with an API token runs as the token's owner, capped at the token's level.
+      let current = app;
+      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
+      const token = apiToken(request, url, env, onPage);
+      // One caller cannot spend everyone's capacity: a token, a person, or else an address.
+      const limited = env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname)) ? env.API_LIMIT : undefined;
+      const address = `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
+      if (token !== null) {
+        // A token's own allowance is spent before it is looked up, so a refused token costs no query.
+        if (limited && (badTokenSenders.blocked(address) || !(await limited.limit({ key: `token ${(await hashToken(token)).slice(0, 32)}` })).success)) return tooMany();
+        const holder = await tokenHolder(app, token);
+        if (!holder) {
+          // Fresh fake tokens would each get an allowance of their own, so a bad one spends its sender's.
+          if (limited && !(await limited.limit({ key: address })).success) badTokenSenders.block(address);
+          return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
+        }
+        if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
+        const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap, trace);
+        current = made.app;
+        closeToken = made.close;
+      } else if (limited) {
+        const caller = (await current.session().catch(() => null))?.user.id ?? address;
+        if (!(await limited.limit({ key: caller })).success) return tooMany();
+      }
+      const live = await liveRoute(request, url, env, current, options);
+      if (live) return live;
+      if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
+        const answered = await mcpRoute(request, url, env, ctx, app, options, once);
+        if (answered) return answered;
+      }
+      if (env.BETTER_AUTH_SECRET) {
+        const platform = await platformRoute(request, url, env, current, options);
+        if (platform) return platform;
+      }
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET));
+      if (page) return page;
+      const answered = await api?.handle(request, current);
+      if (answered) return answered;
+      return await handle(request, current);
+    } catch (thrown) {
+      if (thrown instanceof Response) return thrown;
+      // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
+      if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
+      throw thrown;
+    } finally {
+      closeToken?.();
+      close();
+    }
+  }
+
   return {
     // Read by the package to generate the browser client's routes; the app's own types come from here.
     endpoints: (options.endpoints ?? {}) as E,
     // Read by the deploy, which routes these paths to the Worker before static files.
     pages: pages?.claims ?? [],
+    // Read by the deploy, which writes them after migrations; requests never do.
+    staticPoints: options.access?.points ?? {},
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-      const url = new URL(request.url);
-      // With access on, every endpoint says what it checks, so a forgotten check never ships open.
-      if (env.ACCESS === "on" && undeclared.length > 0) {
-        console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
-        return json({ error: "this app is misconfigured; see its logs" }, 500);
-      }
-      const { app, close } = createContext(request, env, ctx, options, once);
-      let closeToken: (() => void) | undefined;
-      try {
-        if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
-        // A request with an API token runs as the token's owner, capped at the token's level.
-        let current = app;
-        const token = apiToken(request, url, env);
-        if (token !== null) {
-          const holder = await tokenHolder(app, token);
-          if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
-          if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
-          const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap);
-          current = made.app;
-          closeToken = made.close;
-        }
-        const live = await liveRoute(request, url, env, current, options);
-        if (live) return live;
-        if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
-          const answered = await mcpRoute(request, url, env, ctx, app, options, once);
-          if (answered) return answered;
-        }
-        if (env.BETTER_AUTH_SECRET) {
-          const platform = await platformRoute(request, url, env, current, options);
-          if (platform) return platform;
-        }
-        const page = await pages?.handle(request, url, current, env.BETTER_AUTH_SECRET ? () => signInRedirect(url) : undefined);
-        if (page) return page;
-        const answered = await api?.handle(request, current);
-        if (answered) return answered;
-        return await handle(request, current);
-      } catch (thrown) {
-        if (thrown instanceof Response) return thrown;
-        // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
-        if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
-        throw thrown;
-      } finally {
-        closeToken?.();
-        close();
-      }
+      // Prod times one request in SAMPLE_EVERY into its logs, never into the response.
+      const sampled = env.TRACE === "sample" && Math.random() * SAMPLE_EVERY < 1;
+      const trace = env.TRACE === "on" || sampled ? new Trace() : undefined;
+      return dbSlot.run({}, async () => {
+        const response = await conditional(request, await serve(request, env, ctx, trace));
+        if (!sampled) return withTiming(response, trace);
+        console.log(JSON.stringify({ timing: trace!.header(), method: request.method, path: new URL(request.url).pathname, status: response.status }));
+        return response;
+      });
     },
 
     // The Durable Object class behind live rooms, exported by the deploy's generated entry module.
@@ -190,8 +247,10 @@ export function defineApp<
         const pending: Promise<unknown>[] = [];
         const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options, once);
         try {
-          await onMessage(room, message as z.output<Message>, from, app);
-          await Promise.allSettled(pending);
+          await dbSlot.run({}, async () => {
+            await onMessage(room, message as z.output<Message>, from, app);
+            await Promise.allSettled(pending);
+          });
         } finally {
           close();
         }
@@ -210,6 +269,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   knownSession?: () => Promise<Session | null>,
   // The level an API token is capped at, when the request carries one.
   cap?: Level,
+  trace?: Trace,
 ): { app: AppContext<Env, Schema>; close(): void } {
   const openPool = options.pool ?? defaultPool;
   let pool: Pool | undefined;
@@ -220,13 +280,14 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let live: Live | undefined;
   let access: Access | undefined;
   let organizations: Organizations | undefined;
+  const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
   const app: AppContext<Env, Schema> = {
     env,
     get db() {
       if (!env.DB) throw new Error("this app has no database; add `database` to platform.jsonc");
-      return (db ??= drizzle((pool ??= openPool(env.DB.connectionString)), { schema: options.schema ?? ({} as Schema) }));
+      return (db ??= drizzle((pool ??= trace ? trace.wrap(openPool(env.DB.connectionString)) : openPool(env.DB.connectionString)), { schema: options.schema ?? ({} as Schema) }));
     },
     get email() {
       return (email ??= createEmail(env));
@@ -236,13 +297,20 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     get auth() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      return (auth ??= createAuth({
-        db: app.db as NodePgDatabase<Record<string, unknown>>,
-        secret: env.BETTER_AUTH_SECRET,
-        baseURL: env.APP_URL ?? new URL(request.url).origin,
-        email: app.email,
-        requireVerification: env.EMAIL_MODE === "send",
-      }));
+      const slot = dbSlot.getStore();
+      if (slot && !slot.db) slot.db = () => app.db as Db;
+      const baseURL = env.APP_URL ?? new URL(request.url).origin;
+      const requireVerification = env.EMAIL_MODE === "send";
+      const key = `${env.BETTER_AUTH_SECRET}\n${baseURL}\n${requireVerification}`;
+      const built = (once.auth ??= new Map());
+      if (!auth) {
+        auth = built.get(key);
+        if (!auth) {
+          auth = createAuth({ db: slot ? requestDb : (app.db as Db), secret: env.BETTER_AUTH_SECRET, baseURL, email: app.email, requireVerification });
+          if (slot) built.set(key, auth);
+        }
+      }
+      return auth;
     },
     get live() {
       return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
@@ -251,21 +319,19 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const db = app.db as NodePgDatabase<Record<string, unknown>>;
-      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: request.headers.get(LINK_HEADER), cap }), {
+      const links = [request.headers.get(LINK_HEADER), ...linkCookies(request)].filter((t): t is string => t !== null);
+      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: links, cap }), {
         // Sent after the answer, so a slow or failing email never fails the grant itself.
         notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
-        ready: () => (once.staticPoints ??= applyStaticPoints(db, options.access?.points ?? {}).catch((error) => {
-          once.staticPoints = undefined;
-          throw error;
-        })),
+        memo: levels,
       }));
     },
     get organizations() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       const appName = env.APP_NAME ?? new URL(origin).hostname;
-      return (organizations ??= createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
+      return (organizations ??= forgetLevelsOnChange(levels, createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
         app.waitUntil(
           app.email
             .send({
@@ -275,10 +341,11 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
             })
             .catch((error) => console.error("invitation email failed", error)),
         ),
-      ));
+      )));
     },
     session() {
-      return (session ??= knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      return (session ??= trace ? trace.time("session", "find the session", find) : find());
     },
     async requireUser() {
       const current = await app.session();
@@ -295,6 +362,27 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
 }
 
+// Organization calls that only read; every other call can change who belongs where, and so any
+// level found earlier in the request.
+const ORGANIZATION_READS = new Set(["list", "get", "requireMember", "members", "invitations", "myInvitations", "team", "teams", "teamMembers"]);
+
+function forgetLevelsOnChange(levels: Map<string, number>, organizations: Organizations): Organizations {
+  return new Proxy(organizations, {
+    get(target, key) {
+      const value = Reflect.get(target, key);
+      if (typeof value !== "function" || ORGANIZATION_READS.has(String(key))) return value;
+      return async (...args: unknown[]) => {
+        levels.clear();
+        try {
+          return await value.apply(target, args);
+        } finally {
+          levels.clear();
+        }
+      };
+    },
+  });
+}
+
 // A session for a caller proved some other way than a cookie, such as an OAuth or API token.
 async function sessionAs<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, userId: string, id: string): Promise<Session | null> {
   const user = await (await app.auth.$context).internalAdapter.findUserById(userId);
@@ -308,23 +396,63 @@ const signInRedirect = (url: URL) => new Response(null, { status: 302, headers: 
 const TOKEN_ROUTES = ["create", "list", "delete", "get"];
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The API token a request carries, when tokens are on: only on /api/ outside /api/auth/, where
-// a token can never make more tokens or change the account.
-function apiToken(request: Request, url: URL, env: PlatformBindings): string | null {
+// The API token a request carries, when tokens are on: on /api/ outside /api/auth/, where a
+// token can never make more tokens or change the account, and on page reads.
+function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boolean): string | null {
   if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
-  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith(`${AUTH_PATH}/`)) return null;
+  const onApi = url.pathname.startsWith("/api/") && !url.pathname.startsWith(`${AUTH_PATH}/`);
+  if (!onApi && !onPage) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 
-// The token's owner and cap, or null for a token that is unknown, expired, revoked, capped at
-// no known level, or whose owner is gone.
+const SAMPLE_EVERY = 100;
+
+const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
+
+// Addresses whose bad tokens spent their allowance, refused for a minute before any lookup; kept
+// per Worker instance, so the rate limit itself stays the authority.
+const badTokenSenders = (() => {
+  const until = new Map<string, number>();
+  return {
+    blocked: (address: string) => (until.get(address) ?? 0) > Date.now(),
+    block(address: string) {
+      if (until.size >= 10_000) until.clear();
+      until.set(address, Date.now() + 60_000);
+    },
+  };
+})();
+
+// How often a token's last use is written, at most; the tokens screen shows it to this accuracy.
+const TOKEN_USE_EVERY_MS = 60 * 60 * 1000;
+
+// The token's owner and cap, or null for a token that is unknown, disabled, expired, revoked,
+// capped at no known level, or whose owner is gone or banned. One query reads the key and its
+// owner together, where Better Auth's own check would read and write the key's row on every call;
+// the last use is written at most hourly.
 async function tokenHolder<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, token: string): Promise<{ session: Session; cap: Level } | null> {
-  const result = await app.auth.api.verifyApiKey({ body: { key: token } }).catch(() => null);
-  if (!result?.valid || !result.key) return null;
-  const cap = (result.key.metadata as { cap?: unknown } | null)?.cap;
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
+  const hashed = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const db = app.db as unknown as NodePgDatabase<Record<string, unknown>>;
+  const [row] = await db
+    .select({ id: apikey.id, metadata: apikey.metadata, lastRequest: apikey.lastRequest, owner: user })
+    .from(apikey)
+    .innerJoin(user, eq(user.id, apikey.referenceId))
+    .where(
+      and(
+        eq(apikey.key, hashed),
+        drizzleSql`${apikey.enabled} is not false`,
+        drizzleSql`(${apikey.expiresAt} is null or ${apikey.expiresAt} > now())`,
+        drizzleSql`(${apikey.remaining} is null or ${apikey.remaining} > 0)`,
+        drizzleSql`(${user.banned} is not true or (${user.banExpires} is not null and ${user.banExpires} <= now()))`,
+      ),
+    );
+  if (!row) return null;
+  const cap = (JSON.parse(row.metadata ?? "null") as { cap?: unknown } | null)?.cap;
   if (!LEVELS.includes(cap as Level)) return null;
-  const session = await sessionAs(app, result.key.referenceId, `api-token ${result.key.id}`);
-  return session ? { session, cap: cap as Level } : null;
+  if (!row.lastRequest || Date.now() - row.lastRequest.getTime() > TOKEN_USE_EVERY_MS) await db.update(apikey).set({ lastRequest: new Date() }).where(eq(apikey.id, row.id));
+  const now = new Date();
+  const session = { id: `api-token ${row.id}`, userId: row.owner.id, token: "", expiresAt: new Date(now.getTime() + 60_000), createdAt: now, updatedAt: now };
+  return { session: { user: row.owner, session } as unknown as Session, cap: cap as Level };
 }
 
 // What a person may send when making a token: a name, a lifetime and a cap, and nothing else,
@@ -339,6 +467,35 @@ async function tokenCreateRequest(request: Request): Promise<Request | Response>
   const headers = new Headers(request.headers);
   headers.delete("content-length");
   return new Request(request.url, { method: "POST", headers, body: JSON.stringify(clean) });
+}
+
+const LINK_COOKIE = "platform_link_";
+const LINK_COOKIE_DAYS = 30;
+
+// The link tokens kept as cookies, one per point.
+function linkCookies(request: Request): string[] {
+  return (request.headers.get("cookie") ?? "")
+    .split(";")
+    .map((c) => c.trim())
+    .filter((c) => c.startsWith(LINK_COOKIE))
+    .map((c) => c.slice(c.indexOf("=") + 1))
+    .slice(0, MAX_LINKS);
+}
+
+// Keeps a valid link token as an HttpOnly cookie named after its point, so a newer link to the
+// same point replaces it; it lasts until the link expires, at most LINK_COOKIE_DAYS. A token that
+// opens nothing is a 404, the same as any missing point.
+async function exchangeLink(request: Request, url: URL, db: NodePgDatabase<Record<string, unknown>>): Promise<Response> {
+  if (request.method !== "POST") return json({ error: "not found" }, 404);
+  const body = (await request.json().catch(() => undefined)) as { link?: unknown } | undefined;
+  const token = body?.link;
+  const target = typeof token === "string" ? await linkTarget(db, token) : null;
+  if (!target) return json({ error: "not found" }, 404);
+  const days = LINK_COOKIE_DAYS * 86400;
+  const seconds = Math.max(1, Math.min(days, target.expires ? Math.floor((target.expires.getTime() - Date.now()) / 1000) : days));
+  const name = `${LINK_COOKIE}${(await hashToken(target.point)).slice(0, 16)}`;
+  const secure = url.protocol === "https:" ? "; Secure" : "";
+  return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json", "cache-control": "no-store", "set-cookie": `${name}=${token}; Path=/; Max-Age=${seconds}; HttpOnly; SameSite=Lax${secure}` } });
 }
 
 // The OAuth server's routes, which exist only for MCP.
@@ -364,6 +521,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   const { app: asUser, close } = createContext(request, env, ctx, options, once, known);
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
+    const { serveMcp } = await import("./mcp-server.js");
     return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
   } finally {
     close();
@@ -402,6 +560,10 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (request.method === "GET" && path === TOKENS_PATH && env.AUTH_API_TOKENS === "on") return renderTokensScreen(env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
+  if (path === LINK_EXCHANGE_PATH) {
+    if (env.ACCESS !== "on") return json({ error: "not found" }, 404);
+    return exchangeLink(request, url, app.db as NodePgDatabase<Record<string, unknown>>);
+  }
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
     await app.requireUser();

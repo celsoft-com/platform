@@ -26,6 +26,11 @@ export class NeonApi implements Neon {
     return Number(data.project.pg_version);
   }
 
+  async region(project: string): Promise<string> {
+    const { data } = await this.api.getProject(project);
+    return data.project.region_id;
+  }
+
   async defaultBranch(project: string): Promise<Branch> {
     const { data } = await this.api.listProjectBranches({ projectId: project });
     const branch = data.branches.find((b) => b.default);

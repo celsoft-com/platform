@@ -44,7 +44,7 @@ export interface Live {
 }
 
 export const clientScript = () =>
-  new Response(`export ${client.toString()}\n`, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" } });
+  new Response(`export const live = ${client.toString()};\n`, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "public, max-age=300" } });
 
 const roomStub = (namespace: LiveNamespace, room: string) => namespace.get(namespace.idFromName(room));
 

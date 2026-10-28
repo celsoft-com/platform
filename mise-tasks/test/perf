@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Measure a demo preview's speed: mise run test:perf -- <preview url> [rounds] [concurrency] [burst requests] [--seed]; --seed first loads large data; it signs up a test user, so never point it at prod"
+set -euo pipefail
+args=()
+seed=""
+for arg in "$@"; do
+  if [ "$arg" = "--seed" ]; then seed=1; else args+=("$arg"); fi
+done
+pr=$(printf '%s' "${args[0]:-}" | sed -n 's|^https://pr-\([0-9]*\)\..*|\1|p')
+if [ -n "$seed" ]; then
+  [ -n "$pr" ] || { echo "--seed needs a preview url such as https://pr-19.example.com" >&2; exit 1; }
+  mise run platform -- db run "$(cd "$(dirname "$0")" && pwd)/_seed.sql" --pr "$pr"
+fi
+[ -z "$pr" ] || mise run platform -- db stats --reset --pr "$pr"
+SEEDED="$seed" node "$(dirname "$0")/_perf.mjs" "${args[@]}"
+[ -z "$pr" ] || mise run platform -- db stats --pr "$pr"

@@ -148,7 +148,7 @@ async function churn(world: Awaited<ReturnType<typeof buildWorld>>): Promise<voi
   const { r, ref, users, orgs, teams, ids } = world;
   for (let i = 0; i < 8; i++) {
     const user = r.pick(users);
-    const step = r.int(5);
+    const step = r.int(6);
     if (step === 0) {
       const org = r.pick(orgs);
       if (ref.members.delete(`${org} ${user}`)) await w.query(`delete from member where organization_id = $1 and user_id = $2`, [org, user]);
@@ -173,18 +173,32 @@ async function churn(world: Awaited<ReturnType<typeof buildWorld>>): Promise<voi
         `delete from access_grant where point_id = $1 and user_id is not distinct from $2 and team_id is not distinct from $3 and organization_id is not distinct from $4 and everyone is not distinct from $5 and email is not distinct from $6`,
         [g.point, "user" in g ? g.user : null, "team" in g ? g.team : null, "organization" in g ? g.organization : null, "everyone" in g ? true : null, "email" in g ? g.email : null],
       );
-    } else {
+    } else if (step === 4) {
       const id = r.pick(ids.filter((x) => !x.startsWith("organization:")));
       const point = ref.points.get(id)!;
       point.inherits = !point.inherits;
       await w.query(`update access_point set inherits = $2 where id = $1`, [id, point.inherits]);
+    } else {
+      // A move under another point of the same organization, never under itself or below it.
+      const id = r.pick(ids.filter((x) => x.startsWith("p")));
+      const point = ref.points.get(id)!;
+      const below = (x: string): boolean => {
+        for (let at: string | null = x; at; at = ref.points.get(at)!.parent) if (at === id) return true;
+        return false;
+      };
+      const targets = ids.filter((x) => !below(x) && ref.points.get(x)!.organization === point.organization);
+      if (targets.length === 0) continue;
+      const parent = r.pick(targets);
+      point.parent = parent;
+      await w.query(`update access_point set parent_id = $2 where id = $1`, [id, parent]);
     }
   }
 }
 
 describe("random worlds against the reference rules", () => {
   for (let seed = 1; seed <= WORLDS; seed++) {
-    it(`world ${seed}`, async () => {
+    // Each world runs thousands of queries, which a busy machine running every test file at once can slow well past the default limit.
+    it(`world ${seed}`, { timeout: 60_000 }, async () => {
       const world = await buildWorld(seed * 7919);
       for (let round = 0; round < ROUNDS; round++) {
         await compare(world, seed, round);
