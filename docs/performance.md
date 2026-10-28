@@ -303,3 +303,8 @@ Approved on the [readiness page](https://claude.ai/artifact/9Nn26Cjuv4wVy1YLbxyg
    (item 14 of section 9).
 6. **Prod sampling:** prod records Server-Timing for a small share of requests into the Worker's
    logs, and the load test reads `pg_stat_statements` (item 15 of section 9).
+7. **Bad tokens:** a token's own allowance is still checked before any lookup; a token that fails
+   its check also spends from the caller's address allowance, and an address with none left gets a
+   429 for its tokens for a minute, before any lookup.
+8. **Session cache:** the signed cookie keeps a session for 1 minute instead of 5, so a revoke or
+   ban reaches every browser within a minute.
