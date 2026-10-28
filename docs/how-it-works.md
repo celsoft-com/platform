@@ -90,7 +90,7 @@ flowchart LR
 5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
-8. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file. A route with `access: "none"` may add `cache: { seconds }`, and signed-out visitors then share a copy the edge keeps that long; the API and signed-in requests are never cached.
+8. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file. A route with `access: "none"` may add `cache: true`, and signed-out visitors then share a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API and signed-in requests are never cached.
 
 ### Sign-in screens
 
@@ -108,7 +108,7 @@ flowchart LR
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
 7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
 8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
-9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `env` and `waitUntil`, each created on first use.
+9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `env` and `waitUntil`, each created on first use.
 10. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
 11. **Forms:** cross-site form posts are refused before the handler runs.
 
