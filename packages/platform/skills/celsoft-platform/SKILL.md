@@ -94,7 +94,8 @@ const notesPage = page({
 export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 ```
 
-1. **Paths:** plain segments, never `/`, a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
+1. **Paths:** plain segments, never a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
+   - **Root page:** `page({ path: "/", routes: { "/": handler } })` answers `/` alone, never the paths below it; it wins over a static `index.html` at `/`, which still serves every other unmatched path.
 2. **Routes:** `"/"` is the claimed path itself; a route matching nothing under the claim is a 404. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
 3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
