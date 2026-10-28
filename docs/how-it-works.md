@@ -90,7 +90,7 @@ flowchart LR
 5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
-8. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file.
+8. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file. A route with `access: "none"` may add `cache: { seconds }`, and signed-out visitors then share a copy the edge keeps that long; the API and signed-in requests are never cached.
 
 ### Sign-in screens
 

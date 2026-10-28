@@ -192,7 +192,7 @@ request that needs one should send one.
 1. **Static files:** served by Cloudflare nearest the visitor without the Worker, free and cached;
    the cheapest request there is.
 2. **Server pages:** uncached unless a public route opts in ([design.md](design.md), section 13,
-   item 7, proposed); an uncached page follows the same per-request budgets as the API, and a
+   item 7); an uncached page follows the same per-request budgets as the API, and a
    cached hit skips its handler and queries.
 3. **Rule:** anything that is the same for everyone is built at build time as a static file.
 
