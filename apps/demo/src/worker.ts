@@ -1,6 +1,6 @@
 import { defineApp, endpoint, EndpointError, organizationPoint, page, route, teamPoint, type AppContext, type Grantee, type PlatformBindings } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
 
@@ -127,6 +127,18 @@ const print = page({
   },
 });
 
+// A public page every visitor sees the same, so the edge keeps it for a minute: signed out, a
+// reload within that minute shows the same time and runs no query; signed in, it is fresh each time.
+const stats = page({
+  path: "/stats",
+  routes: {
+    "/": route({ access: "none", cache: { seconds: 60 } }, async (_, app: App) => {
+      const [row] = await app.db.select({ total: count() }).from(notes);
+      return printable("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for a minute for signed-out visitors.</p>`);
+    }),
+  },
+});
+
 // Everything said in a room: new notes from the server, typing notices from browsers.
 const RoomMessage = z.discriminatedUnion("type", [z.object({ type: z.literal("note"), note: GroupNote }), z.object({ type: z.literal("typing") })]);
 
@@ -180,7 +192,7 @@ export default defineApp(
   },
   {
     schema,
-    pages: [print],
+    pages: [print, stats],
     // A static point, declared here and applied at every start: anyone may read the about line.
     access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
