@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Config } from "./config.js";
+import { INVITES_PATH } from "./runtime/invites.js";
 import { SCREEN_PATHS, TOKENS_PATH } from "./runtime/screens.js";
 
 export interface WranglerInput {
@@ -62,9 +63,9 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     alias: { kysely: `./${NO_KYSELY_FILE}`, "@better-auth/kysely-adapter": `./${NO_KYSELY_FILE}` },
     // Every query is a round trip to the database, so the Worker runs next to it, not next to the visitor.
     ...(placement && { placement: { region: placement } }),
-    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) },
+    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", AUTH_SIGNUP: auth.signup, MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) },
     ...(config.frontend && {
-      assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? SCREEN_PATHS : []), ...(auth && auth.apiTokens ? [TOKENS_PATH] : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : []), ...pages.flatMap((p) => [p, `${p}/*`])] },
+      assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? [...SCREEN_PATHS, INVITES_PATH] : []), ...(auth && auth.apiTokens ? [TOKENS_PATH] : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : []), ...pages.flatMap((p) => [p, `${p}/*`])] },
     }),
     ...(hyperdriveId && { hyperdrive: [{ binding: "DB", id: hyperdriveId }] }),
     ...(bucket && { r2_buckets: [{ binding: "FILES", bucket_name: bucket }] }),

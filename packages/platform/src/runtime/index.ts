@@ -17,7 +17,8 @@ import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { pageServer, type Page, type PageCache } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
-import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { createInvites, INVITE_ONLY, INVITES_API, INVITES_PATH, serveInvites, signupAllowed, type Invites } from "./invites.js";
+import { isScreen, renderInvitesScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
 import { createCache, pageVersion, type Cache } from "./cache.js";
 import { conditional } from "./conditional.js";
 import { Trace, withTiming } from "./trace.js";
@@ -32,6 +33,7 @@ export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
+export type { Invite, Invites } from "./invites.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
 
 export interface PlatformBindings extends EmailBindings, FilesBindings {
@@ -41,6 +43,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   BETTER_AUTH_SECRET?: string;
   AUTH_ORGANIZATIONS?: string;
   AUTH_API_TOKENS?: string;
+  // "open" lets anyone sign up; otherwise sign-up needs an invitation once the app has an account.
+  AUTH_SIGNUP?: string;
   AUTH_LIMIT?: RateLimiter;
   API_LIMIT?: RateLimiter;
   LIVE?: LiveNamespace;
@@ -71,6 +75,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly access: Access;
   readonly organizations: Organizations;
   readonly cache: Cache;
+  readonly invites: Invites;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -286,6 +291,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let access: Access | undefined;
   let organizations: Organizations | undefined;
   let cache: Cache | undefined;
+  let invites: Invites | undefined;
   const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
@@ -317,6 +323,11 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
         }
       }
       return auth;
+    },
+    get invites() {
+      if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
+      const origin = env.APP_URL ?? new URL(request.url).origin;
+      return (invites ??= createInvites(app.db as unknown as NodePgDatabase<Record<string, unknown>>, () => app.requireUser(), app.email, origin, env.APP_NAME ?? new URL(origin).hostname));
     },
     get cache() {
       if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
@@ -587,10 +598,21 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   if (path === "/consent" && env.MCP !== "on") return undefined;
   if (request.method === "GET" && isScreen(path)) return renderScreen(path, env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (request.method === "GET" && path === TOKENS_PATH && env.AUTH_API_TOKENS === "on") return renderTokensScreen(env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
+  if (request.method === "GET" && path === INVITES_PATH) return renderInvitesScreen(env.APP_NAME ?? url.hostname, options.screens?.stylesheet);
   if (await rateLimited(request, path, env.AUTH_LIMIT)) return json({ error: "too many attempts; wait a minute" }, 429);
   if (path === LINK_EXCHANGE_PATH) {
     if (env.ACCESS !== "on") return json({ error: "not found" }, 404);
     return exchangeLink(request, url, app.db as NodePgDatabase<Record<string, unknown>>);
+  }
+  if (path === INVITES_API || path.startsWith(`${INVITES_API}/`)) {
+    await app.requireUser();
+    return serveInvites(request, path, app.invites);
+  }
+  // Checked here, before Better Auth makes the account, with the same answer for every refused
+  // address, so it never tells who already has an account.
+  if (path === `${AUTH_PATH}/sign-up/email` && request.method === "POST" && env.AUTH_SIGNUP !== "open") {
+    const address = ((await request.clone().json().catch(() => ({}))) as { email?: unknown }).email;
+    if (typeof address !== "string" || !(await signupAllowed(app.db as unknown as NodePgDatabase<Record<string, unknown>>, address))) return Response.json({ message: INVITE_ONLY, code: "INVITE_ONLY" }, { status: 403 });
   }
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);

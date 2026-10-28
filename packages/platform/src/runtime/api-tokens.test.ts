@@ -41,6 +41,7 @@ const app = defineApp(undefined, {
 const env = (extra: Record<string, unknown> = {}) => ({
   DB: { connectionString: url },
   BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret",
+  AUTH_SIGNUP: "open",
   APP_URL: "https://app.test",
   APP_NAME: "test",
   ACCESS: "on",

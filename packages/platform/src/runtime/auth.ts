@@ -9,6 +9,7 @@ import type {} from "@better-auth/core/db/internal";
 import { admin, jwt } from "better-auth/plugins";
 import { adminAc, userAc } from "better-auth/plugins/admin/access";
 import { sql } from "drizzle-orm";
+import { useInvite } from "./invites.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { authSchema } from "../schema.js";
 import type { Email } from "./email.js";
@@ -62,8 +63,10 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
       user: {
         create: {
           // The first account becomes the owner; a single statement, so two at once cannot both win.
+          // Its invitation, if it had one, is used up.
           after: async (user) => {
             await db.execute(sql`update "user" set role = ${OWNER_ROLE} where id = ${user.id} and not exists (select 1 from "user" where role = ${OWNER_ROLE})`);
+            await useInvite(db, user.email);
           },
         },
       },

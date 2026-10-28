@@ -36,11 +36,12 @@ export const configSchema = z
           .object({
             organizations: z.boolean().default(false).describe("Organizations with members, invitations, teams and a built-in Admins team"),
             apiTokens: z.boolean().default(false).describe("Personal API tokens people make at /tokens and send as Authorization: Bearer on /api/"),
+            signup: z.enum(["invite", "open"]).default("invite").describe("invite: once the app has an account, only invited addresses may sign up, invited at /invites by the owner and admins; open: anyone may"),
           })
           .strict(),
       ])
       .default(false)
-      .transform((auth) => (auth === true ? { organizations: false, apiTokens: false } : auth))
+      .transform((auth) => (auth === true ? { organizations: false, apiTokens: false, signup: "invite" as const } : auth))
       .describe("Sign-up and login with email and password; needs database and email"),
     files: z.boolean().default(false).describe("Object storage in an R2 bucket, organized in folders"),
     live: z.boolean().default(false).describe("Live rooms: messages and presence over WebSockets, on Durable Objects"),

@@ -158,7 +158,7 @@ describe("Pages: sign-in and access", () => {
     ],
     endpoints: {},
   });
-  const env = { DB: { connectionString: databaseUrl }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", APP_URL: "https://app.test", APP_NAME: "test", ACCESS: "on", AUTH_API_TOKENS: "on", EMAIL_MODE: "capture" as const };
+  const env = { DB: { connectionString: databaseUrl }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", AUTH_SIGNUP: "open", APP_URL: "https://app.test", APP_NAME: "test", ACCESS: "on", AUTH_API_TOKENS: "on", EMAIL_MODE: "capture" as const };
   const send = async (path: string, init: { method?: string; body?: unknown; cookie?: string; headers?: Record<string, string> } = {}) => {
     const headers: Record<string, string> = { "content-type": "application/json", origin: "https://app.test", ...init.headers };
     if (init.cookie) headers.cookie = init.cookie;

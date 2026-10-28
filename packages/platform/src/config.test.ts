@@ -42,9 +42,9 @@ describe("parseConfig", () => {
   it("reads auth as on or off, with organizations off unless asked for", () => {
     const withAuth = (auth: string) => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "email": true, "auth": ${auth},`)).auth;
     expect(parseConfig(valid).auth).toBe(false);
-    expect(withAuth("true")).toEqual({ organizations: false, apiTokens: false });
-    expect(withAuth(`{ "organizations": true }`)).toEqual({ organizations: true, apiTokens: false });
-    expect(withAuth(`{ "apiTokens": true }`)).toEqual({ organizations: false, apiTokens: true });
+    expect(withAuth("true")).toEqual({ organizations: false, apiTokens: false, signup: "invite" });
+    expect(withAuth(`{ "organizations": true }`)).toEqual({ organizations: true, apiTokens: false, signup: "invite" });
+    expect(withAuth(`{ "apiTokens": true }`)).toEqual({ organizations: false, apiTokens: true, signup: "invite" });
   });
 
   it("no longer takes a migrate command", () => {
