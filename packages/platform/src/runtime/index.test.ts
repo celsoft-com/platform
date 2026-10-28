@@ -158,5 +158,34 @@ describe("rate limit", () => {
     expect((await app.fetch(new Request("https://x/about.html"), { API_LIMIT: limiter(() => false).API_LIMIT }, fakeCtx().ctx)).status).toBe(200);
     expect(keys).toHaveLength(1);
   });
-});
 
+  describe("with API tokens", () => {
+    const queries: string[] = [];
+    const pool = { query: async (q: { text?: string } | string) => (queries.push(typeof q === "string" ? q : (q.text ?? "")), { rows: [], fields: [] }), end: async () => {} } as unknown as Pool;
+    const tokens = defineApp(ok, { pool: () => pool });
+    const tokenEnv = { ...authEnv, AUTH_API_TOKENS: "on" };
+    const send = (API_LIMIT: unknown, token: string, ip = "198.51.100.4") =>
+      tokens.fetch(new Request("https://app.example.com/api/things", { headers: { authorization: `Bearer ${token}`, "cf-connecting-ip": ip } }), { ...tokenEnv, API_LIMIT }, fakeCtx().ctx);
+
+    it("refuses a token over its own limit before looking it up", async () => {
+      queries.length = 0;
+      const { keys, API_LIMIT } = limiter(() => false);
+      expect((await send(API_LIMIT, "spent")).status).toBe(429);
+      expect(keys).toHaveLength(1);
+      expect(keys[0]).toMatch(/^token /);
+      expect(queries).toEqual([]);
+    });
+
+    it("charges a bad token to its sender's address, and once that is spent refuses the address's tokens unseen", async () => {
+      const { keys, API_LIMIT } = limiter((key) => key.startsWith("token "));
+      expect((await send(API_LIMIT, "fake-1", "198.51.100.9")).status).toBe(401);
+      expect(keys.at(-1)).toBe("address 198.51.100.9");
+      queries.length = 0;
+      keys.length = 0;
+      expect((await send(API_LIMIT, "fake-2", "198.51.100.9")).status).toBe(429);
+      expect(keys).toEqual([]);
+      expect(queries).toEqual([]);
+      expect((await send(API_LIMIT, "fake-3", "198.51.100.10")).status).toBe(401);
+    });
+  });
+});

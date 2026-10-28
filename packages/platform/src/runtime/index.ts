@@ -170,20 +170,27 @@ export function defineApp<
       let current = app;
       const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
       const token = apiToken(request, url, env, onPage);
+      // One caller cannot spend everyone's capacity: a token, a person, or else an address.
+      const limited = env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname)) ? env.API_LIMIT : undefined;
+      const address = `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
       if (token !== null) {
+        // A token's own allowance is spent before it is looked up, so a refused token costs no query.
+        if (limited && (badTokenSenders.blocked(address) || !(await limited.limit({ key: `token ${(await hashToken(token)).slice(0, 32)}` })).success)) return tooMany();
         const holder = await tokenHolder(app, token);
-        if (!holder) return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
+        if (!holder) {
+          // Fresh fake tokens would each get an allowance of their own, so a bad one spends its sender's.
+          if (limited && !(await limited.limit({ key: address })).success) badTokenSenders.block(address);
+          return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
+        }
         if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
         const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap, trace);
         current = made.app;
         closeToken = made.close;
+      } else if (limited) {
+        const caller = (await current.session().catch(() => null))?.user.id ?? address;
+        if (!(await limited.limit({ key: caller })).success) return tooMany();
       }
-      if (env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname))) {
-      // One caller cannot spend everyone's capacity: a token, a person, or else an address.
-      const caller = token !== null ? `token ${(await hashToken(token)).slice(0, 32)}` : ((await current.session().catch(() => null))?.user.id ?? `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`);
-      if (!(await env.API_LIMIT.limit({ key: caller })).success) return Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
-    }
-    const live = await liveRoute(request, url, env, current, options);
+      const live = await liveRoute(request, url, env, current, options);
       if (live) return live;
       if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
         const answered = await mcpRoute(request, url, env, ctx, app, options, once);
@@ -388,6 +395,21 @@ function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boo
   if (!onApi && !onPage) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
+
+const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
+
+// Addresses whose bad tokens spent their allowance, refused for a minute before any lookup; kept
+// per Worker instance, so the rate limit itself stays the authority.
+const badTokenSenders = (() => {
+  const until = new Map<string, number>();
+  return {
+    blocked: (address: string) => (until.get(address) ?? 0) > Date.now(),
+    block(address: string) {
+      if (until.size >= 10_000) until.clear();
+      until.set(address, Date.now() + 60_000);
+    },
+  };
+})();
 
 // How often a token's last use is written, at most; the tokens screen shows it to this accuracy.
 const TOKEN_USE_EVERY_MS = 60 * 60 * 1000;

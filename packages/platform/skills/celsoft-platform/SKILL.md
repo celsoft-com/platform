@@ -168,7 +168,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
-8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out; over it, a 429 with `retry-after`.
+8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
 
 ## Commands
 
