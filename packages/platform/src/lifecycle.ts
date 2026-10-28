@@ -92,6 +92,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     if (uri) {
       await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
       await prepareAccessOn(ctx, uri, branch.name);
+      await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri!), undefined);
       if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
     } else {
       run.note(`would run migrations on ${branch.name}`);
@@ -242,6 +243,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
     await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
     await prepareAccessOn(ctx, uri, DEV_BRANCH);
+    await run.mutate(`write page cache tables on ${DEV_BRANCH}`, () => ports.migrator.prepareCache(uri!), undefined);
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 

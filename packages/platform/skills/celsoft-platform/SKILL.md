@@ -93,17 +93,18 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 8. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
 9. **Tokens and links:** API tokens are accepted on page GET and HEAD, capped; a refused page takes a `#link=` share link from its address, keeps it as a cookie and reloads, so `/print/7#link=<token>` opens for a link holder.
 10. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
-11. **Caching:** a page that is the same for every visitor, such as a landing or stats page, may add `cache: { seconds }`:
-    `route({ access: "none", cache: { seconds: 300 } }, async (_, app) => html)`.
-    1. **Safe by rule:** only `access: "none"` routes may, for at most 3,600 seconds; signed-in visitors, links and tokens always get a fresh answer, and nothing they get is kept.
+11. **Caching:** a page that is the same for every visitor, such as a landing or stats page, may opt in:
+    `route({ access: "none", cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
+    1. **Safe by rule:** only `access: "none"` routes may; signed-in visitors, links and tokens always get a fresh answer, and nothing they get is kept.
     2. **Same for everyone:** the cache key is the path and query only, so a cached page's HTML must never depend on anything else about a signed-out visitor, such as other cookies, `accept-language` or location; reading the session is fine, since signed-in requests are never cached.
-    3. **Freshness:** every deploy starts empty; between deploys a change shows within `seconds`, so keep it to minutes.
-    4. **What it saves:** a hit skips the handler and its queries; the request itself is still billed.
-    5. **Seeing it:** the `platform-cache` header is `hit` or `miss`.
+    3. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
+    4. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
+    5. **Deploys:** every deploy starts empty.
+    6. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
-Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `session()`, `requireUser()`,
+Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `cache`, `session()`, `requireUser()`,
 `files` (R2, folders), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
 

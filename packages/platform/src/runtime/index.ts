@@ -18,6 +18,7 @@ import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizatio
 import { pageServer, type Page, type PageCache } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { createCache, pageVersion, type Cache } from "./cache.js";
 import { conditional } from "./conditional.js";
 import { Trace, withTiming } from "./trace.js";
 
@@ -30,6 +31,7 @@ export { page, route, type Page, type PageHandler, type PageResult, type PageRou
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
 export type { Live } from "./live.js";
+export type { Cache } from "./cache.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
 
 export interface PlatformBindings extends EmailBindings, FilesBindings {
@@ -68,6 +70,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly live: Live;
   readonly access: Access;
   readonly organizations: Organizations;
+  readonly cache: Cache;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -204,7 +207,7 @@ export function defineApp<
         const platform = await platformRoute(request, url, env, current, options);
         if (platform) return platform;
       }
-      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx));
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx, current));
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
@@ -282,6 +285,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let live: Live | undefined;
   let access: Access | undefined;
   let organizations: Organizations | undefined;
+  let cache: Cache | undefined;
   const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
@@ -313,6 +317,10 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
         }
       }
       return auth;
+    },
+    get cache() {
+      if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
+      return (cache ??= createCache(() => app.db as unknown as NodePgDatabase<Record<string, unknown>>));
     },
     get live() {
       return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
@@ -414,13 +422,17 @@ interface EdgeCache {
   put(key: string, response: Response): Promise<void>;
 }
 
-// Cloudflare's Cache API, in the data center the Worker runs in, which sits next to the database,
-// so every visitor shares it; absent outside Workers and without a deploy version.
-function pageCache(env: PlatformBindings, ctx: ExecutionContext): PageCache | undefined {
+// Cloudflare's Cache API, shared by every visitor in a data center; keyed by the deploy and, with
+// a database, by the versions app.cache bumps; absent outside Workers and without a deploy version.
+function pageCache<Env extends PlatformBindings, Schema extends Record<string, unknown>>(env: Env, ctx: ExecutionContext, app: AppContext<Env, Schema>): PageCache | undefined {
   const edge = (globalThis as { caches?: { default?: EdgeCache } }).caches?.default;
-  const version = env.CF_VERSION_METADATA?.id;
-  if (!edge || !version) return undefined;
-  return { version, match: (key) => edge.match(key), put: (key, response) => ctx.waitUntil(edge.put(key, response)) };
+  const deploy = env.CF_VERSION_METADATA?.id;
+  if (!edge || !deploy) return undefined;
+  return {
+    version: async (path) => `${deploy}.${env.DB ? await pageVersion(app.db as unknown as NodePgDatabase<Record<string, unknown>>, path) : "0.0"}`,
+    match: (key) => edge.match(key),
+    put: (key, response) => ctx.waitUntil(edge.put(key, response)),
+  };
 }
 
 const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });

@@ -20,21 +20,27 @@ export interface PageRoute<Params = any, App = AnyApp> {
   params?: z.ZodType;
   // Checked before the handler runs, as for an endpoint; with access on, every route says it.
   access?: EndpointAccess<Params>;
-  // Keeps a signed-out visitor's answer for this many seconds, shared by every visitor; only a
-  // route with access "none" may, since a cached answer skips the access check.
-  cache?: { seconds: number };
+  // Keeps a signed-out visitor's answer, shared by every visitor, for 60 seconds or `seconds`, or
+  // until app.cache empties it; only a route with access "none" may, since a hit skips the check.
+  cache?: PageCacheOption;
   handler: PageHandler<Params, App>;
 }
 
-// Where cached answers live: Cloudflare's Cache API in a Worker, keyed with the deploy's version.
+export type PageCacheOption = true | { seconds: number };
+
+// Where cached answers live: Cloudflare's Cache API in a Worker. `version` is the deploy's and the
+// page's current versions, so a deploy, a clear or an invalidate leaves old copies unasked for.
 export interface PageCache {
-  version: string;
+  version(path: string): Promise<string>;
   match(key: string): Promise<Response | undefined>;
   put(key: string, response: Response): void;
 }
 
-// The longest a page may be cached; a change between deploys shows within it.
+export const DEFAULT_CACHE_SECONDS = 60;
+// The longest a page may be kept, a backstop for a change the app never invalidates.
 export const MAX_CACHE_SECONDS = 3600;
+
+const cacheSeconds = (option: PageCacheOption) => (option === true ? DEFAULT_CACHE_SECONDS : option.seconds);
 
 export interface Page {
   path: string;
@@ -50,11 +56,11 @@ const RESERVED = ["/api", "/mcp", "/.well-known", "/login", "/signup", "/forgot"
 // One route with typed, checked parameters and an access check; plain functions in `routes` get
 // their parameters as strings and declare no access.
 export function route<Schema extends z.ZodType, App = AnyApp>(
-  definition: { params: Schema; access?: EndpointAccess<z.output<Schema>>; cache?: { seconds: number } },
+  definition: { params: Schema; access?: EndpointAccess<z.output<Schema>>; cache?: PageCacheOption },
   handler: PageHandler<z.output<Schema>, App>,
 ): PageRoute<z.output<Schema>, App>;
-export function route<App = AnyApp>(definition: { access?: EndpointAccess<Record<string, string>>; cache?: { seconds: number } }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
-export function route(definition: { params?: z.ZodType; access?: EndpointAccess; cache?: { seconds: number } }, handler: PageHandler): PageRoute {
+export function route<App = AnyApp>(definition: { access?: EndpointAccess<Record<string, string>>; cache?: PageCacheOption }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
+export function route(definition: { params?: z.ZodType; access?: EndpointAccess; cache?: PageCacheOption }, handler: PageHandler): PageRoute {
   return { ...definition, handler };
 }
 
@@ -77,7 +83,7 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
     checkAccessDeclaration(r.access, shape ? Object.keys(shape) : names, `page ${path}${key}`);
     if (r.cache !== undefined) {
       if (r.access !== "none") throw new Error(`page ${path}${key} asks to be cached, but a cached page is shared by every visitor and skips its access check; give it access: "none", or drop cache`);
-      const seconds = r.cache.seconds;
+      const seconds = cacheSeconds(r.cache);
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_CACHE_SECONDS) throw new Error(`page ${path}${key}: cache.seconds is a whole number from 1 to ${MAX_CACHE_SECONDS}`);
     }
     routes[key] = r;
@@ -182,8 +188,15 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         if (!checked.success) return notFound();
         params = checked.data;
       }
-      const seconds = found.route.cache?.seconds;
-      const key = seconds && cache && request.method === "GET" && !personal(request) ? cacheKey(url, cache.version) : undefined;
+      const seconds = found.route.cache === undefined ? undefined : cacheSeconds(found.route.cache);
+      let key: string | undefined;
+      if (seconds && cache && request.method === "GET" && !personal(request)) {
+        // A version that cannot be read means a page that is not cached, never a stale one.
+        key = await cache.version(url.pathname).then(
+          (version) => cacheKey(url, version),
+          (error: unknown) => void console.error(`page cache skipped for ${url.pathname}:`, error),
+        );
+      }
       if (key) {
         const hit = await cache!.match(key);
         if (hit) return withCacheState(hit, "hit");

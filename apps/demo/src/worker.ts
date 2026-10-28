@@ -96,6 +96,7 @@ async function addGroupNote(app: App, values: { organizationId: string; teamId: 
     await app.access.in(tx).create(row!.id, { parent: point, inherit: true });
     return row!;
   });
+  await app.cache.invalidate("/stats");
   const note = { ...inserted, author: user.name };
   // Saved first; the announcement only tells the group's open pages.
   await app.live.publish(point, { type: "note", note });
@@ -128,13 +129,14 @@ const print = page({
 });
 
 // A public page every visitor sees the same, so the edge keeps it for a minute: signed out, a
-// reload within that minute shows the same time and runs no query; signed in, it is fresh each time.
+// reload shows the same time and runs no query until a note is added or deleted, which
+// invalidates it; signed in, it is fresh each time.
 const stats = page({
   path: "/stats",
   routes: {
-    "/": route({ access: "none", cache: { seconds: 60 } }, async (_, app: App) => {
+    "/": route({ access: "none", cache: true }, async (_, app: App) => {
       const [row] = await app.db.select({ total: count() }).from(notes);
-      return printable("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for a minute for signed-out visitors.</p>`);
+      return printable("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for signed-out visitors until a note is added or deleted, or a minute passes.</p>`);
     }),
   },
 });
@@ -185,6 +187,7 @@ export default defineApp(
         return inserted;
       });
       if (attachment) await files.put(`${noteFolder(user.id, note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
+      await app.cache.invalidate("/stats");
       return Response.json(note, { status: 201 });
     }
 
@@ -224,6 +227,8 @@ export default defineApp(
           if (ids.length === 0) return [];
           return tx.delete(notes).where(inArray(notes.id, ids)).returning({ id: notes.id, userId: notes.userId, attachmentName: notes.attachmentName });
         });
+        // The count on /stats changed; a cached copy goes now, not in a minute.
+        if (gone.length > 0) await app.cache.invalidate("/stats");
         for (const note of gone) if (note.attachmentName) await app.files.delete(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`).catch(() => {});
         return { deleted: gone.length };
       }),
