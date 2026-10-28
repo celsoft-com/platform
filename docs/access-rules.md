@@ -241,6 +241,8 @@ checked against a plain reference version of these rules, in `access.model.test.
 | H2 | A point moves or changes inheritance | Every chain through it is rewritten above it; below it stays |
 | H3 | A point is removed | Its chains and every chain through it go |
 | H4 | A chain longer than 64 points | Stops at 64, as the walk it replaced did |
+| H5 | A point is made under a point whose inheritance is changing | It waits for the change and gets the chain it leaves; every tree change takes one lock |
+| H6 | Many moves, inheritance changes, creates and removes at once | Every stored chain matches a fresh walk of the tree |
 
 ## Remembered levels
 

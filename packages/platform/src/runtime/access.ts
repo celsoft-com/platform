@@ -493,8 +493,12 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       },
 
       async inherit(point, inherits) {
-        await changeable(on, point, MANAGE);
-        await on.execute(sql`update access_point set inherits = ${inherits}, updated_at = now() where id = ${point}`);
+        await on.transaction(async (raw) => {
+          const tx = raw as unknown as Db;
+          await lockTree(tx);
+          await changeable(tx, point, MANAGE);
+          await tx.execute(sql`update access_point set inherits = ${inherits}, updated_at = now() where id = ${point}`);
+        });
       },
 
       async grant(point, to, level, options = {}) {

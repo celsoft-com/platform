@@ -66,4 +66,48 @@ describe("Stored chains", () => {
     expect(chain).toHaveLength(64);
     expect(chain.at(-1)).toBe(`63:${ids[ids.length - 64]}`);
   });
+
+  it("H5: a point made under a point whose inheritance is changing gets the chain the change leaves", async () => {
+    const owner = w.as(await w.user());
+    const [a, b, c, d] = [`a-${uid()}`, `b-${uid()}`, `c-${uid()}`, `d-${uid()}`];
+    await owner.create(a);
+    await owner.create(b, { parent: a, inherit: true });
+    await owner.create(c, { parent: b, inherit: true });
+    let made: Promise<void> | undefined;
+    await db.transaction(async (tx) => {
+      await owner.in(tx).inherit(b, false);
+      made = owner.create(d, { parent: c, inherit: true });
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    await made;
+    expect(await chainOf(d)).toEqual([`0:${d}`, `1:${c}`, `2:${b}`]);
+  });
+
+  it("H6: many tree changes at once leave every stored chain matching a fresh walk of the tree", async () => {
+    const owner = w.as(await w.user());
+    const ids = Array.from({ length: 12 }, (_, i) => `c${i}-${uid()}`);
+    for (const [i, id] of ids.entries()) await owner.create(id, i === 0 ? {} : { parent: ids[Math.floor((i - 1) / 2)], inherit: true });
+    const pick = () => ids[Math.floor(Math.random() * ids.length)]!;
+    const changes = Array.from({ length: 60 }, (_, i) => {
+      switch (i % 4) {
+        case 0: return owner.move(pick(), Math.random() < 0.2 ? null : pick());
+        case 1: return owner.inherit(pick(), Math.random() < 0.5);
+        case 2: return owner.create(`n${i}-${uid()}`, { parent: pick(), inherit: true });
+        default: return Math.random() < 0.2 ? owner.remove(pick()) : owner.inherit(pick(), true);
+      }
+    });
+    await Promise.allSettled(changes);
+    const stored = (await w.query(`select point_id, ancestor_id, depth from access_ancestor order by 1, 3`)).rows;
+    const walked = (
+      await w.query(`
+        with recursive chains as (
+          select id as point_id, id as ancestor_id, parent_id, inherits, 0 as depth from access_point
+          union all
+          select c.point_id, q.id, q.parent_id, q.inherits, c.depth + 1 from chains c join access_point q on q.id = c.parent_id
+          where c.inherits and c.depth < 63
+        )
+        select point_id, ancestor_id, depth from chains order by 1, 3`)
+    ).rows;
+    expect(stored).toEqual(walked);
+  });
 });
