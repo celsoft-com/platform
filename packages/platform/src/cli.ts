@@ -11,6 +11,7 @@ import { NeonApi } from "./adapters/neon.js";
 import { R2Registry } from "./adapters/registry.js";
 import { ResendApi } from "./adapters/resend.js";
 import { DrizzleMigrator } from "./adapters/drizzle.js";
+import { queryStats, runSqlFile } from "./adapters/database.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
@@ -36,19 +37,23 @@ commands:
   cleanup <pr>     delete the preview for a pull request
   previews         list the previews that exist, with their pull request's state
   sweep            delete previews whose pull request is closed
+  db run <file.sql> --pr <n>
+                   run a file of SQL on a preview's database, such as load test data
+  db stats [--pr <n>] [--reset]
+                   the database's costliest queries since the counts were cleared; --reset clears them
   owner reset <email> [--pr <n>]
                    make that account the owner and set its password, for an owner locked out
   destroy [--data] delete everything the platform made for the app; --data also deletes its data
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "db run"; file: string } | { name: "db stats" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -120,6 +125,15 @@ async function main(argv: string[]): Promise<void> {
     await ownerReset(ctx, app.config, command.email, values.pr === undefined ? undefined : prNumber(values.pr));
     return;
   }
+  if (command.name === "db run") {
+    if (values.pr === undefined) throw new UsageError("db run works only on a preview's database; pass --pr <n>");
+    await dbRun(ctx, app.config, resolve(command.file), prNumber(values.pr));
+    return;
+  }
+  if (command.name === "db stats") {
+    await dbStats(ctx, app.config, values.pr === undefined ? undefined : prNumber(values.pr), values.reset);
+    return;
+  }
   if (command.name === "previews") {
     await listPreviews(ctx, appDir);
     return;
@@ -156,6 +170,11 @@ function parseCommand([name, pr, extra]: string[]): Command {
     return { name: "owner reset", email: extra };
   }
   if (name === "db" && pr === "generate") return { name: "db generate" };
+  if (name === "db" && pr === "run") {
+    if (!extra) throw new UsageError(`expected a .sql file\n\n${usage}`);
+    return { name: "db run", file: extra };
+  }
+  if (name === "db" && pr === "stats") return { name: "db stats" };
   if (name === "apps" && pr === "move") return { name: "apps move" };
   if (name === "upgrade" || name === "sweep" || name === "previews" || name === "generate") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
@@ -256,6 +275,30 @@ async function ownerReset(ctx: Context, config: Config, email: string, pr: numbe
     throw new PreflightError(`no account uses ${email} on ${branch.name}; sign up with it first`);
   }
   console.log(`+ ${email} is the owner on ${branch.name}, with the new password; its sessions are signed out`);
+}
+
+async function branchUri(ctx: Context, config: Config, pr: number | undefined): Promise<{ name: string; uri: string }> {
+  if (!config.database) throw new UsageError("this app has no database");
+  const project = config.database.neonProject;
+  const branch = pr === undefined ? await ctx.ports.neon.defaultBranch(project) : await ctx.ports.neon.findBranch(project, `pr-${pr}`);
+  if (!branch) throw new PreflightError(`pull request ${pr} has no preview database`);
+  return { name: branch.name, uri: await ctx.ports.neon.connectionUri(project, branch.id) };
+}
+
+async function dbRun(ctx: Context, config: Config, file: string, pr: number): Promise<void> {
+  const branch = await branchUri(ctx, config, pr);
+  if (ctx.run.dryRun) return console.log(`~ would run ${file} on ${branch.name}`);
+  await runSqlFile(branch.uri, file);
+  console.log(`+ ran ${file} on ${branch.name}`);
+}
+
+async function dbStats(ctx: Context, config: Config, pr: number | undefined, reset: boolean): Promise<void> {
+  const branch = await branchUri(ctx, config, pr);
+  const stats = await queryStats(branch.uri, reset);
+  if (reset) return console.log(`✓ query counts cleared on ${branch.name}`);
+  console.log(`costliest queries on ${branch.name}:`);
+  console.log(`${"total".padEnd(10)}${"mean".padEnd(10)}${"calls".padEnd(9)}query`);
+  for (const s of stats) console.log(`${`${Math.round(s.totalMs)}ms`.padEnd(10)}${`${s.meanMs.toFixed(2)}ms`.padEnd(10)}${String(s.calls).padEnd(9)}${s.query.slice(0, 140)}`);
 }
 
 // Typed twice in a terminal with nothing echoed; read from standard input otherwise.

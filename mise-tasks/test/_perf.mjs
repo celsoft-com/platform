@@ -34,6 +34,8 @@ const endpoints = {
   "edit a note": () => send(`/api/public/notes/${note}`, { method: "PUT", body: JSON.stringify({ body: `edited ${Date.now()}` }) }),
   "my organizations": () => send("/api/organizations"),
   "server page": () => send(`/print/${note}`),
+  // Loaded by --seed: 61 points deep, readable through the top of its chain.
+  ...(process.env.SEEDED && { "deepest note": () => send("/api/public/notes/00000000-0000-4000-8000-00000000dee9") }),
 };
 
 const pct = (values, p) => {
