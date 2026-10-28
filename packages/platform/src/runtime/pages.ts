@@ -60,11 +60,17 @@ export function route(definition: { params?: z.ZodType; cache?: PageCacheOption 
 }
 
 // The path a page claims, and its routes below it: "/" is the path itself, "/:id/edit" a path
-// below it whose first segment is the parameter `id`.
+// below it whose first segment is the parameter `id`. The root page is a special claim: it answers
+// `/` alone, never the paths below it, which stay static files.
+export const ROOT = "/";
+
 export function page<R extends Record<string, unknown>, App = AnyApp>(definition: { path: string; routes: { [K in keyof R]: PageRoute<any, App> | PageHandler<PathParams<K & string>, App> } }): Page {
   const { path } = definition;
-  if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(path) || path.split("/").some((s) => s === "." || s === "..")) {
-    throw new Error(`page path ${JSON.stringify(path)} must be like /notes or /docs/guide: segments of letters, digits and . _ ~ -, no parameters and no trailing slash`);
+  if (path === ROOT) {
+    const keys = Object.keys(definition.routes);
+    if (keys.length !== 1 || keys[0] !== "/") throw new Error(`the root page answers / alone, so its only route is "/"; put pages below it under paths of their own, such as /about`);
+  } else if (!/^(\/[A-Za-z0-9._~-]+)+$/.test(path) || path.split("/").some((s) => s === "." || s === "..")) {
+    throw new Error(`page path ${JSON.stringify(path)} must be "/" or like /notes or /docs/guide: segments of letters, digits and . _ ~ -, no parameters and no trailing slash`);
   }
   const reserved = RESERVED.find((r) => path === r || path.startsWith(`${r}/`));
   if (reserved) throw new Error(`page path ${path} is under ${reserved}, which the platform answers itself`);
@@ -153,7 +159,8 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
     compiled.set(p.path, list);
   }
 
-  const claimOf = (pathname: string) => claims.find((c) => pathname === c || pathname.startsWith(`${c}/`));
+  // The root claims `/` alone; any other claim, its path and everything below it.
+  const claimOf = (pathname: string) => claims.find((c) => pathname === c || (c !== ROOT && pathname.startsWith(`${c}/`)));
   return {
     claims,
     owns: (pathname) => claimOf(pathname) !== undefined,
@@ -161,7 +168,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
-      const rest = url.pathname.slice(claim.length).replace(/\/$/, "");
+      const rest = claim === ROOT ? "" : url.pathname.slice(claim.length).replace(/\/$/, "");
       let parts: string[];
       try {
         parts = rest === "" ? [] : rest.slice(1).split("/").map(decodeURIComponent);

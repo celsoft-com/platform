@@ -171,6 +171,11 @@ describe("auth and email", () => {
     expect((ports.wrangler.deploys[1]!.config.assets as { run_worker_first: string[] }).run_worker_first).toEqual(["/api/*"]);
   });
 
+  it("routes only / itself to the Worker for a root page, leaving every path below it static", async () => {
+    await deploy({ ...ctx(), pages: ["/"] }, { kind: "prod" });
+    expect((ports.wrangler.deploys[0]!.config.assets as { run_worker_first: string[] }).run_worker_first).toEqual(["/api/*", "/"]);
+  });
+
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
     await deploy(authCtx(), { kind: "prod" });
 

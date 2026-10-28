@@ -37,8 +37,8 @@ const get = async (path: string, init?: RequestInit, env: object = {}) => {
 };
 
 describe("Pages: declaring", () => {
-  it("P1: a page path is plain segments, never a parameter, a trailing slash or the root", () => {
-    for (const path of ["/", "", "notes", "/notes/", "/:id", "/notes/*", "/a//b", "/a/../b", "/a b"]) {
+  it("P1: a page path is the root or plain segments, never a parameter or a trailing slash", () => {
+    for (const path of ["", "//", "notes", "/notes/", "/:id", "/notes/*", "/a//b", "/a/../b", "/a b"]) {
       expect(() => page({ path, routes: { "/": () => "" } }), path).toThrow(/page path/);
     }
   });
@@ -76,6 +76,17 @@ describe("Pages: declaring", () => {
     expect(() => pageServer([a, page({ path: "/Notes", routes: { "/": () => "" } })])).toThrow(/overlapping/);
     expect(() => pageServer([a, page({ path: "/notebook", routes: { "/": () => "" } })])).not.toThrow();
     expect(() => pageServer([page({ path: "/x", routes: { "/:a": () => "", "/:b": () => "" } })])).toThrow(/same paths/);
+  });
+
+  it("P45: the root page answers / alone; every path below it goes on to the handler", async () => {
+    expect(() => page({ path: "/", routes: { "/": () => "", "/:id": () => "" } })).toThrow(/only route is "\/"/);
+    expect(() => page({ path: "/", routes: { "/about": () => "" } })).toThrow(/only route is "\/"/);
+    const rooted = defineApp(() => new Response("handler"), { pages: [page({ path: "/", routes: { "/": () => "<h1>home</h1>" } }), page({ path: "/about", routes: { "/": () => "about" } })] });
+    const body = async (path: string) => (await rooted.fetch(new Request(`https://app.test${path}`), {}, ctx)).text();
+    expect(await body("/")).toBe("<h1>home</h1>");
+    expect(await body("/about")).toBe("about");
+    for (const path of ["/notes", "/index.html", "/x/y"]) expect(await body(path), path).toBe("handler");
+    expect(rooted.pages).toEqual(["/", "/about"]);
   });
 
   it("P7: the app lists its claimed paths for the deploy", () => {
