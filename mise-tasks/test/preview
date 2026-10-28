@@ -29,6 +29,8 @@ status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/
 level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
 note_url="$base/api/public/notes/$id"
 check "owner's level on own note" "$(json -b "$jar" "$note_url" | level)"
+etag=$(curl -s -D - -o /dev/null -b "$jar" "$note_url" | sed -n 's/^etag: *\(.*\)\r$/\1/Ip')
+check "unchanged read answers 304" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
 jar2=$(mktemp)
 friend="friend-$RANDOM@example.com"
 json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null

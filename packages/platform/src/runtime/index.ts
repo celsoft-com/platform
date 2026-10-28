@@ -18,6 +18,7 @@ import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizatio
 import { pageServer, type Page } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { conditional } from "./conditional.js";
 import { Trace, withTiming } from "./trace.js";
 
 export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Access, type Grant, type Grantee, type Level, type Link, type PointInfo, type PointOptions, type ShareEmail, type StaticPoint } from "./access.js";
@@ -226,7 +227,7 @@ export function defineApp<
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       const trace = env.TRACE === "on" ? new Trace() : undefined;
-      return dbSlot.run({}, async () => withTiming(await serve(request, env, ctx, trace), trace));
+      return dbSlot.run({}, async () => withTiming(await conditional(request, await serve(request, env, ctx, trace)), trace));
     },
 
     // The Durable Object class behind live rooms, exported by the deploy's generated entry module.
