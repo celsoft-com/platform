@@ -62,8 +62,19 @@ export default defineApp(undefined, {
 
 ## Server pages
 
-Pages the Worker renders on each request, for share previews, pages search engines must read, or
-pages that need the session or database. A page claims a path and everything below it:
+Pages the Worker renders on each request, for share previews and pages search engines must read.
+
+**Rendering rule:** the Worker renders HTML only for content that every signed-out visitor sees
+identically, because that is what search engines must be able to read without JavaScript.
+Anything that depends on who is looking or on what they have done (sign-in state, saved choices,
+checkmarks, drafts, admin screens) is never rendered on the server; the browser adds it with
+JavaScript after the page loads. A page can mix both: the server renders the shared content in its
+default state, such as a checklist with every box unchecked, and the browser fills in the
+visitor's own state. This is the same line as the edge cache: anything the server renders must be
+cacheable as a public response and cleared with `app.cache.invalidate(path)` when its content
+changes, and anything that could not be cached that way belongs in the browser.
+
+A page claims a path and everything below it:
 
 ```ts
 import { defineApp, page, route } from "@celsoft/platform";
@@ -71,11 +82,11 @@ import { defineApp, page, route } from "@celsoft/platform";
 const notesPage = page({
   path: "/notes",                       // claims /notes and /notes/*; no static file is served there
   routes: {
-    "/": async (_, app) => `<h1>Hi ${(await app.requireUser()).name}</h1>`,
+    "/": () => "<h1>Notes</h1>",
     "/new": () => "<h1>New</h1>",       // text segments win over parameters
     "/:id": route(
-      { params: z.object({ id: z.uuid() }), access: { point: "id", level: "read" } },
-      async ({ id }, app) => `<h1>${escape(await bodyOf(app, id))}</h1>`,
+      { params: z.object({ id: z.uuid() }), access: "none", cache: true },
+      async ({ id }, app) => `<h1>${escape(await publishedBody(app, id))}</h1>`,
     ),
   },
 });
