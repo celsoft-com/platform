@@ -204,7 +204,7 @@ describe("Wiring", () => {
 
 describe("Wiring with auth", () => {
   const app = defineApp(undefined, { pool: (connectionString) => new Pool({ connectionString, max: 2 }) });
-  const env = { DB: { connectionString: url }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", APP_URL: "https://app.test", APP_NAME: "test", ACCESS: "on", AUTH_ORGANIZATIONS: "on", EMAIL_MODE: "capture" as const };
+  const env = { DB: { connectionString: url }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", AUTH_SIGNUP: "open", APP_URL: "https://app.test", APP_NAME: "test", ACCESS: "on", AUTH_ORGANIZATIONS: "on", EMAIL_MODE: "capture" as const };
   const pending: Promise<unknown>[] = [];
   const ctx = { waitUntil: (p: Promise<unknown>) => void pending.push(p) };
   const send = async (path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) => {

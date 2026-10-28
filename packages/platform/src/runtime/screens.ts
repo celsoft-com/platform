@@ -204,6 +204,8 @@ form.addEventListener("submit", async e => {
   finally { button.disabled = false; }
 });
 
+// An invitation links to /signup?email=..., the address it was sent to.
+if (page === "signup" && params.get("email")) form.querySelector('[name="email"]').value = params.get("email");
 // The reset link carries the email, so a password manager knows which saved login to update.
 if (page === "reset") document.getElementById("email").value = params.get("email") || "";
 if (page === "reset" && (params.get("error") || !params.get("token"))) say("That reset link has expired or was already used. Ask for a new one from the sign-in page.");
@@ -309,4 +311,82 @@ form.addEventListener("submit", async e => {
 });
 
 load();
+`;
+
+// The invitations screen: the owner and admins invite an address to sign up, and revoke open ones.
+export function renderInvitesScreen(appName: string, stylesheet: string | undefined): Response {
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invitations · ${escape(appName)}</title>
+<style>${STYLE}${TOKENS_STYLE}</style>${stylesheet ? `<link rel="stylesheet" href="${escape(stylesheet)}">` : ""}
+</head><body class="platform-screen" data-page="invites">
+<main class="platform-card platform-wide">
+<p class="platform-app">${escape(appName)}</p>
+<h1 class="platform-title">Invitations</h1>
+<p class="platform-intro">Sign-up is invite-only. An invitation lets one address create an account within 14 days; it is emailed a link.</p>
+<form class="platform-form" novalidate>
+<label class="platform-field"><span class="platform-label">Email</span><input class="platform-input" name="email" type="email" required autocomplete="off"></label>
+<p class="platform-error" role="alert" hidden></p>
+<button class="platform-button" type="submit">Invite</button></form>
+<div class="platform-message" role="status" hidden></div>
+<ul class="platform-tokens"></ul>
+<nav class="platform-links"><a href="/">Back to the app</a></nav>
+</main>
+<script>${INVITES_SCRIPT}</script>
+</body></html>`;
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
+
+const INVITES_SCRIPT = `
+const form = document.querySelector(".platform-form");
+const error = document.querySelector(".platform-error");
+const message = document.querySelector(".platform-message");
+const list = document.querySelector(".platform-tokens");
+const fail = err => { error.textContent = err.message; error.hidden = false; };
+
+async function call(method, path, body) {
+  const r = await fetch(path, { method, headers: { "content-type": "application/json" }, body: body && JSON.stringify(body), credentials: "same-origin" });
+  if (r.status === 401) { location.assign("/login?next=" + encodeURIComponent("/invites")); return; }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.message || data.error || "That didn't work. Try again.");
+  return data;
+}
+
+async function load() {
+  const invites = (await call("GET", "/api/platform/invites")) || [];
+  list.replaceChildren(...invites.map(i => {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    const address = document.createElement("strong");
+    address.textContent = i.email;
+    const meta = document.createElement("small");
+    meta.textContent = "expires " + new Date(i.expiresAt).toLocaleString();
+    text.append(address, meta);
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.textContent = "Revoke";
+    revoke.onclick = async () => {
+      if (!confirm("Revoke the invitation for " + i.email + "?")) return;
+      try { await call("DELETE", "/api/platform/invites/" + i.id); load(); } catch (err) { fail(err); }
+    };
+    li.append(text, revoke);
+    return li;
+  }));
+}
+
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  error.hidden = true;
+  if (!form.reportValidity()) return;
+  const email = new FormData(form).get("email");
+  try {
+    await call("POST", "/api/platform/invites", { email });
+    message.replaceChildren(Object.assign(document.createElement("p"), { textContent: "Invited " + email + "; they were emailed a link." }));
+    message.hidden = false;
+    form.reset();
+    load();
+  } catch (err) { fail(err); }
+});
+
+load().catch(fail);
 `;

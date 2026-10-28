@@ -3,7 +3,7 @@ import { SCREEN_PATHS } from "./runtime/screens.js";
 declare const process: { env: Record<string, string | undefined> };
 
 // What the local Worker answers; everything else is the frontend's dev server.
-const WORKER_PATHS = ["/api", "/mcp", "/.well-known", ...SCREEN_PATHS];
+const WORKER_PATHS = ["/api", "/mcp", "/.well-known", "/invites", ...SCREEN_PATHS];
 
 // A Vite plugin for `platform dev`: Vite serves the frontend with instant reloads and forwards
 // the Worker's paths to the local Worker, on the port the platform chose.

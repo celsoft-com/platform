@@ -470,6 +470,19 @@ export const accessLink = pgTable(
   (t) => [check("access_link_level", sql`${t.level} between 1 and 3`), index("access_link_point_idx").on(t.pointId)],
 );
 
+// An invitation to sign up, once sign-up is invite-only: one address, used up when it signs up.
+export const signupInvite = pgTable(
+  "signup_invite",
+  {
+    id: id(),
+    email: text("email").notNull().unique(),
+    expiresAt: at("expires_at").notNull(),
+    invitedBy: uuid("invited_by").references(() => user.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => [check("signup_invite_email_lower", sql`${t.email} = lower(${t.email})`)],
+);
+
 export const authSchema = {
   user,
   session,
@@ -487,5 +500,7 @@ export const authSchema = {
 };
 
 export const organizationSchema = { organization, member, team, teamMember, invitation };
+
+export const inviteSchema = { signupInvite };
 
 export const accessSchema = { accessPoint, accessAncestor, accessGrant, accessLink };

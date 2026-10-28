@@ -16,9 +16,18 @@ check "GET /login has title" "$(curl -s "$base/login" | grep -c 'platform-title"
 check "GET /api/notes signed out" "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/notes")"
 check "cross-site form post" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/x-www-form-urlencoded' -H 'origin: https://evil.example' -d a=1 "$base/api/notes")"
 
+# Sign-up is invite-only and the preview's database is a copy of prod, which has its owner: the
+# test owner's invitation goes straight into the preview's database, and `owner reset` makes it
+# the owner, which invites everyone else the test signs up.
 body='{"name":"Owner","email":"'$email'","password":"first-password-1"}'
+check "uninvited sign-up refused (403)" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")"
+invite_sql=$(mktemp)
+printf "insert into signup_invite (email, expires_at) values ('%s', now() + interval '1 day') on conflict (email) do nothing;\n" "$email" > "$invite_sql"
+mise run platform -- db run "$invite_sql" --pr "$pr" >/dev/null 2>&1
 signup=$(curl -s -c "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")
-check "sign up returns a session token" "$(echo "$signup" | grep -c '"token":"')"
+check "invited sign-up returns a session token" "$(echo "$signup" | grep -c '"token":"')"
+check "test owner made the owner" "$(printf 'first-password-1\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
+curl -s -c "$jar" -H 'content-type: application/json' -H "origin: $base" -d '{"email":"'$email'","password":"first-password-1"}' "$base/api/auth/sign-in/email" >/dev/null
 attachment=$(mktemp)
 printf 'hello' > "$attachment"
 note=$(curl -s -b "$jar" -H "origin: $base" -F body="first note" -F "file=@$attachment;type=text/plain" "$base/api/notes")
@@ -39,7 +48,10 @@ etag=$(curl -s -D - -o /dev/null -b "$jar" "$note_url" | tr -d '\r' | awk 'tolow
 check "unchanged read answers 304" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
 jar2=$(mktemp)
 friend="friend-$RANDOM@example.com"
+check "owner invites a friend (201)" "$(status -b "$jar" -d '{"email":"'$friend'"}' "$base/api/platform/invites")"
+check "invitations screen served" "$(curl -s "$base/invites" | grep -c 'Invitations</h1>')"
 json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null
+check "friend cannot invite (403)" "$(status -b "$jar2" -d '{"email":"x-'$RANDOM'@example.com"}' "$base/api/platform/invites")"
 check "someone else's note refused (404)" "$(status -b "$jar2" "$note_url")"
 check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/public/notes/$id/attachment")"
 check "attachment refused signed out (404)" "$(status "$base/api/public/notes/$id/attachment")"
@@ -130,4 +142,4 @@ check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run plat
 check "old session (cached up to 1 minute)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
 check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
 check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
-rm -f "$jar" "$jar2" "$jar3" "$attachment"
+rm -f "$jar" "$jar2" "$jar3" "$attachment" "$invite_sql"

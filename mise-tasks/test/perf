@@ -11,6 +11,14 @@ if [ -n "$seed" ]; then
   [ -n "$pr" ] || { echo "--seed needs a preview url such as https://pr-19.example.com" >&2; exit 1; }
   mise run platform -- db run "$(cd "$(dirname "$0")" && pwd)/_seed.sql" --pr "$pr"
 fi
+# Sign-up is invite-only, so the test user's invitation goes into the preview's database first.
+email="perf-$RANDOM$RANDOM@example.com"
+if [ -n "$pr" ]; then
+  invite_sql=$(mktemp)
+  printf "insert into signup_invite (email, expires_at) values ('%s', now() + interval '1 day') on conflict (email) do nothing;\n" "$email" > "$invite_sql"
+  mise run platform -- db run "$invite_sql" --pr "$pr" >/dev/null
+  rm -f "$invite_sql"
+fi
 [ -z "$pr" ] || mise run platform -- db stats --reset --pr "$pr"
-SEEDED="$seed" node "$(dirname "$0")/_perf.mjs" "${args[@]}"
+PERF_EMAIL="$email" SEEDED="$seed" node "$(dirname "$0")/_perf.mjs" "${args[@]}"
 [ -z "$pr" ] || mise run platform -- db stats --pr "$pr"

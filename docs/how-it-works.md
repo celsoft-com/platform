@@ -97,6 +97,7 @@ flowchart LR
 1. **Paths:** `/login`, `/signup`, `/forgot` and `/reset`, rendered by the platform when `auth` is on.
 2. **Restyling:** `defineApp(handler, { screens: { stylesheet: "/auth.css" } })` loads the app's own CSS after the platform's.
 3. **Replacing:** an app can build its own pages that call `/api/auth/*` directly instead.
+4. **Invite-only:** once the app has its first account, which becomes the owner, only invited addresses may sign up; the owner and admins invite at `/invites`, and an organization invitation or a share to an address also lets it in. `"auth": { "signup": "open" }` lets anyone sign up.
 
 ### The app's API
 

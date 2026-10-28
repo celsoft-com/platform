@@ -8,4 +8,8 @@
   "database": {
     "neonProject": "{{neonProject}}"
   }
+  // Accounts and sign-in: uncomment both lines. Sign-up is invite-only once the app has its first
+  // account, which becomes the owner and invites people at /invites; "open" lets anyone sign up.
+  // "email": true,
+  // "auth": { "signup": "invite" }
 }

@@ -9,7 +9,7 @@
     "neonProject": "${DEMO_NEON_PROJECT}"
   },
   "email": true,
-  "auth": { "organizations": true, "apiTokens": true },
+  "auth": { "organizations": true, "apiTokens": true, "signup": "invite" },
   "files": true,
   "live": true,
   "mcp": true,
