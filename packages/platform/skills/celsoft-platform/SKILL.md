@@ -128,8 +128,9 @@ The platform keeps its own work per request near zero; keep the app's the same:
 3. **Lists:** filter and page in the query, `.where(and(eq(notes.userId, me.id), await app.access.readable(notes.id))).limit(50)`, by an indexed column first; never check rows one by one in code.
 4. **Lookups:** load related names for many rows with one `inArray` query, never one query per row.
 5. **Checks:** asking the same point's level twice in a request costs nothing the second time.
-6. **Seeing it:** previews and `dev` answer every request with a `Server-Timing` header listing each query and its time; the browser's network panel shows it under Timing.
+6. **Seeing it:** previews and `dev` answer every request with a `Server-Timing` header listing each query and its time; the browser's network panel shows it under Timing. Prod logs it for one request in 100, in the Worker's logs, and `db stats` lists the costliest queries.
 7. **Pages:** the browser should make one request per action, and redraw only what changed.
+8. **Repeat reads:** a JSON read gets an `ETag`, and an unchanged repeat answers `304` by itself; send `cache-control: no-store` on a response that must never be kept, even privately.
 
 ## Organizations
 
@@ -180,6 +181,8 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 | `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests |
 | `previews` | Lists the previews that exist |
 | `owner reset <email>` | Makes that account the owner and sets its password |
+| `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |
+| `db run <file> --pr <n>` | Runs a SQL file on a preview's database, such as load test data |
 | `--dry-run` | On any command, shows what would change |
 
 ## Rules

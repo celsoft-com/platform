@@ -76,7 +76,7 @@ flowchart LR
 1. **Your files:** `npm create @celsoft/platform-app` writes them once, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments.
 2. **Migrations:** `db generate` writes them; an edited migration that already ran never runs again, so databases created before and after the edit end up different.
 3. **Workflow:** `init` writes it; CI stops if it differs from what the installed version writes, so an edit fails the next deploy until `init` is rerun.
-4. **Temporary:** `deploy` and `dev` write the Wrangler config, entry module and secrets, then delete them; they are gitignored.
+4. **Temporary:** `deploy` and `dev` write the Wrangler config, entry module, a stub standing in for Better Auth's unused Kysely adapter, and secrets, then delete them; they are gitignored. The deployed Worker is minified, so it starts faster.
 5. **Package:** everything else runs from `node_modules`, so a new version reaches the app with no file changes.
 6. **Upgrading:** bump the package, run `init` and `db generate`, and commit what changed; CI stops with the fix when either was skipped.
 7. **Customizing:** done through options the package reads, such as `screens.stylesheet` or `live.canJoin`, never by editing a generated file.
@@ -129,6 +129,7 @@ flowchart LR
 2. **Making:** people make, list and revoke their own at `/tokens`, choosing a name, a lifetime of up to 365 days (90 by default) and a level cap.
 3. **Using:** scripts send `Authorization: Bearer <token>` to `/api/`; the request runs as the token's owner, with every access check capped at the token's level, and a `read` token only reads.
 4. **Never on auth:** tokens are ignored on `/api/auth/*` and refused on `/mcp`.
+5. **Limits:** each token has its own allowance of `rateLimit` requests a minute, spent before it is looked up; a bad token also spends from its sender's address, so fake tokens cannot each get a fresh allowance.
 
 ### MCP
 
@@ -169,3 +170,4 @@ flowchart LR
 3. **Cleanup:** closing a PR deletes its preview, and a daily sweep catches any that were missed.
 4. **Same everywhere:** CI and a local `npx @celsoft/platform deploy` run the same steps.
 5. **Own resources only:** the platform changes or deletes only resources carrying a name it makes for the app; [design.md](design.md#7-resource-identity) lists every name.
+6. **Watching speed:** previews send `Server-Timing` on every response; prod logs it for one request in 100; `db stats` lists the costliest queries, and `db run <file> --pr <n>` loads test data into a preview.

@@ -243,12 +243,12 @@ Built in PR 19, each measured on its preview before the next:
 | 7 | The rules in a PL/pgSQL function, planned once per connection | 6.6.3 | Yes, in place of prepared statements |
 | 8 | API tokens checked in one query, last use written hourly | 6.4 | Yes |
 | 9 | Per-caller rate limit, `rateLimit` in `platform.jsonc` | 6.11 | Yes |
-| 10 | MCP SDK loaded only on `/mcp` | 6.5.4 | Yes; startup stayed about 110ms, minifying did not help and broke the live client |
+| 10 | MCP SDK loaded only on `/mcp`; the Worker minified and Kysely stubbed | 6.5.4 | Yes; the bundle went from 4.9 MB to 2.0 MB and loading it in Node from 96ms to 79ms |
 | 11 | Demo panel: one query per kind of name, reads together, redraws alone | 6.8.1 | Yes |
 | 12 | Server-Timing on previews and `dev`; budgets in the smoke test; `mise run test:perf` | 8 | Yes |
 | 13 | Access folded into the app's own query for single reads | 6.2.1 | Decided against: the check stays explicit, shaped to the points it checks, so an app can handle a refusal its own way; a read is 2 round trips |
-| 14 | Conditional requests | 6.8.2 | No |
-| 15 | Prod sampling, `pg_stat_statements` in the load test | 8 | No |
+| 14 | Conditional requests | 6.8.2 | Yes: JSON reads carry an `ETag`, unchanged repeats answer 304 |
+| 15 | Prod sampling, `pg_stat_statements` in the load test | 8 | Yes: prod logs one request in 100; `test:perf` prints `db stats` |
 | 16 | Access in Durable Objects | 6.3.4 | Not needed: a check is 0.26ms of database time |
 
 ## 10. Results
