@@ -1,5 +1,6 @@
 // The browser side of live rooms. It has no imports and closes over nothing, so the runtime
-// can also serve it as a script with `live.toString()`, for pages that have no bundler.
+// can also serve it as a script with `live.toString()`, for pages that have no bundler; the
+// deploy minifies, so the served script names it itself rather than trusting its own name.
 
 declare const location: { href: string; reload(): void };
 

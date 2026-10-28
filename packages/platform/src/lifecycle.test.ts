@@ -196,7 +196,8 @@ describe("auth and email", () => {
     ]);
     const [authLimit, apiLimit] = first.config.ratelimits as { namespace_id: string }[];
     expect(authLimit!.namespace_id).not.toBe(apiLimit!.namespace_id);
-    expect(first.config.minify).toBeUndefined();
+    expect(first.config.minify).toBe(true);
+    expect(first.config.alias).toEqual({ kysely: "./no-kysely.cjs", "@better-auth/kysely-adapter": "./no-kysely.cjs" });
     expect((first.config.assets as { run_worker_first: string[] }).run_worker_first).toContain("/login");
     expect(first.config.main).toBe("entry.ts");
     expect(first.config.durable_objects).toEqual({ bindings: [{ name: "LIVE", class_name: "LiveRoom" }] });

@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { generatedPath } from "../generate.js";
 import type { Wrangler } from "../ports.js";
-import { ENTRY_FILE, entryModule } from "../wrangler-config.js";
+import { ENTRY_FILE, entryModule, NO_KYSELY_FILE, NO_KYSELY_MODULE } from "../wrangler-config.js";
 
 export class WranglerCli implements Wrangler {
   constructor(
@@ -16,7 +16,7 @@ export class WranglerCli implements Wrangler {
   async deploy(config: object, secrets: Record<string, string>): Promise<void> {
     const configFile = generatedPath(this.appDir, "wrangler.json");
     const secretsFile = generatedPath(this.appDir, "secrets.json");
-    const entryFile = await this.writeEntry();
+    const entryFiles = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
     try {
@@ -27,15 +27,17 @@ export class WranglerCli implements Wrangler {
     } finally {
       await rm(secretsFile, { force: true });
       await rm(configFile, { force: true });
-      await rm(entryFile, { force: true });
+      for (const file of entryFiles) await rm(file, { force: true });
     }
   }
 
-  private async writeEntry(): Promise<string> {
+  private async writeEntry(): Promise<string[]> {
     await mkdir(generatedPath(this.appDir, ""), { recursive: true });
-    const file = generatedPath(this.appDir, ENTRY_FILE);
-    await writeFile(file, entryModule(this.worker));
-    return file;
+    const entry = generatedPath(this.appDir, ENTRY_FILE);
+    const stub = generatedPath(this.appDir, NO_KYSELY_FILE);
+    await writeFile(entry, entryModule(this.worker));
+    await writeFile(stub, NO_KYSELY_MODULE);
+    return [entry, stub];
   }
 
   // wrangler dev reads secrets from a .dev.vars file beside its config, and takes the local
@@ -43,7 +45,7 @@ export class WranglerCli implements Wrangler {
   async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void> {
     const configFile = generatedPath(this.appDir, "wrangler.json");
     const devVars = generatedPath(this.appDir, ".dev.vars");
-    const entryFile = await this.writeEntry();
+    const entryFiles = await this.writeEntry();
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(devVars, Object.entries(secrets).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n", { mode: 0o600 });
     try {
@@ -54,7 +56,7 @@ export class WranglerCli implements Wrangler {
     } finally {
       await rm(devVars, { force: true });
       await rm(configFile, { force: true });
-      await rm(entryFile, { force: true });
+      for (const file of entryFiles) await rm(file, { force: true });
     }
   }
 }

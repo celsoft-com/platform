@@ -2,6 +2,9 @@
 const [base, cookie] = process.argv.slice(2);
 const check = (label, value) => console.log(`${label.padEnd(44)} ${value}`);
 const headers = { cookie, origin: base };
+// The served client is minified with the Worker, so it must still load on its own and export `live`.
+const client = await (await fetch(`${base}/api/live/client.js`)).text();
+check("live client loads as a module", typeof (await import(`data:text/javascript,${encodeURIComponent(client)}`)).live);
 const api = async (path, body) => (await fetch(base + path, { method: body ? "POST" : "GET", headers: { ...headers, "content-type": "application/json" }, ...(body && { body: JSON.stringify(body) }) })).json();
 
 function open(room) {
