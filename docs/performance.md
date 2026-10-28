@@ -289,7 +289,7 @@ Measured on the PR 18 preview before and the PR 19 preview after, same Neon comp
 The rule in section 2 and the targets in section 3 are proposed here. The
 [performance decisions page](https://claude.ai/artifact/K11uC7jybNXceuoKYHajYR) predates this work.
 
-Approved on the [readiness page](https://claude.ai/artifact/9Nn26Cjuv4wVy1YLbxygdv), not built yet:
+Approved on a readiness decisions page, not built yet:
 
 1. **Inheritance lock:** `inherit` takes the same tree lock as create, move and remove, so two
    changes at once cannot leave a stored chain stale.
@@ -308,3 +308,6 @@ Approved on the [readiness page](https://claude.ai/artifact/9Nn26Cjuv4wVy1YLbxyg
    429 for its tokens for a minute, before any lookup.
 8. **Session cache:** the signed cookie keeps a session for 1 minute instead of 5, so a revoke or
    ban reaches every browser within a minute.
+9. **Live rate limit:** the preview smoke test makes one throwaway token and sends it past the
+   app's normal limit, about 1200 requests, expecting a 429 with `retry-after`; no preview-only
+   setting.
