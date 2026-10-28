@@ -85,7 +85,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 1. **Paths:** plain segments, never `/`, a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
 2. **Routes:** `"/"` is the claimed path itself; a route matching nothing under the claim is a 404. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
-3. **Answers:** return an HTML string, sent uncached as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
+3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
 6. **Signed out:** `requireUser()` on a page redirects to `/login?next=<page>`, which returns there after sign-in.
@@ -93,6 +93,13 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 8. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
 9. **Tokens and links:** API tokens are accepted on page GET and HEAD, capped; a refused page takes a `#link=` share link from its address, keeps it as a cookie and reloads, so `/print/7#link=<token>` opens for a link holder.
 10. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
+11. **Caching:** a page that is the same for every visitor, such as a landing or stats page, may add `cache: { seconds }`:
+    `route({ access: "none", cache: { seconds: 300 } }, async (_, app) => html)`.
+    1. **Safe by rule:** only `access: "none"` routes may, for at most 3,600 seconds; signed-in visitors, links and tokens always get a fresh answer, and nothing they get is kept.
+    2. **Same for everyone:** the cache key is the path and query only, so a cached page's HTML must never depend on anything else about a signed-out visitor, such as other cookies, `accept-language` or location; reading the session is fine, since signed-in requests are never cached.
+    3. **Freshness:** every deploy starts empty; between deploys a change shows within `seconds`, so keep it to minutes.
+    4. **What it saves:** a hit skips the handler and its queries; the request itself is still billed.
+    5. **Seeing it:** the `platform-cache` header is `hit` or `miss`.
 
 ## `app`
 

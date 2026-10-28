@@ -55,6 +55,8 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     workers_dev: false,
     routes: [{ pattern: hostname, custom_domain: true }],
     observability: { enabled: true },
+    // Its id keys cached pages, so a deploy never serves a page an older version rendered.
+    version_metadata: { binding: "CF_VERSION_METADATA" },
     // A smaller script starts faster; the live room client is served from its own source, unnamed.
     minify: true,
     alias: { kysely: `./${NO_KYSELY_FILE}`, "@better-auth/kysely-adapter": `./${NO_KYSELY_FILE}` },

@@ -15,7 +15,7 @@ import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH,
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
-import { pageServer, type Page } from "./pages.js";
+import { pageServer, type Page, type PageCache } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { isScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
 import { conditional } from "./conditional.js";
@@ -45,6 +45,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   LIVE_ROOMS?: string;
   MCP?: string;
   ACCESS?: string;
+  // The deployed version, which keys cached pages so every deploy starts with none.
+  CF_VERSION_METADATA?: { id: string };
   // "on" on previews and in local dev: every response says where its time went, in Server-Timing;
   // "sample" in prod: one request in SAMPLE_EVERY logs it instead.
   TRACE?: string;
@@ -202,7 +204,7 @@ export function defineApp<
         const platform = await platformRoute(request, url, env, current, options);
         if (platform) return platform;
       }
-      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET));
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx));
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
@@ -406,6 +408,20 @@ function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boo
 }
 
 const SAMPLE_EVERY = 100;
+
+interface EdgeCache {
+  match(key: string): Promise<Response | undefined>;
+  put(key: string, response: Response): Promise<void>;
+}
+
+// Cloudflare's Cache API, in the data center the Worker runs in, which sits next to the database,
+// so every visitor shares it; absent outside Workers and without a deploy version.
+function pageCache(env: PlatformBindings, ctx: ExecutionContext): PageCache | undefined {
+  const edge = (globalThis as { caches?: { default?: EdgeCache } }).caches?.default;
+  const version = env.CF_VERSION_METADATA?.id;
+  if (!edge || !version) return undefined;
+  return { version, match: (key) => edge.match(key), put: (key, response) => ctx.waitUntil(edge.put(key, response)) };
+}
 
 const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
 
