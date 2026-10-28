@@ -180,6 +180,7 @@ describe("auth and email", () => {
     expect(Object.keys(first.secrets).sort()).toEqual(["BETTER_AUTH_SECRET", "EMAIL_API_KEY", "SESSION_SECRET"]);
     expect(first.config.vars).toEqual({
       APP_URL: "https://demo.example.com",
+      TRACE: "sample",
       APP_NAME: "demo",
       LIVE_ROOMS: "off",
       AUTH_ORGANIZATIONS: "off",

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defineApp, EndpointError } from "./index.js";
 
 function fakePool() {
@@ -134,6 +134,19 @@ describe("tracing", () => {
 
   it("without it, sends no timing", async () => {
     expect((await app.fetch(new Request("https://x/"), env, fakeCtx().ctx)).headers.get("server-timing")).toBeNull();
+  });
+
+  it("sampled in prod, logs one request in a hundred and never sends the timing", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.001);
+    const response = await app.fetch(new Request("https://x/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
+    expect(response.headers.get("server-timing")).toBeNull();
+    expect(JSON.parse(logged.mock.calls[0]![0] as string)).toMatchObject({ method: "GET", path: "/notes", status: 200, timing: expect.stringMatching(/^total;dur=/) });
+    random.mockReturnValue(0.5);
+    await app.fetch(new Request("https://x/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
+    expect(logged).toHaveBeenCalledTimes(1);
+    logged.mockRestore();
+    random.mockRestore();
   });
 });
 

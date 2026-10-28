@@ -45,7 +45,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   LIVE_ROOMS?: string;
   MCP?: string;
   ACCESS?: string;
-  // "on" on previews and in local dev: every response says where its time went, in Server-Timing.
+  // "on" on previews and in local dev: every response says where its time went, in Server-Timing;
+  // "sample" in prod: one request in SAMPLE_EVERY logs it instead.
   TRACE?: string;
 }
 
@@ -226,8 +227,15 @@ export function defineApp<
     staticPoints: options.access?.points ?? {},
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-      const trace = env.TRACE === "on" ? new Trace() : undefined;
-      return dbSlot.run({}, async () => withTiming(await conditional(request, await serve(request, env, ctx, trace)), trace));
+      // Prod times one request in SAMPLE_EVERY into its logs, never into the response.
+      const sampled = env.TRACE === "sample" && Math.random() * SAMPLE_EVERY < 1;
+      const trace = env.TRACE === "on" || sampled ? new Trace() : undefined;
+      return dbSlot.run({}, async () => {
+        const response = await conditional(request, await serve(request, env, ctx, trace));
+        if (!sampled) return withTiming(response, trace);
+        console.log(JSON.stringify({ timing: trace!.header(), method: request.method, path: new URL(request.url).pathname, status: response.status }));
+        return response;
+      });
     },
 
     // The Durable Object class behind live rooms, exported by the deploy's generated entry module.
@@ -396,6 +404,8 @@ function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boo
   if (!onApi && !onPage) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
+
+const SAMPLE_EVERY = 100;
 
 const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
 
