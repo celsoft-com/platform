@@ -117,7 +117,7 @@ node "$(dirname "$0")/_budget.mjs" "$base" "$cookie" "$id"
 
 signin='{"email":"'$email'","password":"second-password-2"}'
 check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
-check "old session (cached up to 5 minutes)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
+check "old session (cached up to 1 minute)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
 check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
 check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
 rm -f "$jar" "$jar2" "$jar3" "$attachment"

@@ -42,7 +42,7 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     session: {
       // Most requests read the session from a signed cookie instead of the database; a revoked
       // session therefore keeps working until this copy expires.
-      cookieCache: { enabled: true, maxAge: 5 * 60 },
+      cookieCache: { enabled: true, maxAge: 60 },
     },
     emailAndPassword: {
       enabled: true,
