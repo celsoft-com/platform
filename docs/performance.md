@@ -246,7 +246,7 @@ Built in PR 19, each measured on its preview before the next:
 | 10 | MCP SDK loaded only on `/mcp` | 6.5.4 | Yes; startup stayed about 110ms, minifying did not help and broke the live client |
 | 11 | Demo panel: one query per kind of name, reads together, redraws alone | 6.8.1 | Yes |
 | 12 | Server-Timing on previews and `dev`; budgets in the smoke test; `mise run test:perf` | 8 | Yes |
-| 13 | Access folded into the app's own query for single reads | 6.2.1 | No: a read is 2 round trips, the check and the row |
+| 13 | Access folded into the app's own query for single reads | 6.2.1 | Decided against: the check stays explicit, shaped to the points it checks, so an app can handle a refusal its own way; a read is 2 round trips |
 | 14 | Conditional requests | 6.8.2 | No |
 | 15 | Prod sampling, `pg_stat_statements` in the load test | 8 | No |
 | 16 | Access in Durable Objects | 6.3.4 | Not needed: a check is 0.26ms of database time |
@@ -286,6 +286,20 @@ Measured on the PR 18 preview before and the PR 19 preview after, same Neon comp
 
 ## 11. Open decisions
 
-The rule in section 2 and the targets in section 3 are proposed here; items 13 to 15 of section 9
-are not built. The [performance decisions page](https://claude.ai/artifact/K11uC7jybNXceuoKYHajYR)
-predates this work.
+The rule in section 2 and the targets in section 3 are proposed here. The
+[performance decisions page](https://claude.ai/artifact/K11uC7jybNXceuoKYHajYR) predates this work.
+
+Approved on the [readiness page](https://claude.ai/artifact/9Nn26Cjuv4wVy1YLbxygdv), not built yet:
+
+1. **Inheritance lock:** `inherit` takes the same tree lock as create, move and remove, so two
+   changes at once cannot leave a stored chain stale.
+2. **Chains under concurrency:** a test runs many tree changes at once, then compares every stored
+   chain with a fresh walk of the tree.
+3. **Large data on previews:** `mise run test:perf` can seed the preview with a large tree before
+   its load test; opt-in, not part of every smoke test.
+4. **Startup:** profile what a fresh Worker loads, and load what a request does not need only when
+   first used.
+5. **Conditional requests:** reads answer with an ETag, and a matching `If-None-Match` gets a 304
+   (item 14 of section 9).
+6. **Prod sampling:** prod records Server-Timing for a small share of requests into the Worker's
+   logs, and the load test reads `pg_stat_statements` (item 15 of section 9).
