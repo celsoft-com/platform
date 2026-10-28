@@ -164,7 +164,7 @@ export function defineApp<
   const api = apiHandler(options.endpoints ?? {});
   const once: Once = {};
   const pages = pageServer(options.pages ?? []);
-  const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
+  const undeclared = undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`);
 
   // One request, answered; `trace` collects where its time goes.
   async function serve(request: Request, env: Env, ctx: ExecutionContext, trace: Trace | undefined): Promise<Response> {
@@ -180,8 +180,7 @@ export function defineApp<
       if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
       // A request with an API token runs as the token's owner, capped at the token's level.
       let current = app;
-      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
-      const token = apiToken(request, url, env, onPage);
+      const token = apiToken(request, url, env);
       // One caller cannot spend everyone's capacity: a token, a person, or else an address.
       const limited = env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname)) ? env.API_LIMIT : undefined;
       const address = `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
@@ -212,7 +211,7 @@ export function defineApp<
         const platform = await platformRoute(request, url, env, current, options);
         if (platform) return platform;
       }
-      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx, current));
+      const page = await pages?.handle(request, url, current, pageCache(env, ctx, current));
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
@@ -371,7 +370,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     async requireUser() {
       const current = await app.session();
       if (!current) {
-        // A page sends the visitor to sign in and come back; the API answers 401.
+        // A hand-written HTML route sends the visitor to sign in and come back; the API answers 401.
         const url = new URL(request.url);
         if (env.BETTER_AUTH_SECRET && !url.pathname.startsWith("/api/") && url.pathname !== MCP_PATH && READ_METHODS.includes(request.method)) throw signInRedirect(url);
         throw json({ error: "sign in first" }, 401);
@@ -418,11 +417,10 @@ const TOKEN_ROUTES = ["create", "list", "delete", "get"];
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The API token a request carries, when tokens are on: on /api/ outside /api/auth/, where a
-// token can never make more tokens or change the account, and on page reads.
-function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boolean): string | null {
+// token can never make more tokens or change the account.
+function apiToken(request: Request, url: URL, env: PlatformBindings): string | null {
   if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
-  const onApi = url.pathname.startsWith("/api/") && !url.pathname.startsWith(`${AUTH_PATH}/`);
-  if (!onApi && !onPage) return null;
+  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith(`${AUTH_PATH}/`)) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 

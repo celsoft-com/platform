@@ -1,10 +1,11 @@
 import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
-import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
-import { LINK_EXCHANGE_PATH, LINK_HEADER } from "./link-header.js";
+import type { AnyApp } from "./endpoints.js";
 
 // Pages the Worker renders on each request. An app claims a path such as `/notes`; the Worker then
-// answers it and every path below it, and no static file is ever served there.
+// answers it and every path below it, and no static file is ever served there. A page renders only
+// what every signed-out visitor sees identically; anything that depends on who is looking is added
+// by the browser, so a page's handler cannot ask who is looking. See docs/design.md, Server pages.
 
 type ParamNames<S extends string> = S extends `${string}:${infer P}/${infer Rest}` ? P | ParamNames<`/${Rest}`> : S extends `${string}:${infer P}` ? P : never;
 
@@ -18,10 +19,7 @@ export type PageHandler<Params = any, App = AnyApp> = (params: Params, app: App,
 export interface PageRoute<Params = any, App = AnyApp> {
   // Checks and converts the route's parameters, as an endpoint's input schema does; a failure is a 404.
   params?: z.ZodType;
-  // Checked before the handler runs, as for an endpoint; with access on, every route says it.
-  access?: EndpointAccess<Params>;
-  // Keeps a signed-out visitor's answer, shared by every visitor, for 60 seconds or `seconds`, or
-  // until app.cache empties it; only a route with access "none" may, since a hit skips the check.
+  // Keeps the answer, shared by every visitor, for 60 seconds or `seconds`, or until app.cache empties it.
   cache?: PageCacheOption;
   handler: PageHandler<Params, App>;
 }
@@ -53,14 +51,11 @@ const PARAM = /^:([A-Za-z_][A-Za-z0-9_]*)$/;
 // Claimed by the platform itself; a page under one would never be reached, or would hide it.
 const RESERVED = ["/api", "/mcp", "/.well-known", "/login", "/signup", "/forgot", "/reset", "/consent", "/tokens"];
 
-// One route with typed, checked parameters and an access check; plain functions in `routes` get
-// their parameters as strings and declare no access.
-export function route<Schema extends z.ZodType, App = AnyApp>(
-  definition: { params: Schema; access?: EndpointAccess<z.output<Schema>>; cache?: PageCacheOption },
-  handler: PageHandler<z.output<Schema>, App>,
-): PageRoute<z.output<Schema>, App>;
-export function route<App = AnyApp>(definition: { access?: EndpointAccess<Record<string, string>>; cache?: PageCacheOption }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
-export function route(definition: { params?: z.ZodType; access?: EndpointAccess; cache?: PageCacheOption }, handler: PageHandler): PageRoute {
+// One route with typed, checked parameters, or cached; plain functions in `routes` get their
+// parameters as strings.
+export function route<Schema extends z.ZodType, App = AnyApp>(definition: { params: Schema; cache?: PageCacheOption }, handler: PageHandler<z.output<Schema>, App>): PageRoute<z.output<Schema>, App>;
+export function route<App = AnyApp>(definition: { cache?: PageCacheOption }, handler: PageHandler<Record<string, string>, App>): PageRoute<Record<string, string>, App>;
+export function route(definition: { params?: z.ZodType; cache?: PageCacheOption }, handler: PageHandler): PageRoute {
   return { ...definition, handler };
 }
 
@@ -80,9 +75,8 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
     if (!r || typeof r.handler !== "function") throw new Error(`page ${path}${key}: a route is a function or route({ ... }, handler)`);
     const shape = (r.params as { shape?: Record<string, unknown> } | undefined)?.shape;
     if (r.params) for (const name of names) if (!shape || !(name in shape)) throw new Error(`page ${path}${key} has :${name}, which its params schema does not have`);
-    checkAccessDeclaration(r.access, shape ? Object.keys(shape) : names, `page ${path}${key}`);
+    if ("access" in r) throw new Error(`page ${path}${key} declares access, but a page renders only what every visitor sees identically; drop access, and render anything personal in the browser from an endpoint`);
     if (r.cache !== undefined) {
-      if (r.access !== "none") throw new Error(`page ${path}${key} asks to be cached, but a cached page is shared by every visitor and skips its access check; give it access: "none", or drop cache`);
       const seconds = cacheSeconds(r.cache);
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_CACHE_SECONDS) throw new Error(`page ${path}${key}: cache.seconds is a whole number from 1 to ${MAX_CACHE_SECONDS}`);
     }
@@ -126,13 +120,10 @@ interface Compiled {
 export interface PageServer {
   // Every claimed path, which the deploy routes to the Worker before static files.
   claims: string[];
-  // Routes that say nothing about access, which an app with access on refuses to serve.
-  undeclared: string[];
   // Whether a path is a claimed one.
   owns(pathname: string): boolean;
-  // The answer for a claimed path, or undefined for any other. `canSignIn` says the app has a
-  // sign-in screen to send refused visitors to; `cache` holds the answers of routes that ask.
-  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean, cache?: PageCache): Promise<Response | undefined>;
+  // The answer for a claimed path, or undefined for any other; `cache` holds the answers of routes that ask.
+  handle(request: Request, url: URL, app: AnyApp, cache?: PageCache): Promise<Response | undefined>;
 }
 
 export function pageServer(pages: readonly Page[]): PageServer | undefined {
@@ -161,14 +152,12 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
     }
     compiled.set(p.path, list);
   }
-  const undeclared = [...compiled.values()].flat().filter((c) => c.route.access === undefined).map((c) => `page ${c.path}${c.key === "/" ? "" : c.key}`);
 
   const claimOf = (pathname: string) => claims.find((c) => pathname === c || pathname.startsWith(`${c}/`));
   return {
     claims,
-    undeclared,
     owns: (pathname) => claimOf(pathname) !== undefined,
-    async handle(request, url, app, canSignIn, cache) {
+    async handle(request, url, app, cache) {
       const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
@@ -190,7 +179,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       }
       const seconds = found.route.cache === undefined ? undefined : cacheSeconds(found.route.cache);
       let key: string | undefined;
-      if (seconds && cache && request.method === "GET" && !personal(request)) {
+      if (seconds && cache && request.method === "GET") {
         // A version that cannot be read means a page that is not cached, never a stale one.
         key = await cache.version(url.pathname).then(
           (version) => cacheKey(url, version),
@@ -203,12 +192,9 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       }
       let answer: PageResult;
       try {
-        await requireAccess(found.route.access, params, app);
-        answer = await found.route.handler(params, app, request);
+        answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), request);
       } catch (thrown) {
         if (!(thrown instanceof EndpointError)) throw thrown;
-        // A share link in the fragment, which never reaches the server, or signing in may open it.
-        if (thrown.status === 404) return html(refusedPage(url, canSignIn && !(await app.session())), 404);
         return html(errorPage(thrown.status, thrown.message), thrown.status);
       }
       const response = typeof answer === "string" ? html(answer, 200) : answer;
@@ -223,10 +209,20 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
   };
 }
 
-// A request that says who is asking, by a session, a share link or a token, is always answered by
-// the handler, so nothing personal is ever stored and nothing stored is ever shown in its place.
-const personal = (request: Request) =>
-  request.headers.has("authorization") || request.headers.has(LINK_HEADER) || /(?:^|;\s*)(?:__Secure-)?[\w.-]*session_token=|(?:^|;\s*)platform_link_/.test(request.headers.get("cookie") ?? "");
+// What who is looking would tell a page, refused, so every visitor gets the same answer and a kept
+// copy can be shown to anyone.
+const WHO = ["session", "requireUser", "access"];
+
+function anonymous(app: AnyApp, name: string): AnyApp {
+  return new Proxy(app, {
+    get(target, key) {
+      if (typeof key === "string" && WHO.includes(key)) {
+        throw new Error(`page ${name} asked app.${key}, but a page renders only what every visitor sees identically; render anything that depends on who is looking in the browser, from an endpoint`);
+      }
+      return Reflect.get(target, key);
+    },
+  });
+}
 
 // Under a path no page can claim, since `!` is never in one, so a visitor can never ask for a key.
 const cacheKey = (url: URL, version: string) => `${url.origin}/!page-cache/${encodeURIComponent(version)}${url.pathname}${url.search}`;
@@ -247,26 +243,6 @@ function html(body: string, status: number, headers: Record<string, string> = {}
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
-function errorPage(status: number, message: string, extra = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
-}
-
-// A page the caller may not see, answered the same whether it exists or not. Its script takes a
-// `link=` token from the fragment, drops it from the address so a refused link never loops, and
-// has the platform keep it as a cookie, then reloads; with none, someone signed out goes to sign in.
-function refusedPage(url: URL, signedOut: boolean): string {
-  const login = `/login?next=${encodeURIComponent(url.pathname + url.search)}`;
-  const script = `<script>
-(() => {
-  const parts = location.hash.replace(/^#/, "").split("&");
-  const found = parts.find((p) => p.startsWith("link="));
-  const away = () => { ${signedOut ? `location.replace(${JSON.stringify(login)});` : ""} };
-  if (!found) return away();
-  const rest = parts.filter((p) => !p.startsWith("link=")).join("&");
-  history.replaceState(null, "", location.pathname + location.search + (rest ? "#" + rest : ""));
-  fetch(${JSON.stringify(LINK_EXCHANGE_PATH)}, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ link: found.slice(5) }) })
-    .then((r) => (r.ok ? location.reload() : away()), away);
-})();
-</script>`;
-  return errorPage(404, "There is nothing here.", (signedOut ? `<p><a href="${escape(login)}">Sign in</a></p>` : "") + script);
+function errorPage(status: number, message: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p><p><a href="/">Home</a></p></body></html>`;
 }
