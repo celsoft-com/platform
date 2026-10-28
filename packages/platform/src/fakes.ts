@@ -259,6 +259,10 @@ export class FakeMigrator implements Migrator {
   async prepareAccess(databaseUrl: string, points: Record<string, unknown>) {
     this.points.push({ databaseUrl, points });
   }
+  caches: string[] = [];
+  async prepareCache(databaseUrl: string) {
+    this.caches.push(databaseUrl);
+  }
   dropped: string[] = [];
   async dropAll(databaseUrl: string) {
     this.dropped.push(databaseUrl);

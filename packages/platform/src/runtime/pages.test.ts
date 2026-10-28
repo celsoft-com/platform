@@ -6,6 +6,7 @@ import { freshDatabase } from "../../test/database.js";
 import { defineApp, EndpointError, page, route } from "./index.js";
 import { hashToken } from "./access.js";
 import { pageServer } from "./pages.js";
+import { REMEMBER_MS } from "./cache.js";
 
 const { url: databaseUrl } = await freshDatabase();
 const ctx = { waitUntil: () => {} };
@@ -443,7 +444,7 @@ describe("Pages: caching", () => {
       page({
         path: "/news",
         routes: {
-          "/": route({ access: "none", cache: { seconds: 60 } }, () => `<h1>news ${++runs}</h1>`),
+          "/": route({ access: "none", cache: true }, () => `<h1>news ${++runs}</h1>`),
           "/cookie": route({ access: "none", cache: { seconds: 60 } }, () => new Response("<p>set</p>", { headers: { "content-type": "text/html", "set-cookie": "a=1" } })),
           "/gone": route({ access: "none", cache: { seconds: 60 } }, () => {
             throw new EndpointError(410, "gone");
@@ -463,6 +464,7 @@ describe("Pages: caching", () => {
     expect(() => page({ path: "/a", routes: { "/": route({ cache: { seconds: 60 } }, () => "") } })).toThrow(/access: "none"/);
     for (const seconds of [0, 1.5, 3601]) expect(() => page({ path: "/a", routes: { "/": route({ access: "none", cache: { seconds } }, () => "") } }), String(seconds)).toThrow(/cache.seconds/);
     expect(() => page({ path: "/a", routes: { "/": route({ access: "none", cache: { seconds: 3600 } }, () => "") } })).not.toThrow();
+    expect(() => page({ path: "/a", routes: { "/": route({ access: "none", cache: true }, () => "") } })).not.toThrow();
   });
 
   it("P39: a signed-out visitor's answer is kept, and the next visitor gets it without the handler running; browsers keep nothing", async () => {
@@ -502,6 +504,39 @@ describe("Pages: caching", () => {
     expect((await visit("/news?page=2")).state).toBe("miss");
     expect((await visit("/news?page=2")).state).toBe("hit");
     expect(runs).toBe(3);
+  });
+
+  it("P44: with a database, invalidating a page or clearing the app empties it, and a missing version table only skips the cache", async () => {
+    edge.clear();
+    runs = 0;
+    const dbEnv = { CF_VERSION_METADATA: { id: "v1" }, DB: { connectionString: databaseUrl } };
+    const hit = async (path: string) => (await cached.fetch(new Request(`https://app.test${path}`), dbEnv, ctx)).headers.get("platform-cache");
+    const later = () => new Promise((r) => setTimeout(r, REMEMBER_MS + 50));
+    const app = defineApp(async (_req, a) => {
+      const [kind, path] = new URL(_req.url).searchParams.getAll("do");
+      if (kind === "clear") await a.cache.clear();
+      else await a.cache.invalidate(path!);
+      return new Response("done");
+    });
+    const run = (kind: string, path = "") => app.fetch(new Request(`https://app.test/x?do=${kind}&do=${encodeURIComponent(path)}`), dbEnv, ctx);
+    expect(await hit("/news")).toBe("miss");
+    expect(await hit("/news")).toBe("hit");
+    await run("invalidate", "/news");
+    await later();
+    expect(await hit("/news")).toBe("miss");
+    expect(await hit("/news?page=3")).toBe("miss");
+    expect(await hit("/news")).toBe("hit");
+    await run("clear");
+    await later();
+    expect(await hit("/news")).toBe("miss");
+    await expect(app.fetch(new Request("https://app.test/x?do=invalidate&do=news"), dbEnv, ctx)).rejects.toThrow(/path with no query/);
+    const bare = new URL(databaseUrl);
+    bare.pathname = "/postgres";
+    const missing = { CF_VERSION_METADATA: { id: "v1" }, DB: { connectionString: bare.href } };
+    await later();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await cached.fetch(new Request("https://app.test/news?nodb=1"), missing, ctx)).headers.get("platform-cache")).toBeNull();
+    error.mockRestore();
   });
 
   it("P43: without a deploy version, as in tests and local tools, pages run as before", async () => {

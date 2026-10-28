@@ -7,6 +7,7 @@ import { Client } from "pg";
 import type { TestProject } from "vitest/node";
 import * as platformSchema from "../src/schema.js";
 import { prepareAccess } from "../src/runtime/access-sql.js";
+import { prepareCache } from "../src/runtime/cache.js";
 import { drizzle } from "drizzle-orm/node-postgres";
 
 declare module "vitest" {
@@ -49,6 +50,7 @@ async function start(project: TestProject) {
   await template.connect();
   for (const statement of await generateMigration(generateDrizzleJson({}), generateDrizzleJson(platformSchema))) await template.query(statement);
   await prepareAccess(drizzle(template));
+  await prepareCache(drizzle(template));
   await template.end();
 
   project.provide("postgres", url);
