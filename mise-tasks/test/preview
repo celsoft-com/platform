@@ -32,6 +32,8 @@ json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
 status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" "$@"; }
 level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
 note_url="$base/api/public/notes/$id"
+sleep 2
+check "a new note invalidates /stats (miss)" "$(curl -s -D - -o /dev/null "$base/stats" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }')"
 check "owner's level on own note" "$(json -b "$jar" "$note_url" | level)"
 etag=$(curl -s -D - -o /dev/null -b "$jar" "$note_url" | tr -d '\r' | awk 'tolower($1) == "etag:" { print $2 }')
 check "unchanged read answers 304" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
