@@ -37,7 +37,6 @@ async function renderNav() {
     item("Shared with me", "#/shared"),
     item("Organizations", "#/orgs"),
     item(count ? `Invitations (${count})` : "Invitations", "#/invitations"),
-    el("a", { href: "/print", textContent: "Print" }),
     el("a", { href: "/stats", textContent: "Stats" }),
     el("a", { href: "/tokens", textContent: "API tokens" }),
     // Sign-up is invite-only; the owner and admins invite people at the platform's own screen.

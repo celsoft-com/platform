@@ -85,7 +85,7 @@ const notesPage = page({
     "/": () => "<h1>Notes</h1>",
     "/new": () => "<h1>New</h1>",       // text segments win over parameters
     "/:id": route(
-      { params: z.object({ id: z.uuid() }), access: "none", cache: true },
+      { params: z.object({ id: z.uuid() }), cache: true },
       async ({ id }, app) => `<h1>${escape(await publishedBody(app, id))}</h1>`,
     ),
   },
@@ -99,19 +99,16 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
-6. **Signed out:** `requireUser()` on a page redirects to `/login?next=<page>`, which returns there after sign-in.
-7. **Access:** with `access` on, every route declares `access: { point, level }` or `access: "none"`, as endpoints do; a refused signed-in caller gets a 404, a refused signed-out visitor is sent to sign in.
-8. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
-9. **Tokens and links:** API tokens are accepted on page GET and HEAD, capped; a refused page takes a `#link=` share link from its address, keeps it as a cookie and reloads, so `/print/7#link=<token>` opens for a link holder.
-10. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
-11. **Caching:** a page that is the same for every visitor, such as a landing or stats page, may opt in:
-    `route({ access: "none", cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
-    1. **Safe by rule:** only `access: "none"` routes may; signed-in visitors, links and tokens always get a fresh answer, and nothing they get is kept.
-    2. **Same for everyone:** the cache key is the path and query only, so a cached page's HTML must never depend on anything else about a signed-out visitor, such as other cookies, `accept-language` or location; reading the session is fine, since signed-in requests are never cached.
-    3. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
-    4. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
-    5. **Deploys:** every deploy starts empty.
-    6. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
+6. **Nobody in particular:** `app.session()`, `app.requireUser()` and `app.access` throw on a page, and a route never declares `access`; fetch anything personal in the browser from an endpoint.
+7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
+8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
+9. **Caching:** any page may opt in:
+    `route({ cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
+    1. **Same for everyone:** signed in or out, every visitor gets the kept copy, and the cache key is the path and query only, so a page's HTML must never depend on anything else about the request, such as cookies, `accept-language` or location.
+    2. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
+    3. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
+    4. **Deploys:** every deploy starts empty.
+    5. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
@@ -129,7 +126,7 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 3. **Principals:** a person (`{ user }` or a confirmed `{ email }`), `{ team }`, `{ organization }` and `{ everyone: true }` (read only, signed in or not).
 4. **Inheritance:** with `inherit: true` a point also uses its parent's grants, up to the first point that does not inherit. Each principal stops at its nearest grant and the highest wins, so a grant to a person on a note can lower that person there, while a grant to a whole organization never lowers its teams.
 5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
-6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads and server pages count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
+6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
 7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }` or `access: "none"`; the app refuses every request until each one does.
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
@@ -166,7 +163,7 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
-2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, and on page GET and HEAD; `requireUser()` returns the token's owner.
+2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, never on pages; `requireUser()` returns the token's owner.
 3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `access: "none"` are limited only by that, so put writes behind a point when tokens should not reach them.
 4. **Lifetime:** 90 days unless chosen, at most 365.
 5. **Never:** on `/api/auth/*` or `/mcp`.

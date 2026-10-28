@@ -91,7 +91,7 @@ flowchart LR
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
 8. **What the server renders:** only content every signed-out visitor sees identically, which search engines must read without JavaScript; anything that depends on who is looking or what they have done (sign-in state, saved choices, checkmarks, drafts, admin screens) is added by the browser after the page loads. A page can mix both, such as a checklist rendered with every box unchecked whose visitor's own ticks the browser fills in. It is the same line as the edge cache: anything rendered on the server must be cacheable as a public response and cleared with `app.cache.invalidate(path)` when its content changes.
-9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file. A route with `access: "none"` may add `cache: true`, and signed-out visitors then share a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API and signed-in requests are never cached.
+9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor then shares a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A page cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
 
 ### Sign-in screens
 
@@ -147,7 +147,7 @@ flowchart LR
 2. **Control points:** the app creates a point for each resource it wants to gate with `app.access.create(id, { parent, inherit })`; the creator gets `manage`, and fixed sections are static points declared in `defineApp`.
 3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from grants to people, emails, teams, organizations and Everyone, links, and an organization's Admins team; each principal counts its nearest grant up the inherited parents, and the highest wins.
 4. **Checks:** every endpoint declares `access: { point, level }` or `access: "none"`, hand-written routes call `app.access.check`, and lists filter with `app.access.readable`; anything short is a 404.
-5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`, and is kept as a cookie so server pages and downloads count it too.
+5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`, and is kept as a cookie so downloads count it too.
 6. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
 
 ### Organizations
