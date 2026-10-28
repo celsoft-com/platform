@@ -40,6 +40,8 @@ async function renderNav() {
     el("a", { href: "/print", textContent: "Print" }),
     el("a", { href: "/stats", textContent: "Stats" }),
     el("a", { href: "/tokens", textContent: "API tokens" }),
+    // Sign-up is invite-only; the owner and admins invite people at the platform's own screen.
+    ...(["owner", "admin"].includes(session.user.role) ? [el("a", { href: "/invites", textContent: "Invite people" })] : []),
     el("span", { className: "spacer" }),
     item(session.user.name, "#/settings"),
     button("Sign out", attempt(signOut)),

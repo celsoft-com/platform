@@ -17,7 +17,7 @@ const send = async (path, init = {}) => {
   return { status: response.status, wait, total, queries, body, setCookie: response.headers.getSetCookie() };
 };
 
-const signUp = await send("/api/auth/sign-up/email", { method: "POST", body: JSON.stringify({ name: "Perf", email: `perf-${crypto.randomUUID()}@example.com`, password: "a-long-password-1" }) });
+const signUp = await send("/api/auth/sign-up/email", { method: "POST", body: JSON.stringify({ name: "Perf", email: process.env.PERF_EMAIL ?? `perf-${crypto.randomUUID()}@example.com`, password: "a-long-password-1" }) });
 cookie = signUp.setCookie.map((c) => c.split(";")[0]).join("; ");
 const form = new FormData();
 form.set("body", "perf note");
