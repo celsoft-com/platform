@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Scaffold an app from the template, install the locally packed platform, type-check it, and generate its migrations"
+#MISE description="Start an app the documented way from the locally packed platform: install, skills, new; then type-check it and generate its migrations"
 #MISE depends=["build"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
@@ -10,15 +10,17 @@ trap 'rm -rf "$work"' EXIT
 (cd packages/platform && pnpm pack --pack-destination "$work" >/dev/null)
 tarball=$(ls "$work"/*.tgz)
 
-(cd "$work" && node "$MISE_PROJECT_ROOT/packages/create-platform-app/dist/cli.js" app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null)
-
+mkdir "$work/app"
 cd "$work/app"
 npm install --no-audit --no-fund --loglevel=error "$tarball"
-npm install --no-audit --no-fund --loglevel=error
+npx --no-install @celsoft/platform skills
+test -f .claude/skills/celsoft-platform-setup/SKILL.md
+npx --no-install @celsoft/platform new --name app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null
 npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null
 ls drizzle/*.sql >/dev/null
 test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
 grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
-echo "✓ template app installs, type-checks, runs the platform CLI, generates its migrations, and points AGENTS.md at the package's skills"
+grep -q "^.claude/skills/celsoft-platform\*/$" .gitignore
+echo "✓ an app started from the package gets its skills, its files from new, type-checks, and generates its migrations"

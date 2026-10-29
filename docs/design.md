@@ -119,6 +119,12 @@ A published CLI, runtime library and app template that create and reuse each app
 
 ## 8. Bootstrap
 
+0. **Starting point**: every app starts the same way, and both READMEs (the repo's and the npm package's) open with it, so an agent given only "make a @celsoft/platform app" lands on it.
+    1. **Install**: `npm install @celsoft/platform` adds the package to `package.json`.
+    2. **Skills**: `platform skills` copies the package's skills into the app, needing nothing else.
+    3. **Follow**: the `celsoft-platform-setup` skill walks every remaining step; each file is written by a command, so the agent never reasons out a config or workflow by hand.
+    4. **App files**: `platform new` writes the app's files in place, keeps any already there, fills in `package.json` and `.gitignore`, and installs dependencies; it refuses a folder with a `platform.jsonc`.
+    5. **`npm create @celsoft/platform-app`**: kept as a shortcut that runs those three commands in a new folder.
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
     2. **Neon project**: create the app's Neon project, on Postgres 18.
@@ -208,11 +214,13 @@ A published CLI, runtime library and app template that create and reuse each app
     15. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
     16. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code.
-3. **App template**: scaffolds a new app already wired to the platform, through `npm create`.
+3. **App template**: the package ships `template/`, which `platform new` writes into a new app, already wired to the platform.
 4. **Agent skills**: the package ships `skills/`, each a `SKILL.md`, describing how to work on an app at that version.
-    1. **Version-matched**: they live in `node_modules/@celsoft/platform/skills/`, so upgrading the package upgrades them; nothing is copied into the app.
-    2. **Found through AGENTS.md**: `generate`, which runs on install, writes a marked block into the app's `AGENTS.md` pointing agents at them, and rewrites only that block.
-    3. **Kept current**: every change to what apps write or run updates the skills in the same pull request.
+    1. **Version-matched**: they live in `node_modules/@celsoft/platform/skills/`, so upgrading the package upgrades them.
+    2. **Copied for Claude Code**: `skills` copies them into the app's `.claude/skills/`, gitignored; `generate`, which runs on install, copies them again, so the copies always match the installed version.
+    3. **Found through AGENTS.md**: the same commands write a marked block into the app's `AGENTS.md` pointing other agents at them, and rewrite only that block.
+    4. **Two skills**: `celsoft-platform-setup` for creating an app and its first deploy, `celsoft-platform` for changing one.
+    5. **Kept current**: every change to what apps write or run updates the skills in the same pull request.
 5. **Deploy workflow**: written into the project by `init`; installs dependencies and runs `platform ci`.
     1. **Environment**: picks `production` for main and `preview` for PRs, which decides the secrets the job receives.
     2. **Concurrency**: cancels a PR's run in progress when a new one starts.

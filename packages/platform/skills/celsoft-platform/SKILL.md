@@ -7,7 +7,8 @@ description: "MUST READ before changing an app built on @celsoft/platform: its e
 
 The app runs on Cloudflare Workers with a Neon Postgres database. The platform owns the Worker,
 the cloud resources and the deploys; the app writes its endpoints, tables and pages. Run every
-command as `npx @celsoft/platform <command>` from the app's folder.
+command as `npx @celsoft/platform <command>` from the app's folder. To create an app or deploy it
+for the first time, follow the `celsoft-platform-setup` skill instead.
 
 ## Files
 
@@ -193,6 +194,8 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 | Command | What it does |
 | --- | --- |
+| `skills` | Copies these skills into `.claude/skills/`; also runs on install |
+| `new` | Writes a new app's files; see `celsoft-platform-setup` |
 | `dev` | Runs the app locally on its own `dev` database branch; starts the `dev` script beside it, with `plugins: [platform()]` from `@celsoft/platform/vite` |
 | `db generate` | Writes migrations for schema changes |
 | `generate` | Rewrites `.platform/`; also runs on install |

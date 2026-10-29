@@ -1,53 +1,35 @@
 #!/usr/bin/env node
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { parseArgs } from "node:util";
-import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
+import { execFileSync } from "node:child_process";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
-const usage = `usage: npm create @celsoft/platform-app <name> -- [--hostname <host>] [--neon-project <id>]`;
+// The one way to start an app is the package and its skills; this runs those steps in a new folder.
+const usage = `usage: npm create @celsoft/platform-app <name> -- [--hostname <host>] [--neon-project <id>]
 
-async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: { hostname: { type: "string" }, "neon-project": { type: "string" }, help: { type: "boolean", short: "h" } },
-  });
-  if (values.help) {
+The same as running these in a new folder:
+
+  npm install @celsoft/platform
+  npx @celsoft/platform skills
+  npx @celsoft/platform new --name <name> [--hostname <host>] [--neon-project <id>]`;
+
+async function main([name, ...rest]: string[]): Promise<void> {
+  if (!name || name.startsWith("-")) {
     console.log(usage);
     return;
   }
-
-  const answers: Partial<Answers> = { name: positionals[0], hostname: values.hostname, neonProject: values["neon-project"] };
-  if (process.stdin.isTTY) await ask(answers);
-
-  const bad = invalid(answers);
-  if (bad.length > 0) {
-    throw new Error(`${bad.map((key) => `${key}: ${rules[key].hint}`).join("\n")}\n\n${usage}`);
-  }
+  const target = resolve(name);
+  if ((await stat(target).catch(() => undefined)) && (await readdir(target)).length > 0) throw new Error(`${target} already exists and is not empty`);
+  await mkdir(target, { recursive: true });
+  await writeFile(join(target, "package.json"), `${JSON.stringify({ name, private: true, type: "module" }, null, 2)}\n`);
 
   const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
-  const target = resolve(answers.name!);
-  await scaffold(target, answers as Answers, version);
-
-  console.log(`\nCreated ${answers.name}. Next:\n\n  cd ${answers.name}\n  npm install\n\nthen follow README.md for the first deploy.`);
+  const run = (command: string, args: string[]) => execFileSync(command, args, { cwd: target, stdio: "inherit" });
+  run("npm", ["install", `@celsoft/platform@^${version}`]);
+  run("npx", ["--no-install", "@celsoft/platform", "skills"]);
+  run("npx", ["--no-install", "@celsoft/platform", "new", "--name", name, ...rest]);
 }
 
-async function ask(answers: Partial<Answers>): Promise<void> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const labels: Record<keyof Answers, string> = { name: "App name", hostname: "Prod hostname", neonProject: "Neon project id" };
-  try {
-    for (const key of Object.keys(labels) as (keyof Answers)[]) {
-      while (!rules[key].pattern.test(answers[key] ?? "")) {
-        if (answers[key]) console.log(`  must be ${rules[key].hint}`);
-        answers[key] = (await rl.question(`${labels[key]}: `)).trim();
-      }
-    }
-  } finally {
-    rl.close();
-  }
-}
-
-main().catch((error: unknown) => {
+main(process.argv.slice(2)).catch((error: unknown) => {
   console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);
 });

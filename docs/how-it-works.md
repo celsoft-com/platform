@@ -23,6 +23,7 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Generated, committed** | `drizzle/`, `.github/workflows/platform.yml` | Yes | Nobody; regenerate instead |
 | **Generated, ignored** | `.platform/`: the browser client, and the deploy's temporary files | No | Nobody; written on install, `dev` and deploy |
 | **Generated block** | The `@celsoft/platform` block in `AGENTS.md`, pointing agents at the package's skills | Yes | You, outside the block; the platform rewrites the block on install |
+| **Skill copies** | `.claude/skills/celsoft-platform*/`, the package's skills for Claude Code | No | Nobody; `skills` and every install rewrite them |
 | **From the package** | Runtime, auth tables, sign-in screens, live client | No, in `node_modules` | Nobody; upgrade the package |
 
 ## How the pieces fit
@@ -73,7 +74,7 @@ flowchart LR
 
 ### Generated and provided files
 
-1. **Your files:** `npm create @celsoft/platform-app` writes them once, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments.
+1. **Your files:** `platform new` writes them once, after `npm install @celsoft/platform` and `platform skills`, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments.
 2. **Migrations:** `db generate` writes them; an edited migration that already ran never runs again, so databases created before and after the edit end up different.
 3. **Workflow:** `init` writes it; CI stops if it differs from what the installed version writes, so an edit fails the next deploy until `init` is rerun.
 4. **Temporary:** `deploy` and `dev` write the Wrangler config, entry module, a stub standing in for Better Auth's unused Kysely adapter, and secrets, then delete them; they are gitignored. The deployed Worker is minified, so it starts faster.
