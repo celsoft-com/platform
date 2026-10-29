@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export const SECRETS_FILE = ".env.secrets";
@@ -26,6 +26,18 @@ export async function loadSecrets(startDir: string, names: string[], env: NodeJS
 // GitHub secrets passed by name in CI.
 export async function loadVars(startDir: string, names: string[], env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string>> {
   return { ...(await findEnvFile(startDir, VARS_FILE)), ...pick(env, names) };
+}
+
+// Sets name in dir's .env.secrets unless it already has a value, filling a blank entry in place.
+// True when it wrote.
+export async function addSecret(dir: string, name: string, value: string): Promise<boolean> {
+  const path = join(dir, SECRETS_FILE);
+  const text = await readFile(path, "utf8").catch(() => "");
+  if (parseDotenv(text)[name]) return false;
+  const blank = new RegExp(`^(\\s*(?:export\\s+)?${name}\\s*=).*$`, "m");
+  const next = blank.test(text) ? text.replace(blank, `$1${value}`) : `${text}${text && !text.endsWith("\n") ? "\n" : ""}${name}=${value}\n`;
+  await writeFile(path, next, { mode: 0o600 });
+  return true;
 }
 
 function pick(env: NodeJS.ProcessEnv, names: string[]): Record<string, string> {

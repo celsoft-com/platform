@@ -4,13 +4,13 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 // The one way to start an app is the package and its skills; this runs those steps in a new folder.
-const usage = `usage: npm create @celsoft/platform-app <name> -- [--hostname <host>] [--neon-project <id>]
+const usage = `usage: npm create @celsoft/platform-app <name> -- [--hostname <host>]
 
 The same as running these in a new folder:
 
   npm install @celsoft/platform
   npx @celsoft/platform skills
-  npx @celsoft/platform new --name <name> [--hostname <host>] [--neon-project <id>]`;
+  npx @celsoft/platform new --name <name> [--hostname <host>]`;
 
 async function main([name, ...rest]: string[]): Promise<void> {
   if (!name || name.startsWith("-")) {

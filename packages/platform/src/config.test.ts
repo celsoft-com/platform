@@ -7,14 +7,14 @@ const valid = `{
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
-  "database": { "neonProject": "quiet-meadow-12345678" },
+  "database": true,
 }`;
 
 describe("parseConfig", () => {
   it("accepts a valid file and defaults secrets", () => {
     const config = parseConfig(valid);
     expect(config.name).toBe("demo");
-    expect(config.database?.neonProject).toBe("quiet-meadow-12345678");
+    expect(config.database).toBe(true);
     expect(config.secrets).toEqual([]);
   });
 
@@ -35,10 +35,6 @@ describe("parseConfig", () => {
     }
   });
 
-  it("rejects a Neon branch id with a hint", () => {
-    expect(() => parseConfig(valid.replace("quiet-meadow-12345678", "br-quiet-meadow-abcdefgh"))).toThrow(/not a branch id/);
-  });
-
   it("reads auth as on or off, with organizations off unless asked for", () => {
     const withAuth = (auth: string) => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "email": true, "auth": ${auth},`)).auth;
     expect(parseConfig(valid).auth).toBe(false);
@@ -48,15 +44,16 @@ describe("parseConfig", () => {
   });
 
   it("no longer takes a migrate command", () => {
-    expect(() => parseConfig(valid.replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`))).toThrow(/database\.migrate/);
+    expect(() => parseConfig(valid.replace(`"database": true`, `"database": { "migrate": "x" }`))).toThrow(/database\.migrate/);
   });
 
   it("upgrades an older file, keeping its comments", () => {
-    const old = valid.replace(`"name": "demo",`, `"name": "demo", "version": 1,`).replace(`"quiet-meadow-12345678" }`, `"quiet-meadow-12345678", "migrate": "x" }`);
-    const { text, changes } = upgradeConfigText(old);
-    expect(changes).toEqual(["removed version", "removed database.migrate"]);
+    const old = valid.replace(`"name": "demo",`, `"name": "demo", "version": 1,`).replace(`"database": true`, `"database": { "neonProject": "quiet-meadow-12345678", "migrate": "x" }`);
+    const { text, changes, neonProject } = upgradeConfigText(old);
+    expect(changes).toEqual(["removed version", "removed database.migrate", "database is now true, its project id moving to NEON_PROJECT_ID"]);
+    expect(neonProject).toBe("quiet-meadow-12345678");
     expect(text).toContain("// comments and trailing commas are allowed");
-    expect(parseConfig(text).name).toBe("demo");
+    expect(parseConfig(text)).toMatchObject({ name: "demo", database: true });
     expect(upgradeConfigText(text).changes).toEqual([]);
   });
 
@@ -93,24 +90,24 @@ describe("parseConfig", () => {
 });
 
 describe("variables", () => {
-  const withVars = valid.replace(`"demo.example.com"`, `"\${APP_HOSTNAME}"`).replace(`"quiet-meadow-12345678"`, `"\${APP_NEON}"`);
+  const withVars = valid.replace(`"demo.example.com"`, `"\${APP_HOSTNAME}"`).replace(`"name": "demo"`, `"name": "\${APP_NAME}"`);
 
   it("lists the variables a config uses", () => {
-    expect(configVariables(withVars)).toEqual(["APP_HOSTNAME", "APP_NEON"]);
+    expect(configVariables(withVars)).toEqual(["APP_NAME", "APP_HOSTNAME"]);
   });
 
   it("fills them in before validating", () => {
-    const config = parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com", APP_NEON: "quiet-meadow-12345678" });
+    const config = parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com", APP_NAME: "demo" });
     expect(config.hostname).toBe("app.example.com");
-    expect(config.database?.neonProject).toBe("quiet-meadow-12345678");
+    expect(config.name).toBe("demo");
   });
 
   it("names every missing variable", () => {
-    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com" })).toThrow(/uses APP_NEON;/);
+    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "app.example.com" })).toThrow(/uses APP_NAME;/);
   });
 
   it("validates the filled-in value", () => {
-    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "Bad", APP_NEON: "quiet-meadow-12345678" })).toThrow(/hostname:/);
+    expect(() => parseConfig(withVars, "platform.jsonc", { APP_HOSTNAME: "Bad", APP_NAME: "demo" })).toThrow(/hostname:/);
   });
 });
 

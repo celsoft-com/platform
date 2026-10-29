@@ -105,7 +105,7 @@ A published CLI, runtime library and app template that create and reuse each app
 <tr><td><strong>App claim</strong></td><td>(none)</td><td><code>apps/&lt;app&gt;.json</code> in <code>celsoft-platform</code></td><td>Exact name</td><td>Destroy, last</td></tr>
 <tr><td><strong>Preview files folder</strong></td><td><code>pr-&lt;n&gt;/</code></td><td>(none)</td><td>Exact name, inside the preview bucket</td><td>Cleanup, sweep, and 14-day expiry</td></tr>
 <tr><td><strong>Email DNS records</strong></td><td>(none)</td><td><code>resend._domainkey.&lt;hostname&gt;</code>, <code>send.&lt;hostname&gt;</code></td><td>Resend chooses the names, so each record's comment field reads <code>managed by @celsoft/platform for &lt;app&gt;</code></td><td>Destroy</td></tr>
-<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>database.neonProject</code> in <code>platform.jsonc</code>, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches, checked on every run because only a broader key can list projects; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
+<tr><td colspan="5"><strong>Neon</strong>. Scope is a project ID, <code>NEON_PROJECT_ID</code> in <code>.env.secrets</code> beside the key, kept with the secrets so a public repo never shows it, which every Neon call names and the only project its project-scoped <code>NEON_API_KEY</code> reaches, checked on every run because only a broader key can list projects; each app has its own project, and prod uses the project's default branch, which the project owns.</td></tr>
 <tr><td><strong>Preview branch</strong></td><td><code>pr-&lt;n&gt;</code></td><td>(none)</td><td>Exact name</td><td>Cleanup, sweep, destroy</td></tr>
 <tr><td><strong>Backup branch</strong></td><td>(none)</td><td><code>backup-&lt;time&gt;</code></td><td>Name starting <code>backup-</code></td><td>Deploy keeps the newest 3; <code>destroy --data</code></td></tr>
 <tr><td><strong>Dev branch</strong></td><td>(none)</td><td><code>dev</code></td><td>Exact name</td><td><code>destroy --data</code></td></tr>
@@ -143,7 +143,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Hostname**: the prod hostname in the zone, apex allowed.
     3. **Worker**: the path to the Worker's entry module.
     4. **Frontend**: the directory holding the built static files, if any; when `package.json` has a `build` script, every deploy runs it first, and a failed build stops the deploy with the running version left in place. Output is static: pages search engines must read without JavaScript are rendered at build time by the app's own tool, such as SvelteKit's static adapter or Astro; anything rendered per request is a server page in the platform's Worker (section 13, item 14).
-    5. **Database**: the app's Neon project id; its tables are found in `src/schema.ts` by convention.
+    5. **Database**: on or off; the Neon project is `NEON_PROJECT_ID`, kept in `.env.secrets` and GitHub secrets beside `NEON_API_KEY` rather than in the file, and `upgrade` moves an older file's `database.neonProject` there; its tables are found in `src/schema.ts` by convention.
     6. **Auth**: on or off, and whether organizations are on; either can change at any time.
     7. **Secrets**: the names of the secrets the app needs; values live in GitHub Environments.
     8. **Compatibility date**: the Workers runtime date the app runs against.

@@ -1,7 +1,7 @@
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Config } from "./config.js";
-import { PreflightError, requirePostgres, requireProjectKey } from "./lifecycle.js";
+import { neonProject, PreflightError, requirePostgres, requireProjectKey } from "./lifecycle.js";
 import type { Cloudflare, GitHub, Mail, Neon } from "./ports.js";
 import type { Run } from "./run.js";
 import { parseDotenv, SECRETS_FILE, VARS_FILE } from "./secrets.js";
@@ -10,6 +10,7 @@ import { renderWorkflow, WORKFLOW_PATH, type PackageManager } from "./workflow.j
 export const TOKEN_HELP: Record<string, string> = {
   CLOUDFLARE_API_TOKEN: "Cloudflare API token; see SETUP.md or the platform README for its permissions",
   NEON_API_KEY: "Neon API key scoped to the app's Neon project",
+  NEON_PROJECT_ID: "The app's Neon project id, such as quiet-meadow-12345678, from the project's Settings",
   RESEND_API_KEY: "Resend API key with full access, so the platform can add sending domains",
 };
 
@@ -23,7 +24,7 @@ export interface InitInput {
 }
 
 export function tokenNames(config: Config): string[] {
-  return ["CLOUDFLARE_API_TOKEN", ...(config.database ? ["NEON_API_KEY"] : []), ...(config.email ? ["RESEND_API_KEY"] : [])];
+  return ["CLOUDFLARE_API_TOKEN", ...(config.database ? ["NEON_API_KEY", "NEON_PROJECT_ID"] : []), ...(config.email ? ["RESEND_API_KEY"] : [])];
 }
 
 export async function init({ repoRoot, appDir, config, variables, run, connect }: InitInput): Promise<void> {
@@ -39,8 +40,8 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
   run.note(`✓ Cloudflare account and zone ${zone.name}`);
   if (config.database) {
     await requireProjectKey(neon);
-    await requirePostgres(neon, config.database.neonProject);
-    run.note(`✓ Neon project ${config.database.neonProject}, on Postgres 18 or later`);
+    await requirePostgres(neon, neonProject(tokens));
+    run.note("✓ Neon project, on Postgres 18 or later");
   }
   if (config.email) {
     // Listing domains needs the same full access that adding the app's sending domain does.

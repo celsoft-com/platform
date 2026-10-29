@@ -34,7 +34,7 @@ export class NeonApi implements Neon {
   async defaultBranch(project: string): Promise<Branch> {
     const { data } = await this.api.listProjectBranches({ projectId: project });
     const branch = data.branches.find((b) => b.default);
-    if (!branch) throw new Error(`Neon project ${project} has no default branch`);
+    if (!branch) throw new Error("the Neon project has no default branch");
     return { id: branch.id, name: branch.name };
   }
 

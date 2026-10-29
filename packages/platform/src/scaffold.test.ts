@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parseConfig } from "./config.js";
 import { invalid, scaffold } from "./scaffold.js";
 
-const answers = { name: "shop", hostname: "shop.example.com", neonProject: "quiet-meadow-12345678" };
+const answers = { name: "shop", hostname: "shop.example.com" };
 
 describe("scaffold", () => {
   it("writes an app whose platform.jsonc the platform accepts", async () => {
@@ -13,7 +13,7 @@ describe("scaffold", () => {
     await scaffold(dir, answers, "1.2.3");
 
     const config = parseConfig(await readFile(join(dir, "platform.jsonc"), "utf8"));
-    expect(config).toMatchObject({ name: "shop", hostname: "shop.example.com", database: { neonProject: "quiet-meadow-12345678" } });
+    expect(config).toMatchObject({ name: "shop", hostname: "shop.example.com", database: true });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
     expect(pkg).toMatchObject({ name: "shop", type: "module", scripts: { postinstall: "platform generate" } });
@@ -57,6 +57,6 @@ describe("scaffold", () => {
 
 describe("invalid", () => {
   it("names each bad answer", () => {
-    expect(invalid({ name: "Shop", hostname: "shop.example.com", neonProject: "br-quiet-meadow-abcdefgh" })).toEqual(["name", "neonProject"]);
+    expect(invalid({ name: "Shop", hostname: "shop" })).toEqual(["name", "hostname"]);
   });
 });

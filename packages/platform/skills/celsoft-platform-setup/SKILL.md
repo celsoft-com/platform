@@ -42,20 +42,20 @@ One Neon project per app. Its default branch is prod; the platform adds a branch
 2. **Name:** the app's name.
 3. **Region:** the one closest to most of your users.
 4. **Postgres version:** 18 or later; the platform's ids need it.
-5. **Project ID:** copy it from **Settings**, then **General**; it is not a secret.
+5. **Project ID:** copy it from **Settings**, then **General**; step 6 saves it with the API key.
 
 ## 3. App
 
 Skip this step if the folder already has a `platform.jsonc`.
 
 ```sh
-npx @celsoft/platform new --name my-app --hostname app.example.com --neon-project quiet-meadow-12345678
+npx @celsoft/platform new --name my-app --hostname app.example.com
 ```
 
 It writes `platform.jsonc`, `src/worker.ts`, `src/schema.ts`, `public/`, `tsconfig.json` and a
 `README.md`, fills in `package.json` and `.gitignore`, keeps any file already there, then installs
-the app's dependencies. The hostname is the prod hostname, in your Cloudflare zone; the Neon
-project id is from step 2. Without the flags it asks for each in a terminal.
+the app's dependencies. The hostname is the prod hostname, in your Cloudflare zone. Without the
+flags it asks for each in a terminal. Add `--dry-run` to list what it would write first.
 
 ## 4. Secrets file
 
@@ -89,7 +89,7 @@ The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each
 1. **Open:** your organization's **Settings**, then **API keys**, then **Create new API key**.
 2. **Scope:** **Project-scoped**, and pick the project from step 2. It can manage everything inside that project and nothing else; the platform accepts no other kind of key.
 3. **Admin:** only an organization admin can create one, so ask yours if the option is missing.
-4. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`.
+4. **Save:** paste it after `NEON_API_KEY=` in `.env.secrets`, and the project ID from step 2 after `NEON_PROJECT_ID=`.
 
 ## 7. Resend API key
 
@@ -101,19 +101,17 @@ Only if `platform.jsonc` turns on `email` or `auth`. Apps send from their own ho
 
 ## 8. Public repos
 
-Optional. To keep the hostname or Neon project id out of a public repo, write them in `platform.jsonc` as `${NAME}` and put the values in a gitignored `.env` at the repo root:
+Optional. The Neon project id already stays out of the repo, in `.env.secrets`. To keep the hostname out too, write it in `platform.jsonc` as `${NAME}` and put the value in a gitignored `.env` at the repo root:
 
 ```jsonc
 "hostname": "${APP_HOSTNAME}",
-"database": { "neonProject": "${APP_NEON_PROJECT}", ... }
 ```
 
 ```sh
 APP_HOSTNAME=app.example.com
-APP_NEON_PROJECT=quiet-meadow-12345678
 ```
 
-`init` stores them as GitHub secrets, so deploy logs hide them too.
+`init` stores it as a GitHub secret, so deploy logs hide it too.
 
 ## 9. Init
 

@@ -21,13 +21,7 @@ export const configSchema = z
     worker: z.string().min(1).describe("Path to the Worker's entry module, relative to platform.jsonc"),
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date such as 2026-10-01"),
     frontend: z.string().min(1).optional().describe("Directory holding the built static files"),
-    database: z
-      .object({
-        neonProject: z.string().regex(/^[a-z]+-[a-z]+-\d+$/, "must be a Neon project id such as quiet-meadow-12345678, not a branch id"),
-      })
-      .describe("A Neon Postgres 18 database; the app's tables live in src/schema.ts")
-      .strict()
-      .optional(),
+    database: z.boolean().default(false).describe("A Neon Postgres 18 database, in the project NEON_PROJECT_ID names in .env.secrets; the app's tables live in src/schema.ts"),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
     auth: z
       .union([
@@ -109,20 +103,29 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
 }
 
 // Fields earlier releases used, recognized by their presence so nobody has to write a version.
-const RETIRED: string[][] = [["version"], ["database", "migrate"]];
+// database.neonProject comes last: upgrading it replaces database itself.
+const RETIRED: string[][] = [["version"], ["database", "migrate"], ["database", "neonProject"]];
 
 function olderShape(raw: unknown): string[][] {
   return RETIRED.filter((path) => path.reduce<unknown>((node, key) => (isObject(node) ? node[key] : undefined), raw) !== undefined);
 }
 
-// Rewrites an older file to the current shape, keeping its comments and layout.
-export function upgradeConfigText(text: string): { text: string; changes: string[] } {
+// Rewrites an older file to the current shape, keeping its comments and layout. A Neon project id
+// moves to .env.secrets, so it comes back as written, possibly a ${NAME}, for the caller to store.
+export function upgradeConfigText(text: string): { text: string; changes: string[]; neonProject?: string } {
   const changes: string[] = [];
-  for (const path of olderShape(parse(text, [], { allowTrailingComma: true }))) {
-    text = applyEdits(text, modify(text, path, undefined, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
-    changes.push(`removed ${path.join(".")}`);
+  const raw = parse(text, [], { allowTrailingComma: true }) as { database?: { neonProject?: string } };
+  const formattingOptions = { insertSpaces: true, tabSize: 2 };
+  for (const path of olderShape(raw)) {
+    if (path.join(".") === "database.neonProject") {
+      text = applyEdits(text, modify(text, ["database"], true, { formattingOptions }));
+      changes.push("database is now true, its project id moving to NEON_PROJECT_ID");
+    } else {
+      text = applyEdits(text, modify(text, path, undefined, { formattingOptions }));
+      changes.push(`removed ${path.join(".")}`);
+    }
   }
-  return { text, changes };
+  return { text, changes, ...(raw.database?.neonProject ? { neonProject: raw.database.neonProject } : {}) };
 }
 
 export async function readConfigText(dir: string): Promise<string> {

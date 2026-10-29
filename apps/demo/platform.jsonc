@@ -5,9 +5,7 @@
   "worker": "src/worker.ts",
   "frontend": "dist",
   "compatibilityDate": "2026-10-01",
-  "database": {
-    "neonProject": "${DEMO_NEON_PROJECT}"
-  },
+  "database": true,
   "email": true,
   "auth": { "organizations": true, "apiTokens": true, "signup": "invite" },
   "files": true,

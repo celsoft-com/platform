@@ -20,17 +20,17 @@ import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
 import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
 import { packageScripts, runScript, startScript } from "./scripts.js";
 import { AGENT_SKILLS_DIR, installSkills } from "./skills.js";
-import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, neonProject, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
-import { loadSecrets, loadVars } from "./secrets.js";
+import { addSecret, loadSecrets, loadVars, SECRETS_FILE } from "./secrets.js";
 
 const usage = `usage: npx @celsoft/platform <command> [--dry-run] [--dir <app dir>]
 
 commands:
   skills           copy the package's skills into .claude/skills/ and point AGENTS.md at them
   new              write a new app's files into this folder, then install its dependencies;
-                   --name, --hostname and --neon-project answer its questions
+                   --name and --hostname answer its questions
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
@@ -62,7 +62,7 @@ async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, name: { type: "string" }, hostname: { type: "string" }, "neon-project": { type: "string" }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, name: { type: "string" }, hostname: { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -80,8 +80,9 @@ async function main(argv: string[]): Promise<void> {
   if (dryRun && (NO_DRY_RUN.has(command.name) || (command.name === "db stats" && values.reset))) throw new UsageError(`${command.name}${values.reset ? " --reset" : ""} has no dry run; run it without --dry-run`);
 
   if (command.name === "upgrade") {
-    const { text, changes } = upgradeConfigText(await readConfigText(appDir));
+    const { text, changes, neonProject: written } = upgradeConfigText(await readConfigText(appDir));
     if (changes.length === 0) return console.log(`✓ ${CONFIG_FILE} already has the current shape`);
+    if (written) await moveNeonProject(appDir, written);
     await writeFile(join(appDir, CONFIG_FILE), text);
     console.log(`updated ${CONFIG_FILE}: ${changes.join(", ")}; review and commit it`);
     return;
@@ -96,7 +97,7 @@ async function main(argv: string[]): Promise<void> {
 
   if (command.name === "new") {
     const name = values.name ?? (rules.name.pattern.test(basename(appDir)) ? basename(appDir) : undefined);
-    await newApp(appDir, { name, hostname: values.hostname, neonProject: values["neon-project"] }, dryRun);
+    await newApp(appDir, { name, hostname: values.hostname }, dryRun);
     return;
   }
 
@@ -230,7 +231,7 @@ async function loadApp(appDir: string): Promise<{ config: Config; variables: Rec
 async function context(appDir: string, config: Config, dryRun: boolean): Promise<Context> {
   // Every provider key is read whatever platform.jsonc turns on, so destroy can find what an
   // earlier configuration made.
-  const secrets = await loadSecrets(appDir, [...tokenNames({ ...config, email: true }), ...(config.database ? [] : ["NEON_API_KEY"]), ...config.secrets]);
+  const secrets = await loadSecrets(appDir, [...tokenNames({ ...config, database: true, email: true }), ...config.secrets]);
   const cloudflareToken = requireToken(secrets, "CLOUDFLARE_API_TOKEN");
   const neonKey = config.database ? requireToken(secrets, "NEON_API_KEY") : (secrets.NEON_API_KEY ?? "");
   const resendKey = config.email ? requireToken(secrets, "RESEND_API_KEY") : (secrets.RESEND_API_KEY ?? "");
@@ -241,7 +242,7 @@ async function context(appDir: string, config: Config, dryRun: boolean): Promise
     secrets,
     run: new Run(dryRun, (line) => console.log(line)),
     repo: () => (repo ??= currentRepo(appDir)),
-    providers: { neon: Boolean(neonKey), mail: Boolean(resendKey) },
+    providers: { neon: Boolean(neonKey && secrets.NEON_PROJECT_ID), mail: Boolean(resendKey) },
     ports: {
       cloudflare,
       neon: new NeonApi(neonKey),
@@ -290,7 +291,7 @@ async function devWithFrontend(ctx: Context, appDir: string): Promise<void> {
 // already reach everything, so the new password is typed here, never passed as an argument.
 async function ownerReset(ctx: Context, config: Config, email: string, pr: number | undefined): Promise<void> {
   if (!config.auth || !config.database) throw new UsageError("this app has no auth");
-  const project = config.database.neonProject;
+  const project = neonProject(ctx.secrets);
   const branch = pr === undefined ? await ctx.ports.neon.defaultBranch(project) : await ctx.ports.neon.findBranch(project, `pr-${pr}`);
   if (!branch) throw new PreflightError(`pull request ${pr} has no preview database`);
   const password = await newPassword();
@@ -303,7 +304,7 @@ async function ownerReset(ctx: Context, config: Config, email: string, pr: numbe
 
 async function branchUri(ctx: Context, config: Config, pr: number | undefined): Promise<{ name: string; uri: string }> {
   if (!config.database) throw new UsageError("this app has no database");
-  const project = config.database.neonProject;
+  const project = neonProject(ctx.secrets);
   const branch = pr === undefined ? await ctx.ports.neon.defaultBranch(project) : await ctx.ports.neon.findBranch(project, `pr-${pr}`);
   if (!branch) throw new PreflightError(`pull request ${pr} has no preview database`);
   return { name: branch.name, uri: await ctx.ports.neon.connectionUri(project, branch.id) };
@@ -360,7 +361,7 @@ async function newPassword(): Promise<string> {
 async function newApp(appDir: string, answers: Partial<Answers>, dryRun: boolean): Promise<void> {
   if (process.stdin.isTTY && !process.env.CI) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const labels: Record<keyof Answers, string> = { name: "App name", hostname: "Prod hostname", neonProject: "Neon project id" };
+    const labels: Record<keyof Answers, string> = { name: "App name", hostname: "Prod hostname" };
     try {
       for (const key of Object.keys(labels) as (keyof Answers)[]) {
         while (!rules[key].pattern.test(answers[key] ?? "")) {
@@ -372,7 +373,7 @@ async function newApp(appDir: string, answers: Partial<Answers>, dryRun: boolean
       rl.close();
     }
   }
-  const flags: Record<keyof Answers, string> = { name: "--name", hostname: "--hostname", neonProject: "--neon-project" };
+  const flags: Record<keyof Answers, string> = { name: "--name", hostname: "--hostname" };
   const bad = invalid(answers);
   if (bad.length > 0) throw new UsageError(bad.map((key) => `${flags[key]}: ${rules[key].hint}`).join("\n"));
 
@@ -385,6 +386,17 @@ async function newApp(appDir: string, answers: Partial<Answers>, dryRun: boolean
   console.log(`\n${manager} install`);
   execFileSync(manager, ["install"], { cwd: appDir, stdio: "inherit" });
   console.log(`\nnext: continue ${SETUP_SKILL} at "Secrets file"`);
+}
+
+// The project id platform.jsonc used to hold goes to .env.secrets beside the key, resolving a ${NAME}
+// from .env; init then copies it to GitHub.
+async function moveNeonProject(appDir: string, written: string): Promise<void> {
+  const variable = /^\$\{([A-Z][A-Z0-9_]*)\}$/.exec(written)?.[1];
+  const id = variable ? (await loadVars(appDir, [variable]))[variable] : written;
+  if (!id) throw new PreflightError(`${CONFIG_FILE} names the Neon project as \${${variable}}, which .env does not set; set it there and run upgrade again`);
+  if (await addSecret(repoRoot(appDir), "NEON_PROJECT_ID", id)) console.log(`+ NEON_PROJECT_ID in ${SECRETS_FILE}`);
+  else console.log(`✓ NEON_PROJECT_ID already set in ${SECRETS_FILE}`);
+  console.log(`next: run \`npx @celsoft/platform init\` to store it in GitHub${variable ? `, then remove ${variable} from .env and the repo's GitHub secrets` : ""}`);
 }
 
 // Destroy lists what it will delete, then needs the app's name typed and a final yes, so a
