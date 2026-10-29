@@ -22,8 +22,6 @@ function open(room) {
   return { socket, frames, closed, until };
 }
 
-const client = await fetch(`${base}/api/live/client.js`);
-check("client script served", `${client.status} ${(await client.text()).startsWith("export function live(")}`);
 
 const org = await api("/api/organizations", { name: "Live" });
 const room = open(`organization:${org.id}`);

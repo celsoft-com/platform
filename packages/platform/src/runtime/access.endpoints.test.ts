@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { freshDatabase, world } from "../../test/database.js";
 import { applyStaticPoints, organizationPoint, type Access, type Level } from "./access.js";
-import { apiHandler, endpoint, undeclaredAccess } from "./endpoints.js";
+import { apiHandler, apiRoutes, endpoint, undeclaredAccess } from "./endpoints.js";
 import { defineApp } from "./index.js";
 import { serveMcp } from "./mcp-server.js";
 
@@ -35,7 +35,7 @@ describe("Endpoints", () => {
       { method: "GET", path: "/api/orgs/:org", input: z.object({ org: z.string() }), output: z.object({ org: z.string() }), access: { point: ({ org }) => organizationPoint(org), level: "read" } },
       ({ org }) => ({ org }),
     ),
-    open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({ ok: z.boolean() }), access: "none" }, () => ({ ok: true })),
+    open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({ ok: z.boolean() }), access: "user" }, () => ({ ok: true })),
   };
   const api = apiHandler(endpoints)!;
   const call = async (access: Access, method: string, path: string) => {
@@ -85,7 +85,7 @@ describe("Endpoints", () => {
     expect((await call(w.as(await w.user()), "GET", `/api/orgs/${id}`)).status).toBe(404);
   });
 
-  it("N7: access none runs with no check", async () => {
+  it("N7: access user runs with no point check", async () => {
     expect(await call(w.as(null), "GET", "/api/open")).toEqual({ status: 200, body: { ok: true } });
   });
 
@@ -93,7 +93,7 @@ describe("Endpoints", () => {
     const input = z.object({ id: z.string() });
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: "pageId", level: "read" } }, () => ({ id: "" }))).toThrow(/pageId/);
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: "id", level: "owner" as Level } }, () => ({ id: "" }))).toThrow(/unknown access level/);
-    expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: "all" as never }, () => ({ id: "" }))).toThrow(/"none"/);
+    expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: "all" as never }, () => ({ id: "" }))).toThrow(/"user" or "anon"/);
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: 7, level: "read" } as never }, () => ({ id: "" }))).toThrow(/function/);
   });
 
@@ -111,8 +111,15 @@ describe("Endpoints", () => {
     }
   });
 
+  it("N11: anon endpoints live under /api/public/ and user endpoints never do", () => {
+    const e = (path: string, access: "anon" | "user") => endpoint({ method: "GET", path, input: z.object({}), output: Page, access }, () => ({ id: "" }));
+    expect(() => apiRoutes({ a: e("/api/notes", "anon") })).toThrow(/under \/api\/public\//);
+    expect(() => apiRoutes({ a: e("/api/public/notes", "user") })).toThrow(/make it "anon"/);
+    expect(Object.keys(apiRoutes({ a: e("/api/public/notes", "anon"), b: e("/api/notes", "user") }))).toEqual(["a", "b"]);
+  });
+
   it("undeclared access lists only the endpoints that say nothing", () => {
-    expect(undeclaredAccess({ a: { access: "none" }, b: {}, c: { access: { point: "id", level: "read" } } })).toEqual(["b"]);
+    expect(undeclaredAccess({ a: { access: "user" }, b: {}, c: { access: { point: "id", level: "read" } } })).toEqual(["b"]);
   });
 });
 

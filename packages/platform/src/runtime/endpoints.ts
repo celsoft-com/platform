@@ -23,12 +23,19 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   input: Input;
   output: Output;
   // Checked before the function runs: the caller needs `level` on the control point named by the
-  // input field `point`, or by what the function returns for the input, or gets a 404. "none"
-  // says the endpoint checks nothing itself; with access on, every endpoint says one or the other.
+  // input field `point`, or by what the function returns for the input, or gets a 404. "user"
+  // checks no point and lets in anyone signed in, "anon" anyone at all; over the API the path
+  // agrees, so an "anon" endpoint sits under /api/public/ and a "user" one never does. With access
+  // on, every endpoint says one of them.
   access?: EndpointAccess<z.output<Input>>;
 }
 
-export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | "none";
+export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | "user" | "anon";
+
+// Who an access declaration with no point lets in.
+export const OPEN_ACCESS = ["user", "anon"] as const;
+
+const isOpen = (access: unknown): access is "user" | "anon" => (OPEN_ACCESS as readonly unknown[]).includes(access);
 
 export interface Endpoint<Input extends z.ZodType = z.ZodType, Output extends z.ZodType = z.ZodType, App = AnyApp> extends EndpointDefinition<Input, Output> {
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>;
@@ -57,9 +64,10 @@ export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, i
   return e.handler(input as z.output<z.ZodType>, app);
 }
 
-// The check an endpoint or a page declares, run against its input.
+// The point check an endpoint or a page declares, run against its input; "user" and "anon" check
+// no point, since who may call is settled before, by the path for an endpoint and by the page.
 export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: unknown): Promise<void> {
-  if (!access || access === "none") return;
+  if (!access || isOpen(access)) return;
   const { point, level } = access;
   const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
   // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
@@ -67,11 +75,11 @@ export async function requireAccess(access: EndpointAccess | undefined, input: u
   await (app as { access: Access }).access.require(id, level);
 }
 
-// Throws when an access declaration is neither { point, level } nor "none", or names a field
-// `fields` lacks; `what` names its owner in the message.
+// Throws when an access declaration is neither { point, level }, "user" nor "anon", or names a
+// field `fields` lacks; `what` names its owner in the message.
 export function checkAccessDeclaration(access: unknown, fields: readonly string[] | undefined, what: string): void {
-  if (access === undefined || access === "none") return;
-  if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`${what}'s access is { point, level } or "none"`);
+  if (access === undefined || isOpen(access)) return;
+  if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`${what}'s access is { point, level }, "user" or "anon"`);
   const { point, level } = access as { point: unknown; level: Level };
   rank(level);
   if (typeof point === "string") {
@@ -96,6 +104,9 @@ export function apiRoutes(endpoints: Record<string, Omit<Endpoint, "handler">>):
     if (!servesApi(e)) continue;
     if (!e.method || !e.path) throw new Error(`endpoint ${name} is served over the API, so it needs a method and a path`);
     if (!e.path.startsWith("/api/")) throw new Error(`endpoint ${name}'s path must start with /api/, where the Worker answers first`);
+    const isPublic = e.path.startsWith("/api/public/");
+    if (e.access === "anon" && !isPublic) throw new Error(`endpoint ${name} lets anyone in with access "anon", so its path goes under /api/public/; or give it access "user"`);
+    if (e.access === "user" && isPublic) throw new Error(`endpoint ${name} is under /api/public/, where anyone may call, but its access is "user"; make it "anon", or move it out of /api/public/`);
     const shape = (e.input as { shape?: Record<string, unknown> }).shape;
     for (const [, param] of e.path.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)) {
       if (!shape || !(param! in shape)) throw new Error(`endpoint ${name}'s path has :${param}, which its input schema does not have`);

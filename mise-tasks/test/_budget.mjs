@@ -22,7 +22,8 @@ const budgets = [
   ["read a note", 2, 60, () => fetch(`${base}/api/public/notes/${note}`, { headers })],
   ["permissions panel", 5, 90, () => fetch(`${base}/api/notes/${note}/access`, { headers })],
   ["make a link", 4, 120, () => fetch(`${base}/api/notes/${note}/links`, { method: "POST", headers, body: JSON.stringify({ level: "read" }) })],
-  ["edit a note", 3, 120, () => fetch(`${base}/api/public/notes/${note}`, { method: "PUT", headers, body: JSON.stringify({ body: "budget" }) })],
+  // Edits also invalidate the note's printed page, one tiny query.
+  ["edit a note", 4, 120, () => fetch(`${base}/api/public/notes/${note}`, { method: "PUT", headers, body: JSON.stringify({ body: "budget" }) })],
   ["server page", 2, 60, () => fetch(`${base}/print/${note}`, { headers })],
 ];
 
