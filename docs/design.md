@@ -210,7 +210,7 @@ A published CLI, runtime library and app template that create and reuse each app
     11. **`apps move`**: gives the app's name to the repo it runs in; only ever suggested by the error that needs it.
     12. **`db run <file> --pr <n>`**: runs a file of SQL on a preview's database in one transaction, such as load test data; it refuses prod.
     13. **`db stats [--pr <n>] [--reset]`**: lists the database's costliest queries from `pg_stat_statements`, turning it on the first time; `--reset` clears the counts before a measured run.
-    14. **`--dry-run`**: on any command, prints what would be created, changed or deleted.
+    14. **`--dry-run`**: prints what would be created, changed or deleted, and changes nothing; `new` lists the files it would write and keep and the install it would run; commands with no dry run (`skills`, `generate`, `upgrade`, `db generate`, `db stats --reset`) refuse the flag rather than ignore it.
     15. **Alignment checks**: every run stops with a fix if `platform.jsonc` has an older shape, the workflow differs from what `init` writes, or the schema has changes with no generated migration.
     16. **Resource modules**: one per resource (Worker, hostname, Neon branch, Hyperdrive config, secrets), each able to find, ensure and destroy it.
 2. **Runtime library**: imported by the app's Worker; `defineApp` and its helpers, listed in App Code.

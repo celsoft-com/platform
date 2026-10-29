@@ -209,7 +209,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |
 | `db run <file> --pr <n>` | Runs a SQL file on a preview's database, such as load test data |
-| `--dry-run` | On any command, shows what would change |
+| `--dry-run` | Shows what would change, writing nothing; `new` lists the files it would write and keep; `skills`, `generate`, `upgrade`, `db generate` and `db stats --reset` refuse it |
 
 ## Rules
 
