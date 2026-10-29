@@ -5,9 +5,7 @@
   "worker": "src/worker.ts",
   "frontend": "public",
   "compatibilityDate": "{{compatibilityDate}}",
-  "database": {
-    "neonProject": "{{neonProject}}"
-  }
+  "database": true
   // Accounts and sign-in: uncomment both lines. Sign-up is invite-only once the app has its first
   // account, which becomes the owner and invites people at /invites; "open" lets anyone sign up.
   // "email": true,

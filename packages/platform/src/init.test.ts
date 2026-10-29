@@ -12,7 +12,7 @@ import { WORKFLOW_PATH } from "./workflow.js";
 
 const config = parseConfig(`{
   "name": "demo", "hostname": "demo.example.com", "worker": "src/worker.ts", "compatibilityDate": "2026-10-01",
-  "database": { "neonProject": "quiet-meadow-12345678" }
+  "database": true
 }`);
 
 class FakeGitHub implements GitHub {
@@ -41,19 +41,19 @@ beforeEach(async () => {
 
 describe("init", () => {
   it("adds blank token entries, gitignores them, and stops until they are filled", async () => {
-    await expect(init(input())).rejects.toThrow(/fill CLOUDFLARE_API_TOKEN and NEON_API_KEY/);
+    await expect(init(input())).rejects.toThrow(/fill CLOUDFLARE_API_TOKEN and NEON_API_KEY and NEON_PROJECT_ID/);
     expect(await readFile(join(root, ".env.secrets"), "utf8")).toMatch(/^CLOUDFLARE_API_TOKEN=$/m);
     expect(await readFile(join(root, ".gitignore"), "utf8")).toMatch(/^\.env\.secrets$/m);
     expect(github.secrets).toEqual({});
   });
 
   it("stores tokens, creates Environments and writes a workflow that ci accepts", async () => {
-    await writeFile(join(root, ".env.secrets"), "CLOUDFLARE_API_TOKEN=cf\nNEON_API_KEY=neon\n");
+    await writeFile(join(root, ".env.secrets"), "CLOUDFLARE_API_TOKEN=cf\nNEON_API_KEY=neon\nNEON_PROJECT_ID=quiet-meadow-12345678\n");
     await writeFile(join(root, "pnpm-lock.yaml"), "");
 
     await init(input());
 
-    expect(github.secrets).toEqual({ CLOUDFLARE_API_TOKEN: "cf", NEON_API_KEY: "neon", APP_HOSTNAME: "demo.example.com" });
+    expect(github.secrets).toEqual({ CLOUDFLARE_API_TOKEN: "cf", NEON_API_KEY: "neon", NEON_PROJECT_ID: "quiet-meadow-12345678", APP_HOSTNAME: "demo.example.com" });
     expect([...github.environments]).toEqual(["production", "preview"]);
     expect(await readFile(join(root, ".gitignore"), "utf8")).toMatch(/^\.env$/m);
     const workflow = await readFile(join(root, WORKFLOW_PATH), "utf8");

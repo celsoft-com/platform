@@ -37,11 +37,19 @@ export async function requireProjectKey(neon: Ports["neon"]): Promise<void> {
   }
 }
 
+// The app's Neon project, kept beside the project-scoped key that reaches only it.
+export function neonProject(secrets: Record<string, string>): string {
+  const id = secrets.NEON_PROJECT_ID;
+  if (!id) throw new PreflightError("NEON_PROJECT_ID is not set; add it to .env.secrets, or to the repo's GitHub secrets in CI");
+  if (!/^[a-z]+-[a-z]+-\d+$/.test(id)) throw new PreflightError("NEON_PROJECT_ID must be a Neon project id such as quiet-meadow-12345678, from the project's Settings, not a branch id");
+  return id;
+}
+
 // uuidv7(), the default for every id, arrived in Postgres 18.
 export async function requirePostgres(neon: Ports["neon"], project: string): Promise<void> {
   const version = await neon.postgresVersion(project);
   if (version < MIN_POSTGRES) {
-    throw new PreflightError(`Neon project ${project} runs Postgres ${version}; the platform needs ${MIN_POSTGRES} or later, so create the project again on Postgres ${MIN_POSTGRES}`);
+    throw new PreflightError(`the Neon project runs Postgres ${version}; the platform needs ${MIN_POSTGRES} or later, so create the project again on Postgres ${MIN_POSTGRES}`);
   }
 }
 
@@ -69,7 +77,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   let hyperdriveId: string | undefined;
   let placement: string | undefined;
   if (config.database) {
-    const project = config.database.neonProject;
+    const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
     placement = placementRegion(await ports.neon.region(project));
     const prod = await ports.neon.defaultBranch(project);
@@ -229,7 +237,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
 
   let uri: string | undefined;
   if (config.database) {
-    const project = config.database.neonProject;
+    const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
     const prod = await ports.neon.defaultBranch(project);
     let copied = false;
@@ -354,7 +362,7 @@ export async function cleanup(ctx: Context, pr: number): Promise<void> {
   if (hyperdrive) await run.mutate(`delete Hyperdrive config ${n.hyperdrive}`, () => ports.cloudflare.deleteHyperdrive(hyperdrive.id), undefined);
 
   if (config.database) {
-    const project = config.database.neonProject;
+    const project = neonProject(ctx.secrets);
     const branch = await ports.neon.findBranch(project, n.neonBranch!);
     if (branch) await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);
   }
@@ -387,10 +395,10 @@ async function cleanupLegacyPreview(ctx: Context, pr: number): Promise<void> {
   }
 }
 
-async function legacyHyperdriveIsOurs({ config, ports }: Context, hyperdrive: Hyperdrive, boundIds: string[]): Promise<boolean> {
+async function legacyHyperdriveIsOurs({ config, ports, secrets }: Context, hyperdrive: Hyperdrive, boundIds: string[]): Promise<boolean> {
   if (boundIds.includes(hyperdrive.id)) return true;
   const host = hyperdrive.origin.split("@")[1]?.split("/")[0];
-  return Boolean(config.database && host && (await ports.neon.endpointHosts(config.database.neonProject)).includes(host));
+  return Boolean(config.database && host && (await ports.neon.endpointHosts(neonProject(secrets))).includes(host));
 }
 
 export interface PreviewPieces {
@@ -414,7 +422,7 @@ export async function findPreviews(ctx: Context): Promise<PreviewPieces[]> {
     for (const hyperdrive of await ports.cloudflare.listHyperdrives(prefix)) add(pattern, hyperdrive.name, `${old}Hyperdrive config`);
   }
   if (config.database) {
-    for (const branch of await ports.neon.listBranches(config.database.neonProject, "pr-")) add(/^pr-(\d+)$/, branch.name, "Neon branch");
+    for (const branch of await ports.neon.listBranches(neonProject(ctx.secrets), "pr-")) add(/^pr-(\d+)$/, branch.name, "Neon branch");
   }
   const bucket = names(config, { kind: "preview", pr: 0 }).bucket;
   if (await ports.cloudflare.findBucket(bucket)) {
@@ -490,11 +498,11 @@ export async function destroy(ctx: Context, { data }: { data: boolean }): Promis
   for (const h of hyperdrives) await run.mutate(`delete Hyperdrive config ${h.name}`, () => ports.cloudflare.deleteHyperdrive(h.id), undefined);
 
   if (!config.database) {
-    run.note("platform.jsonc names no Neon project, so Neon was not checked");
+    run.note("platform.jsonc has no database, so Neon was not checked");
   } else if (!providers.neon) {
-    run.note("! no Neon key is set, so Neon branches were left alone");
+    run.note("! NEON_API_KEY or NEON_PROJECT_ID is not set, so Neon branches were left alone");
   } else {
-    const project = config.database.neonProject;
+    const project = neonProject(ctx.secrets);
     const doomed = (await ports.neon.listBranches(project, "pr-")).filter((b) => /^pr-\d+$/.test(b.name));
     if (data) doomed.push(...(await ports.neon.listBranches(project, BACKUP_PREFIX)), ...[await ports.neon.findBranch(project, DEV_BRANCH)].filter((b) => b !== undefined));
     for (const branch of doomed) await run.mutate(`delete Neon branch ${branch.name}`, () => ports.neon.deleteBranch(project, branch.id), undefined);

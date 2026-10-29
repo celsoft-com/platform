@@ -16,11 +16,11 @@ npm install --no-audit --no-fund --loglevel=error "$tarball"
 npx --no-install @celsoft/platform skills
 test -f .claude/skills/celsoft-platform-setup/SKILL.md
 before=$(find . -path ./node_modules -prune -o -type f -print | sort | xargs shasum)
-npx --no-install @celsoft/platform new --dry-run --name app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null >"$work/dry-run.txt"
+npx --no-install @celsoft/platform new --dry-run --name app --hostname app.example.com </dev/null >"$work/dry-run.txt"
 grep -q "would write platform.jsonc" "$work/dry-run.txt"
 test "$before" = "$(find . -path ./node_modules -prune -o -type f -print | sort | xargs shasum)"
 ! npx --no-install @celsoft/platform skills --dry-run 2>/dev/null
-npx --no-install @celsoft/platform new --name app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null
+npx --no-install @celsoft/platform new --name app --hostname app.example.com </dev/null
 npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null

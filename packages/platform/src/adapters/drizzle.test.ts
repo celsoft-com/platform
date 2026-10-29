@@ -9,7 +9,7 @@ import { DrizzleMigrator } from "./drizzle.js";
 // Runs the real drizzle-kit inside the package, so the scratch app can resolve drizzle-orm.
 const base = fileURLToPath(new URL("../../.test-apps/", import.meta.url));
 const config = parseConfig(`{ "name": "test", "hostname": "test.example.com", "worker": "src/worker.ts", "compatibilityDate": "2026-10-01",
-  "database": { "neonProject": "quiet-meadow-12345678" } }`);
+  "database": true }`);
 const table = (columns: string) =>
   `import { pgTable, text, uuid } from "drizzle-orm/pg-core";\nexport const items = pgTable("items", { id: uuid("id").primaryKey()${columns} });\n`;
 

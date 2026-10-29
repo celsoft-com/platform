@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseConfig, type Config } from "./config.js";
 import { fakePorts } from "./fakes.js";
-import { cleanup, deploy, destroy, dnsComment, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
+import { cleanup, deploy, destroy, dnsComment, findPreviews, moveApp, neonProject, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import { Run } from "./run.js";
 
 const config: Config = parseConfig(`{
@@ -10,7 +10,7 @@ const config: Config = parseConfig(`{
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
   "frontend": "dist",
-  "database": { "neonProject": "quiet-meadow-12345678" },
+  "database": true,
   "secrets": ["SESSION_SECRET"]
 }`);
 
@@ -22,7 +22,7 @@ function ctx(dryRun = false): Context {
     config,
     ports,
     run: new Run(dryRun, (line) => log.push(line)),
-    secrets: { SESSION_SECRET: "s3cret", UNRELATED: "x" },
+    secrets: { SESSION_SECRET: "s3cret", UNRELATED: "x", NEON_PROJECT_ID: "quiet-meadow-12345678" },
     repo: async () => ({ id: 101, name: "acme/demo" }),
     now: () => new Date("2026-10-24T12:34:56Z"),
   };
@@ -402,7 +402,7 @@ describe("destroy", () => {
     await destroy({ ...c, providers: { neon: false, mail: false } }, { data: true });
     expect(ports.neon.branches.map((b) => b.name)).toContain("pr-7");
     expect(ports.mail.domains).toHaveLength(1);
-    expect(log.join("\n")).toMatch(/no Neon key is set/);
+    expect(log.join("\n")).toMatch(/NEON_API_KEY or NEON_PROJECT_ID is not set/);
   });
 
   it("releases the app's name last", async () => {
@@ -419,6 +419,14 @@ describe("destroy", () => {
     expect(ports.cloudflare.workers.size).toBe(2);
     expect(ports.migrator.dropped).toEqual([]);
     expect(log).toContain("~ would delete Worker demo--pr-7");
+  });
+});
+
+describe("neon project", () => {
+  it("needs NEON_PROJECT_ID, and a project id rather than a branch id", () => {
+    expect(() => neonProject({})).toThrow(/NEON_PROJECT_ID is not set/);
+    expect(() => neonProject({ NEON_PROJECT_ID: "br-quiet-meadow-abcdefgh" })).toThrow(/not a branch id/);
+    expect(neonProject({ NEON_PROJECT_ID: "quiet-meadow-12345678" })).toBe("quiet-meadow-12345678");
   });
 });
 
