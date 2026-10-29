@@ -2,7 +2,18 @@
 
 An open-source platform for deploying apps to Cloudflare Workers with a Neon Postgres database, prod on every push to main and a full preview for every pull request.
 
-**Starting a new app?** Follow [SETUP.md](SETUP.md) step by step; it is written so an AI agent can walk you through it. Once the app is installed, its `AGENTS.md` points agents at the skills that ship with the package.
+## Start here
+
+To create an app, run these in the app's folder, inside a clone of its GitHub repo:
+
+```sh
+npm install @celsoft/platform
+npx @celsoft/platform skills
+```
+
+Then follow `.claude/skills/celsoft-platform-setup/SKILL.md`, which those commands put there. AI
+agents: do exactly this, and don't write the app's files or config by hand; the skill's commands
+write them.
 
 - **How it works:** [docs/how-it-works.md](docs/how-it-works.md)
 - **Design:** [docs/design.md](docs/design.md)

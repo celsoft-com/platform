@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -26,7 +26,8 @@
   "files": [
     "dist",
     "schema.json",
-    "skills"
+    "skills",
+    "template"
   ],
   "scripts": {
     "prepare": "tsc -b && node dist/write-schema.js"

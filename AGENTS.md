@@ -1,7 +1,7 @@
 # AGENTS.md
 
 The celsoft-com platform repository. This file is for working on the platform itself; to build
-a new app with it, follow [SETUP.md](SETUP.md) instead, step by step, in the app's own repo.
+a new app with it, follow [SETUP.md](SETUP.md) instead, in the app's own repo.
 
 ## Design
 
@@ -13,10 +13,11 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, step by step, in the app
 
 ## Setup
 
-- **Guide:** [SETUP.md](SETUP.md) is the one-time setup for adopters. When a user needs
-  help setting up, walk them through it step by step, and keep it current when setup
-  changes.
-- **Dogfood:** this repo is set up and run exactly as SETUP.md tells adopters, with
+- **Guide:** [SETUP.md](SETUP.md) is the starting point for adopters: install the package,
+  run `platform skills`, then follow the
+  [celsoft-platform-setup](packages/platform/skills/celsoft-platform-setup/SKILL.md) skill,
+  which holds every setup step. Keep both current when setup changes.
+- **Dogfood:** this repo is set up and run exactly as the setup skill tells adopters, with
   `apps/demo` as the app; never build repo-only tooling that stands in for a user command.
 - **No workarounds in the demo:** the demo exists to prove the platform, so it uses every
   feature the platform's own way; when it cannot, stop and fix or track the platform gap,
