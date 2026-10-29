@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -35,6 +35,17 @@ describe("scaffold", () => {
     expect(kept).toEqual(["README.md"]);
     expect(await readFile(join(dir, "README.md"), "utf8")).toBe("# Mine\n");
     expect((await readFile(join(dir, ".gitignore"), "utf8")).split("\n")).toEqual(expect.arrayContaining([".claude/skills/celsoft-platform*/", "node_modules", ".env.secrets"]));
+  });
+
+  it("changes nothing on a dry run, naming what it would write and keep", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "create-"));
+    await writeFile(join(dir, "README.md"), "# Mine\n");
+
+    const { written, kept } = await scaffold(dir, answers, "1.2.3", true);
+
+    expect(written).toEqual(expect.arrayContaining(["platform.jsonc", "package.json", ".gitignore"]));
+    expect(kept).toEqual(["README.md"]);
+    expect((await readdir(dir)).sort()).toEqual(["README.md"]);
   });
 
   it("refuses an app that already has a platform.jsonc", async () => {

@@ -52,6 +52,10 @@ commands:
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
+// Commands that would change something without saying so first; they refuse --dry-run rather
+// than ignore it.
+const NO_DRY_RUN = new Set(["skills", "generate", "upgrade", "db generate"]);
+
 type Command = { name: "skills" } | { name: "new" } | { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "db run"; file: string } | { name: "db stats" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
@@ -73,6 +77,7 @@ async function main(argv: string[]): Promise<void> {
     console.log("nothing to do for this event");
     return;
   }
+  if (dryRun && (NO_DRY_RUN.has(command.name) || (command.name === "db stats" && values.reset))) throw new UsageError(`${command.name}${values.reset ? " --reset" : ""} has no dry run; run it without --dry-run`);
 
   if (command.name === "upgrade") {
     const { text, changes } = upgradeConfigText(await readConfigText(appDir));
@@ -91,7 +96,7 @@ async function main(argv: string[]): Promise<void> {
 
   if (command.name === "new") {
     const name = values.name ?? (rules.name.pattern.test(basename(appDir)) ? basename(appDir) : undefined);
-    await newApp(appDir, { name, hostname: values.hostname, neonProject: values["neon-project"] });
+    await newApp(appDir, { name, hostname: values.hostname, neonProject: values["neon-project"] }, dryRun);
     return;
   }
 
@@ -352,7 +357,7 @@ async function newPassword(): Promise<string> {
 
 // Asks for whatever the flags left out, in a terminal; elsewhere a missing answer stops it with
 // the flag to pass.
-async function newApp(appDir: string, answers: Partial<Answers>): Promise<void> {
+async function newApp(appDir: string, answers: Partial<Answers>, dryRun: boolean): Promise<void> {
   if (process.stdin.isTTY && !process.env.CI) {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     const labels: Record<keyof Answers, string> = { name: "App name", hostname: "Prod hostname", neonProject: "Neon project id" };
@@ -372,10 +377,11 @@ async function newApp(appDir: string, answers: Partial<Answers>): Promise<void> 
   if (bad.length > 0) throw new UsageError(bad.map((key) => `${flags[key]}: ${rules[key].hint}`).join("\n"));
 
   const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
-  const { written, kept } = await scaffold(appDir, answers as Answers, version);
-  for (const file of written) console.log(`✓ ${file}`);
+  const { written, kept } = await scaffold(appDir, answers as Answers, version, dryRun);
+  for (const file of written) console.log(dryRun ? `~ would write ${file}` : `✓ ${file}`);
   for (const file of kept) console.log(`• ${file} already there, kept`);
   const manager = await packageManager(appDir);
+  if (dryRun) return console.log(`~ would run ${manager} install`);
   console.log(`\n${manager} install`);
   execFileSync(manager, ["install"], { cwd: appDir, stdio: "inherit" });
   console.log(`\nnext: continue ${SETUP_SKILL} at "Secrets file"`);

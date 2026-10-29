@@ -25,8 +25,9 @@ export function invalid(answers: Partial<Answers>): (keyof Answers)[] {
 
 // Writes a new app's files into appDir, which already has the package installed. Files already
 // there are kept, except package.json, which gains the app's name, scripts and dependencies, and
-// .gitignore, which gains the template's lines. Returns what it wrote.
-export async function scaffold(appDir: string, answers: Answers, platformVersion: string): Promise<{ written: string[]; kept: string[] }> {
+// .gitignore, which gains the template's lines. Returns what it wrote, or on a dry run what it
+// would write, touching nothing.
+export async function scaffold(appDir: string, answers: Answers, platformVersion: string, dryRun = false): Promise<{ written: string[]; kept: string[] }> {
   if (await exists(join(appDir, CONFIG_FILE))) throw new Error(`${CONFIG_FILE} already exists, so this app is already set up`);
   const vars: Record<string, string> = { ...answers, platformVersion, compatibilityDate: COMPATIBILITY_DATE };
   const result = { written: [] as string[], kept: [] as string[] };
@@ -34,7 +35,9 @@ export async function scaffold(appDir: string, answers: Answers, platformVersion
     const text = (await readFile(join(TEMPLATE_DIR, file), "utf8")).replace(/\{\{(\w+)\}\}/g, (match, key: string) => vars[key] ?? match);
     // npm drops .gitignore from published packages, so the template stores it without the dot.
     const target = file === "gitignore" ? ".gitignore" : file;
-    if (target === ".gitignore") {
+    if (dryRun) {
+      (target !== ".gitignore" && target !== "package.json" && (await exists(join(appDir, target))) ? result.kept : result.written).push(target);
+    } else if (target === ".gitignore") {
       for (const line of text.split("\n").filter(Boolean)) await ensureIgnored(appDir, line);
       result.written.push(target);
     } else if (target === "package.json") {
