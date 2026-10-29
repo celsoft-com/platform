@@ -185,7 +185,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 ## Features in `platform.jsonc`
 
-1. **`database`:** a Neon project id; prod, each preview and `dev` get their own branch.
+1. **`database`:** `true` turns on a Neon database, in the project `NEON_PROJECT_ID` names in `.env.secrets` beside `NEON_API_KEY`; prod, each preview and `dev` get their own branch. An older `"database": { "neonProject": ... }` stops every command until `npx @celsoft/platform upgrade` moves the id to `.env.secrets`; then run `init` to store it in GitHub.
 2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
 3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams, and `{ "apiTokens": true }` personal API tokens; see those sections above. Needs `database` and `email`.
    `"signup"` is `"invite"` unless set to `"open"`: once the app has its first account (the owner), only invited addresses may sign up. The owner and admins invite at `/invites`, or in code with `app.invites.create(email)`, `list()` and `revoke(id)`; an open organization invitation or a share to an address also lets that address sign up. Never build a sign-up path around it; to open sign-up, set `"open"`.
