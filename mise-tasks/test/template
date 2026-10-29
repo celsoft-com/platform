@@ -15,6 +15,11 @@ cd "$work/app"
 npm install --no-audit --no-fund --loglevel=error "$tarball"
 npx --no-install @celsoft/platform skills
 test -f .claude/skills/celsoft-platform-setup/SKILL.md
+before=$(find . -path ./node_modules -prune -o -type f -print | sort | xargs shasum)
+npx --no-install @celsoft/platform new --dry-run --name app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null >"$work/dry-run.txt"
+grep -q "would write platform.jsonc" "$work/dry-run.txt"
+test "$before" = "$(find . -path ./node_modules -prune -o -type f -print | sort | xargs shasum)"
+! npx --no-install @celsoft/platform skills --dry-run 2>/dev/null
 npx --no-install @celsoft/platform new --name app --hostname app.example.com --neon-project quiet-meadow-12345678 </dev/null
 npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
@@ -23,4 +28,4 @@ ls drizzle/*.sql >/dev/null
 test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
 grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
 grep -q "^.claude/skills/celsoft-platform\*/$" .gitignore
-echo "✓ an app started from the package gets its skills, its files from new, type-checks, and generates its migrations"
+echo "✓ an app started from the package gets its skills, previews new without writing, gets its files from new, type-checks, and generates its migrations"
