@@ -164,14 +164,14 @@ export function defineApp<
   const api = apiHandler(options.endpoints ?? {});
   const once: Once = {};
   const pages = pageServer(options.pages ?? []);
-  const undeclared = undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`);
+  const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
 
   // One request, answered; `trace` collects where its time goes.
   async function serve(request: Request, env: Env, ctx: ExecutionContext, trace: Trace | undefined): Promise<Response> {
     const url = new URL(request.url);
-    // With access on, every endpoint says what it checks, so a forgotten check never ships open.
+    // With access on, every endpoint and page says what it checks, so a forgotten check never ships open.
     if (env.ACCESS === "on" && undeclared.length > 0) {
-      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level } or access: "none"`);
+      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level }, "user" or "anon"`);
       return json({ error: "this app is misconfigured; see its logs" }, 500);
     }
     const { app, close } = createContext(request, env, ctx, options, once, undefined, undefined, trace);
@@ -180,7 +180,8 @@ export function defineApp<
       if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
       // A request with an API token runs as the token's owner, capped at the token's level.
       let current = app;
-      const token = apiToken(request, url, env);
+      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
+      const token = apiToken(request, url, env, onPage);
       // One caller cannot spend everyone's capacity: a token, a person, or else an address.
       const limited = env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname)) ? env.API_LIMIT : undefined;
       const address = `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
@@ -211,7 +212,7 @@ export function defineApp<
         const platform = await platformRoute(request, url, env, current, options);
         if (platform) return platform;
       }
-      const page = await pages?.handle(request, url, current, pageCache(env, ctx, current));
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx, current));
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
@@ -417,10 +418,11 @@ const TOKEN_ROUTES = ["create", "list", "delete", "get"];
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The API token a request carries, when tokens are on: on /api/ outside /api/auth/, where a
-// token can never make more tokens or change the account.
-function apiToken(request: Request, url: URL, env: PlatformBindings): string | null {
+// token can never make more tokens or change the account, and on page reads.
+function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boolean): string | null {
   if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
-  if (!url.pathname.startsWith("/api/") || url.pathname.startsWith(`${AUTH_PATH}/`)) return null;
+  const onApi = url.pathname.startsWith("/api/") && !url.pathname.startsWith(`${AUTH_PATH}/`);
+  if (!onApi && !onPage) return null;
   return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
 }
 

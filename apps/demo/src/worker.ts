@@ -110,13 +110,27 @@ const pageHtml = (title: string, body: string) =>
   `<style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}main{max-width:40rem;margin:2rem auto;padding:0 1rem}.body{white-space:pre-wrap}.meta{opacity:.7}</style></head>` +
   `<body><main>${body}<p><a href="/#/notes">Back to the app</a></p></main></body></html>`;
 
-// The one page the Worker renders: every visitor sees it the same, so the edge keeps it for a
-// minute; a reload shows the same time and runs no query until a note is added or deleted, which
-// invalidates it. Everything that depends on who is looking is rendered in the browser.
+// A note printed by the Worker for anyone who may read it: the gate checks the note, the page shows
+// the same thing to all of them, so the edge keeps one copy until the note changes. Anything that
+// depends on who is looking, such as their level, stays in the app.
+const print = page({
+  path: "/print",
+  routes: {
+    "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, async ({ id }, app: App) => {
+      const [note] = await app.db.select({ body: notes.body, createdAt: notes.createdAt, author: users.name }).from(notes).innerJoin(users, eq(users.id, notes.userId)).where(eq(notes.id, id));
+      if (!note) throw new EndpointError(404, "not found");
+      return pageHtml(note.body.slice(0, 60), `<h1>Note</h1><p class="meta">By ${escape(note.author)}, ${note.createdAt.toISOString().slice(0, 10)}; rendered at ${new Date().toISOString()}.</p><p class="body">${escape(note.body)}</p>`);
+    }),
+  },
+});
+
+// A page anyone may read: every visitor sees it the same, so the edge keeps it for a minute; a
+// reload shows the same time and runs no query until a note is added or deleted, which
+// invalidates it.
 const stats = page({
   path: "/stats",
   routes: {
-    "/": route({ cache: true }, async (_, app: App) => {
+    "/": route({ access: "anon", cache: true }, async (_, app: App) => {
       const [row] = await app.db.select({ total: count() }).from(notes);
       return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p>`);
     }),
@@ -177,7 +191,7 @@ export default defineApp(
   },
   {
     schema,
-    pages: [stats],
+    pages: [print, stats],
     // A static point, declared here and applied at every start: anyone may read the about line.
     access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
@@ -199,6 +213,7 @@ export default defineApp(
         },
         async ({ id, body }, app) => {
           await app.db.update(notes).set({ body, updatedAt: new Date() }).where(eq(notes.id, id));
+          await app.cache.invalidate(`/print/${id}`);
           return sharedNote(app, id);
         },
       ),
@@ -211,6 +226,7 @@ export default defineApp(
         });
         // The count on /stats changed; a cached copy goes now, not in a minute.
         if (gone.length > 0) await app.cache.invalidate("/stats");
+        for (const note of gone) await app.cache.invalidate(`/print/${note.id}`);
         for (const note of gone) if (note.attachmentName) await app.files.delete(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`).catch(() => {});
         return { deleted: gone.length };
       }),
@@ -315,7 +331,7 @@ export default defineApp(
       ),
       // Other people's personal notes the signed-in user can read, filtered by access in the query itself.
       sharedNotes: endpoint(
-        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: "none" },
+        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: "user" },
         async (_, app) => {
           const user = await app.requireUser();
           return app.db
@@ -336,13 +352,13 @@ export default defineApp(
           description: "The organizations the signed-in user belongs to, with their ids for the organization note tools",
           input: z.object({}),
           output: z.array(Org),
-          access: "none",
+          access: "user",
         },
         async (_, app) => (await app.organizations.list()).map(({ id, name }) => ({ id, name })),
       ),
       // Its members may add notes, so the organization's point gives them create, not only read.
       createOrganization: endpoint(
-        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: "none" },
+        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: "user" },
         async ({ name }, app) => {
           const org = await app.organizations.create({ name });
           await app.access.grant(organizationPoint(org.id), { organization: org.id }, "create");

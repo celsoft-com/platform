@@ -62,9 +62,11 @@ describe("Pages: declaring", () => {
     expect(() => page({ path: "/x", routes: { "/:id": route({ params: z.object({ other: z.string() }) }, () => "") } })).toThrow(/:id/);
   });
 
-  it("P5: a route never declares access, since every visitor sees a page identically", () => {
-    for (const access of ["none", { point: "id", level: "read" }]) {
-      expect(() => page({ path: "/x", routes: { "/:id": route({ access } as never, () => "") } }), JSON.stringify(access)).toThrow(/drop access/);
+  it("P5: a route's access is checked when the page is defined", () => {
+    expect(() => page({ path: "/x", routes: { "/:id": route({ access: { point: "other", level: "read" } }, () => "") } })).toThrow(/other/);
+    expect(() => page({ path: "/x", routes: { "/:id": route({ access: "none" as never }, () => "") } })).toThrow(/"user" or "anon"/);
+    for (const access of ["anon", "user", { point: "id", level: "read" }] as const) {
+      expect(() => page({ path: "/x", routes: { "/:id": route({ access }, () => "") } }), JSON.stringify(access)).not.toThrow();
     }
   });
 
@@ -156,13 +158,24 @@ describe("Pages: serving", () => {
 
 describe("Pages: beside sign-in, links and tokens", () => {
   const NoteId = z.object({ id: z.string() });
-  // A page every visitor sees the same, beside an endpoint that answers the caller's own level.
+  const ran: string[] = [];
+  // Gated pages, beside a handler that answers the caller's own level on a point.
   const wired = defineApp(async (request, app) => {
     const id = new URL(request.url).searchParams.get("id");
     return id ? Response.json({ level: await app.access.check(id) }) : new Response("handler");
   }, {
     pool: (connectionString) => new Pool({ connectionString, max: 2 }),
-    pages: [page({ path: "/doc", routes: { "/:id": route({ params: NoteId }, ({ id }) => `<h1>${id}</h1>`), "/open/door": () => "<p>open</p>" } })],
+    pages: [
+      page({
+        path: "/doc",
+        routes: {
+          "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, ({ id }) => (ran.push(id), `<h1>${id}</h1>`)),
+          "/:id/edit": route({ params: NoteId, access: { point: ({ id }) => id, level: "write" } }, ({ id }) => `<h1>edit ${id}</h1>`),
+          "/mine/list": route({ access: "user" }, () => "<p>signed in</p>"),
+          "/open/door": route({ access: "anon" }, () => "<p>open</p>"),
+        },
+      }),
+    ],
     endpoints: {},
   });
   const env = { DB: { connectionString: databaseUrl }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", AUTH_SIGNUP: "open", APP_URL: "https://app.test", APP_NAME: "test", ACCESS: "on", AUTH_API_TOKENS: "on", EMAIL_MODE: "capture" as const };
@@ -188,12 +201,87 @@ describe("Pages: beside sign-in, links and tokens", () => {
     return id;
   };
 
-  it("P18: with access on, pages need no declaration and serve every visitor the same", async () => {
-    const id = await point(await signUp());
-    const signedOut = await send(`/doc/${id}`);
-    expect(signedOut).toMatchObject({ status: 200, text: `<h1>${id}</h1>` });
-    expect(await send(`/doc/${id}`, { cookie: await signUp() })).toMatchObject({ status: 200, text: signedOut.text });
+  const grant = async (id: string, cookie: string, level: number) => {
+    const session = await wired.fetch(new Request("https://app.test/api/auth/get-session", { headers: { cookie } }), env, ctx);
+    const { user } = (await session.json()) as { user: { id: string } };
+    const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    await pool.query(`insert into access_grant (point_id, user_id, level) values ($1, $2, $3)`, [id, user.id, level]);
+    await pool.end();
+  };
+
+  it("P18: a user route lets in anyone signed in; signed out it is the 404 offering sign-in and sign-up, never a redirect", async () => {
+    const answer = await send("/doc/mine/list?tab=2&x=%2F");
+    expect(answer).toMatchObject({ status: 404, location: null });
+    const next = encodeURIComponent("/doc/mine/list?tab=2&x=%2F");
+    expect(answer.text).toContain(`/login?next=${next}`);
+    expect(answer.text).toContain(`/signup?next=${next}`);
+    expect(await send("/doc/mine/list", { cookie: await signUp() })).toMatchObject({ status: 200, text: "<p>signed in</p>" });
+  });
+
+  it("P19: an anon route serves anyone", async () => {
     expect(await send("/doc/open/door")).toMatchObject({ status: 200, text: "<p>open</p>" });
+  });
+
+  it("P21: the owner reads and edits; a page's access is checked before its handler", async () => {
+    const owner = await signUp();
+    const id = await point(owner);
+    expect(await send(`/doc/${id}`, { cookie: owner })).toMatchObject({ status: 200, text: `<h1>${id}</h1>` });
+    expect(await send(`/doc/${id}/edit`, { cookie: owner })).toMatchObject({ status: 200 });
+    expect(ran).toContain(id);
+  });
+
+  it("P22: signed in without access, the page is a 404 with no sign-in offer, and its handler never runs", async () => {
+    const id = await point(await signUp());
+    const answer = await send(`/doc/${id}`, { cookie: await signUp() });
+    expect(answer).toMatchObject({ status: 404, location: null });
+    expect(answer.text).not.toContain("/login");
+    expect(ran).not.toContain(id);
+  });
+
+  it("P23: signed out, a refused page, a missing point and a missing route answer the same 404, with the link script", async () => {
+    const id = await point(await signUp());
+    const real = await send(`/doc/${id}`);
+    const missing = await send(`/doc/${id.replace(/^doc-/, "doc-0")}`);
+    const noRoute = await send(`/doc/${id}/nothing/here`);
+    expect(real).toMatchObject({ status: 404, location: null });
+    expect(real.text).toContain("/api/platform/link");
+    expect(missing.text.replaceAll(id.replace(/^doc-/, "doc-0"), "X")).toBe(real.text.replaceAll(id, "X"));
+    expect(noRoute.text.replaceAll(encodeURIComponent(`/doc/${id}/nothing/here`), "X")).toBe(real.text.replaceAll(encodeURIComponent(`/doc/${id}`), "X"));
+    expect(ran).not.toContain(id);
+  });
+
+  it("P24: a reader may open the read route but not the write route", async () => {
+    const id = await point(await signUp());
+    const reader = await signUp();
+    await grant(id, reader, 1);
+    expect((await send(`/doc/${id}`, { cookie: reader })).status).toBe(200);
+    expect((await send(`/doc/${id}/edit`, { cookie: reader })).status).toBe(404);
+  });
+
+  it("P27: with access on, a page route that declares nothing stops the app with a 500 and a log naming it", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const careless = defineApp(undefined, { pages: [page({ path: "/x", routes: { "/:id": () => "open" } })] });
+    expect((await careless.fetch(new Request("https://app.test/x/1"), { ACCESS: "on" }, ctx)).status).toBe(500);
+    expect(error.mock.calls.flat().join(" ")).toContain("page /x/:id");
+    expect((await careless.fetch(new Request("https://app.test/x/1"), { ACCESS: "off" }, ctx)).status).toBe(200);
+    error.mockRestore();
+  });
+
+  it("P46: a gated page is kept for everyone who passes, and the gate runs before the cache", async () => {
+    const versioned = { ...env, CF_VERSION_METADATA: { id: `v-${uid()}` } };
+    const visit = async (path: string, cookie?: string) => {
+      const response = await wired.fetch(new Request(`https://app.test${path}`, { headers: cookie ? { cookie } : {} }), versioned, ctx);
+      return { status: response.status, state: response.headers.get("platform-cache"), cacheControl: response.headers.get("cache-control") };
+    };
+    const owner = await signUp();
+    const id = await point(owner);
+    const reader = await signUp();
+    await grant(id, reader, 1);
+    expect(await visit(`/doc/${id}`, owner)).toEqual({ status: 200, state: "miss", cacheControl: "no-store" });
+    expect(await visit(`/doc/${id}`, reader)).toEqual({ status: 200, state: "hit", cacheControl: "no-store" });
+    expect((await visit(`/doc/${id}`, await signUp())).status).toBe(404);
+    expect((await visit(`/doc/${id}`)).status).toBe(404);
+    expect(ran.filter((r) => r === id)).toHaveLength(1);
   });
 
   it("P20: the API still answers 401, never a redirect", async () => {
@@ -281,6 +369,13 @@ describe("Pages: beside sign-in, links and tokens", () => {
     expect(await level(id)).toBe(404);
   });
 
+  it("P47: a link kept as a cookie opens a gated page, at its own level only", async () => {
+    const id = await point(await signUp());
+    const cookie = (await exchange((await link(id, 1)).token)).cookie;
+    expect(await send(`/doc/${id}`, { cookie })).toMatchObject({ status: 200, text: `<h1>${id}</h1>` });
+    expect((await send(`/doc/${id}/edit`, { cookie })).status).toBe(404);
+  });
+
   it("P35: a link cannot be kept from another site's form, or with access off", async () => {
     const id = await point(await signUp());
     const { token } = await link(id, 1);
@@ -291,11 +386,24 @@ describe("Pages: beside sign-in, links and tokens", () => {
     expect(off.status).toBe(404);
   });
 
-  it("P37: an API token is only looked at on the API, never on pages or other paths", async () => {
+  it("P36: an API token reads pages as its owner, capped, and a bad one is a 401", async () => {
+    const owner = await signUp();
+    const id = await point(owner);
+    const made = await send("/api/auth/api-key/create", { method: "POST", cookie: owner, body: { name: "pages", metadata: { cap: "read" } } });
+    const key = JSON.parse(made.text).key as string;
+    const bearer = (k: string) => ({ headers: { authorization: `Bearer ${k}` } });
+    expect(await send(`/doc/${id}`, bearer(key))).toMatchObject({ status: 200, text: `<h1>${id}</h1>` });
+    expect((await send(`/doc/${id}/edit`, bearer(key))).status).toBe(404);
+    expect((await send("/doc/mine/list", bearer(key))).status).toBe(200);
+    expect((await send(`/doc/${id}`, bearer(`${key}x`))).status).toBe(401);
+    expect((await send(`/doc/${id}`, { method: "HEAD", ...bearer(key) })).status).toBe(200);
+  });
+
+  it("P37: an API token is only looked at on the API and pages, never on other paths", async () => {
     const owner = await signUp();
     const made = await send("/api/auth/api-key/create", { method: "POST", cookie: owner, body: { name: "elsewhere" } });
     const key = JSON.parse(made.text).key as string;
-    for (const path of ["/login", "/elsewhere", "/doc/open/door"]) {
+    for (const path of ["/login", "/elsewhere"]) {
       const answer = await wired.fetch(new Request(`https://app.test${path}`, { headers: { authorization: `Bearer ${key}x` } }), env, ctx);
       expect(answer.status, path).not.toBe(401);
     }
@@ -328,7 +436,7 @@ describe("Pages: beside sign-in, links and tokens", () => {
     expect(await answer.json()).toEqual({ before: "read", after: null });
   });
 
-  it("Q1: with a fresh session cookie, knowing who is calling costs no query, and a page asks nothing about the caller", async () => {
+  it("Q1: with a fresh session cookie, knowing who is calling costs no query, and an anon page asks nothing about the caller", async () => {
     const cookie = await signUp();
     const traced = { ...env, TRACE: "on" };
     const whoami = defineApp(async (_req, app) => Response.json({ id: (await app.requireUser()).id }), { pool: (c) => new Pool({ connectionString: c, max: 2 }) });

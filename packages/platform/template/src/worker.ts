@@ -13,7 +13,7 @@ export default defineApp(undefined, {
   schema,
   endpoints: {
     listItems: endpoint(
-      { method: "GET", path: "/api/public/items", description: "The newest 100 items", input: z.object({}), output: z.array(Item) },
+      { method: "GET", path: "/api/public/items", description: "The newest 100 items", input: z.object({}), output: z.array(Item), access: "anon" },
       async (_, { db }) => db.select().from(items).orderBy(desc(items.createdAt)).limit(100),
     ),
   },

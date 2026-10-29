@@ -17,8 +17,8 @@ const ran: string[] = [];
 const app = defineApp(undefined, {
   pool: (connectionString) => new Pool({ connectionString, max: 2 }),
   endpoints: {
-    whoAmI: endpoint({ method: "GET", path: "/api/me", input: z.object({}), output: z.object({ id: z.string() }), access: "none" }, async (_, a) => ({ id: (await a.requireUser()).id })),
-    makeDoc: endpoint({ method: "POST", path: "/api/docs", input: z.object({ id: z.string() }), output: z.object({}), access: "none" }, async ({ id }, a) => {
+    whoAmI: endpoint({ method: "GET", path: "/api/me", input: z.object({}), output: z.object({ id: z.string() }), access: "user" }, async (_, a) => ({ id: (await a.requireUser()).id })),
+    makeDoc: endpoint({ method: "POST", path: "/api/docs", input: z.object({ id: z.string() }), output: z.object({}), access: "user" }, async ({ id }, a) => {
       ran.push(`make ${id}`);
       await a.access.create(id);
       return {};
@@ -29,7 +29,7 @@ const app = defineApp(undefined, {
       { method: "POST", path: "/api/docs/:id/share", input: z.object({ id: z.string(), to: z.string() }), output: z.object({}), access: { point: "id", level: "manage" } },
       async ({ id, to }, a) => (ran.push(`share ${id}`), await a.access.grant(id, { user: to }, "read"), {}),
     ),
-    manageable: endpoint({ method: "GET", path: "/api/manageable", input: z.object({}), output: z.array(z.string()), access: "none" }, async (_, a) => {
+    manageable: endpoint({ method: "GET", path: "/api/manageable", input: z.object({}), output: z.array(z.string()), access: "user" }, async (_, a) => {
       const rows = await pool.query(`select id from access_point where created_by = $1 order by id`, [(await a.requireUser()).id]);
       const out: string[] = [];
       for (const r of rows.rows) if (await a.access.can(r.id, "manage")) out.push(r.id);
