@@ -57,23 +57,22 @@ export default defineApp(undefined, {
 2. **Checks:** bad input is a 400; an output that does not match its schema is a 500, logged.
 3. **Errors:** throw `EndpointError(status, message)`; a thrown `Response`, as `requireUser()` throws, keeps its status.
 4. **Access:** every `/api/` path needs a signed-in user except under `/api/public/`; MCP calls always carry one.
-5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "none"`; the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
+5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "user"` (anyone signed in) or `"anon"` (anyone, only under `/api/public/`); the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
 ## Server pages
 
-Pages the Worker renders on each request, for share previews and pages search engines must read.
+Pages the Worker renders on each request, for share previews, printable views and pages search
+engines must read.
 
-**Rendering rule:** the Worker renders HTML only for content that every signed-out visitor sees
-identically, because that is what search engines must be able to read without JavaScript.
-Anything that depends on who is looking or on what they have done (sign-in state, saved choices,
-checkmarks, drafts, admin screens) is never rendered on the server; the browser adds it with
-JavaScript after the page loads. A page can mix both: the server renders the shared content in its
+**Rendering rule:** the Worker renders HTML only for content that is identical for everyone
+allowed to see it. Anything that depends on who is looking or on what they have done (sign-in
+state, saved choices, checkmarks, drafts, admin screens) is never rendered on the server; the
+browser adds it with JavaScript after the page loads. A page's access gate decides who gets the
+page, never what it says. A page can mix both: the server renders the shared content in its
 default state, such as a checklist with every box unchecked, and the browser fills in the
-visitor's own state. This is the same line as the edge cache: anything the server renders must be
-cacheable as a public response and cleared with `app.cache.invalidate(path)` when its content
-changes, and anything that could not be cached that way belongs in the browser.
+visitor's own state.
 
 A page claims a path and everything below it:
 
@@ -83,10 +82,10 @@ import { defineApp, page, route } from "@celsoft/platform";
 const notesPage = page({
   path: "/notes",                       // claims /notes and /notes/*; no static file is served there
   routes: {
-    "/": () => "<h1>Notes</h1>",
-    "/new": () => "<h1>New</h1>",       // text segments win over parameters
+    "/": route({ access: "anon" }, () => "<h1>Notes</h1>"),
+    "/new": route({ access: "user" }, () => "<h1>New</h1>"),   // text segments win over parameters
     "/:id": route(
-      { params: z.object({ id: z.uuid() }), cache: true },
+      { params: z.object({ id: z.uuid() }), access: { point: "id", level: "read" }, cache: true },
       async ({ id }, app) => `<h1>${escape(await publishedBody(app, id))}</h1>`,
     ),
   },
@@ -97,16 +96,20 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 1. **Paths:** plain segments, never a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
    - **Root page:** `page({ path: "/", routes: { "/": handler } })` answers `/` alone, never the paths below it; it wins over a static `index.html` at `/`, which still serves every other unmatched path.
-2. **Routes:** `"/"` is the claimed path itself; a route matching nothing under the claim is a 404. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
+2. **Routes:** `"/"` is the claimed path itself; a path matching no route under the claim gets the 404 page. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
 3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
-6. **Nobody in particular:** `app.session()`, `app.requireUser()` and `app.access` throw on a page, and a route never declares `access`; fetch anything personal in the browser from an endpoint.
+6. **Access gate:** with `access` on, every route declares who may read it: `{ point: "id", level: "read" }` (a param, or a function of the params), `"user"` (anyone signed in) or `"anon"` (anyone); the app refuses every request until each does. It is checked before the handler and the cache.
+   - **Refused:** a refused visitor, a missing point and an unmatched path get one 404 page; signed out, it offers Sign in and Sign up, which return to the page. Never build a redirect for it.
+   - **Share links:** `/print/7#link=<token>` opens a gated page; the 404 page swaps the token for a cookie and reloads, so put links after `#`, never in the query.
+   - **API tokens:** count on page GET and HEAD, capped at their level.
+   - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler; fetch anything personal in the browser from an endpoint.
 7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
 8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
 9. **Caching:** any page may opt in:
     `route({ cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
-    1. **Same for everyone:** signed in or out, every visitor gets the kept copy, and the cache key is the path and query only, so a page's HTML must never depend on anything else about the request, such as cookies, `accept-language` or location.
+    1. **Same for everyone who passes:** the gate runs first, then everyone who passes gets the kept copy, and the cache key is the path and query only, so a page's HTML must never depend on anything else about the request, such as cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
     2. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
     3. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
     4. **Deploys:** every deploy starts empty.
@@ -129,7 +132,7 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 4. **Inheritance:** with `inherit: true` a point also uses its parent's grants, up to the first point that does not inherit. Each principal stops at its nearest grant and the highest wins, so a grant to a person on a note can lower that person there, while a grant to a whole organization never lowers its teams.
 5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
 6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
-7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }` or `access: "none"`; the app refuses every request until each one does.
+7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }`, `access: "user"` or `access: "anon"`; the app refuses every request until each one does.
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
 10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
@@ -165,8 +168,8 @@ With `"auth": { "organizations": true }`, the platform keeps organizations, team
 With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
-2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, never on pages; `requireUser()` returns the token's owner.
-3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `access: "none"` are limited only by that, so put writes behind a point when tokens should not reach them.
+2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, and on page reads; `requireUser()` returns the token's owner.
+3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `"user"` or `"anon"` are limited only by that, so put writes behind a point when tokens should not reach them.
 4. **Lifetime:** 90 days unless chosen, at most 365.
 5. **Never:** on `/api/auth/*` or `/mcp`.
 

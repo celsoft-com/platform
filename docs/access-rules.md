@@ -204,7 +204,8 @@ checked against a plain reference version of these rules, in `access.model.test.
 | N4 | MCP call | The same checks; a refusal is a tool error saying not found |
 | N5 | `readable` and `allows` | List exactly what single checks allow |
 | N6 | Point worked out from the input | Checked like a field |
-| N7 | `access: "none"` | Runs with no check |
+| N7 | `access: "user"` | Runs with no point check |
+| N11 | `"anon"` outside `/api/public/`, or `"user"` inside it | Refused when the app is read, naming the endpoint |
 | N8 | Access on, an endpoint declares nothing | Every request answers 500, naming it in the logs |
 | N9 | Declared field missing, unknown level, bad shape | Error when the endpoint is defined |
 | N10 | Input gives no usable point id | 404, never a server error |
