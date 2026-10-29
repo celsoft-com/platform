@@ -9,9 +9,9 @@ import { LINK_EXCHANGE_PATH } from "./link-header.js";
 // handler cannot ask who is looking, so anything personal is added by the browser. See
 // docs/design.md, Server pages.
 
-type ParamNames<S extends string> = S extends `${string}:${infer P}/${infer Rest}` ? P | ParamNames<`/${Rest}`> : S extends `${string}:${infer P}` ? P : never;
+type ParamNames<S extends string> = S extends `${string}:${infer P}/${infer Rest}` ? P | ParamNames<`/${Rest}`> : S extends `${string}:${infer P}` ? P : S extends `${string}*${infer P}` ? P : never;
 
-// The `:name` segments of a route, as strings.
+// The `:name` segments of a route, and its `*name` rest of the path, as strings.
 export type PathParams<S extends string> = { [K in ParamNames<S>]: string };
 
 // HTML, or a whole Response such as a redirect.
@@ -53,6 +53,7 @@ export interface Page {
 
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const PARAM = /^:([A-Za-z_][A-Za-z0-9_]*)$/;
+const REST = /^\*([A-Za-z_][A-Za-z0-9_]*)$/;
 
 // Claimed by the platform itself; a page under one would never be reached, or would hide it.
 const RESERVED = ["/api", "/mcp", "/.well-known", "/login", "/signup", "/forgot", "/reset", "/consent", "/tokens"];
@@ -66,7 +67,8 @@ export function route(definition: { params?: z.ZodType; access?: EndpointAccess;
 }
 
 // The path a page claims, and its routes below it: "/" is the path itself, "/:id/edit" a path
-// below it whose first segment is the parameter `id`. The root page is a special claim: it answers
+// below it whose first segment is the parameter `id`, and "/*path" every path below it at any
+// depth, its segments joined as the parameter `path`. The root page is a special claim: it answers
 // `/` alone, never the paths below it, which stay static files.
 export const ROOT = "/";
 
@@ -82,11 +84,11 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
   if (reserved) throw new Error(`page path ${path} is under ${reserved}, which the platform answers itself`);
   const routes: Record<string, PageRoute> = {};
   for (const [key, value] of Object.entries(definition.routes as Record<string, PageRoute | PageHandler>)) {
-    const names = routeSegments(key, path).flatMap((s) => (s.param ? [s.param] : []));
+    const names = routeSegments(key, path).flatMap((s) => (s.param ? [s.param] : s.rest ? [s.rest] : []));
     const r: PageRoute = typeof value === "function" ? { handler: value } : value;
     if (!r || typeof r.handler !== "function") throw new Error(`page ${path}${key}: a route is a function or route({ ... }, handler)`);
     const shape = (r.params as { shape?: Record<string, unknown> } | undefined)?.shape;
-    if (r.params) for (const name of names) if (!shape || !(name in shape)) throw new Error(`page ${path}${key} has :${name}, which its params schema does not have`);
+    if (r.params) for (const name of names) if (!shape || !(name in shape)) throw new Error(`page ${path}${key} has ${key.includes(`*${name}`) ? "*" : ":"}${name}, which its params schema does not have`);
     checkAccessDeclaration(r.access, shape ? Object.keys(shape) : names, `page ${path}${key}`);
     if (r.cache !== undefined) {
       const seconds = cacheSeconds(r.cache);
@@ -101,25 +103,31 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
 interface Segment {
   text?: string;
   param?: string;
+  // The rest of the path, one or more segments; only ever the last.
+  rest?: string;
 }
 
 function routeSegments(key: string, path: string): Segment[] {
   if (key === "/") return [];
   if (!key.startsWith("/") || key.endsWith("/")) throw new Error(`page ${path}: route ${JSON.stringify(key)} must be "/" or like "/:id/edit", with no trailing slash`);
   const seen = new Set<string>();
-  return key
-    .slice(1)
-    .split("/")
-    .map((s) => {
-      const param = PARAM.exec(s)?.[1];
-      if (param) {
-        if (seen.has(param)) throw new Error(`page ${path}${key} names :${param} twice`);
-        seen.add(param);
-        return { param };
-      }
-      if (!SEGMENT.test(s) || s === "." || s === "..") throw new Error(`page ${path}: route ${JSON.stringify(key)} has a segment that is neither text nor :name`);
-      return { text: s };
-    });
+  const parts = key.slice(1).split("/");
+  return parts.map((s, i) => {
+    const param = PARAM.exec(s)?.[1];
+    const rest = REST.exec(s)?.[1];
+    const name = param ?? rest;
+    if (name) {
+      if (seen.has(name)) throw new Error(`page ${path}${key} names ${name} twice`);
+      seen.add(name);
+    }
+    if (param) return { param };
+    if (rest) {
+      if (i !== parts.length - 1) throw new Error(`page ${path}${key}: *${rest} takes the rest of the path, so it must be the last segment; read the segments after it from *${rest} in the handler`);
+      return { rest };
+    }
+    if (!SEGMENT.test(s) || s === "." || s === "..") throw new Error(`page ${path}: route ${JSON.stringify(key)} has a segment that is neither text, :name nor a last *name`);
+    return { text: s };
+  });
 }
 
 interface Compiled {
@@ -151,17 +159,19 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
   const compiled = new Map<string, Compiled[]>();
   for (const p of pages) {
     const list = Object.entries(p.routes).map(([key, route]) => ({ path: p.path, key, segments: routeSegments(key, p.path), route }));
-    // Text before parameters, segment by segment, so "/new" wins over "/:id".
+    // Text before parameters before the rest of the path, segment by segment, so "/new" wins
+    // over "/:id", which wins over "/*path".
+    const rank = (s: Segment | undefined) => (s?.text !== undefined ? 0 : s?.param ? 1 : 2);
     list.sort((a, b) => {
       for (let i = 0; i < Math.min(a.segments.length, b.segments.length); i++) {
-        const d = Number(Boolean(a.segments[i]!.param)) - Number(Boolean(b.segments[i]!.param));
+        const d = rank(a.segments[i]) - rank(b.segments[i]);
         if (d !== 0) return d;
       }
       return 0;
     });
     const shapes = new Set<string>();
     for (const c of list) {
-      const shape = `${c.segments.length}:${c.segments.map((s) => s.text ?? ":").join("/")}`;
+      const shape = `${c.segments.length}:${c.segments.map((s) => s.text ?? (s.rest ? "*" : ":")).join("/")}`;
       if (shapes.has(shape)) throw new Error(`page ${p.path} has two routes for the same paths, such as ${c.key}`);
       shapes.add(shape);
     }
@@ -189,9 +199,9 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       } catch {
         return refuse();
       }
-      const found = compiled.get(claim)!.find((c) => c.segments.length === parts.length && c.segments.every((s, i) => (s.param ? parts[i] !== "" : s.text === parts[i])));
+      const found = compiled.get(claim)!.find((c) => matches(c.segments, parts));
       if (!found) return refuse();
-      const raw = Object.fromEntries(found.segments.flatMap((s, i) => (s.param ? [[s.param, parts[i]!]] : [])));
+      const raw = Object.fromEntries(found.segments.flatMap((s, i) => (s.param ? [[s.param, parts[i]!]] : s.rest ? [[s.rest, parts.slice(i).join("/")]] : [])));
       let params: unknown = raw;
       if (found.route.params) {
         const checked = found.route.params.safeParse(raw);
@@ -237,6 +247,18 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       return request.method === "HEAD" ? new Response(null, response) : response;
     },
   };
+}
+
+// A rest segment takes one or more whole segments; one holding an encoded "/" would read the same as
+// two, so it matches nothing.
+function matches(segments: Segment[], parts: string[]): boolean {
+  const rest = segments.at(-1)?.rest !== undefined;
+  if (rest ? parts.length < segments.length : parts.length !== segments.length) return false;
+  return parts.every((part, i) => {
+    const s = segments[Math.min(i, segments.length - 1)]!;
+    if (s.rest !== undefined && i >= segments.length - 1) return part !== "" && !part.includes("/");
+    return s.param ? part !== "" : s.text === part;
+  });
 }
 
 // What who is looking would tell a page, refused, so everyone who passes the gate gets the same

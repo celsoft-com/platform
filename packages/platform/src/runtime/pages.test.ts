@@ -80,6 +80,45 @@ describe("Pages: declaring", () => {
     expect(() => pageServer([page({ path: "/x", routes: { "/:a": () => "", "/:b": () => "" } })])).toThrow(/same paths/);
   });
 
+  it("P48: a *name segment takes the rest of the path at any depth, after text and :name routes", async () => {
+    const trips = defineApp(() => new Response("handler"), {
+      pages: [
+        page({
+          path: "/trip",
+          routes: {
+            "/": () => "top",
+            "/new": () => "new",
+            "/:year": ({ year }) => `year ${year}`,
+            "/:year/summary": ({ year }) => `summary ${year}`,
+            "/*path": ({ path }) => `rest ${path}`,
+          },
+        }),
+        page({ path: "/files", routes: { "/:owner/*path": ({ owner, path }) => `${owner}: ${path}` } }),
+      ],
+    });
+    const visit = async (path: string) => {
+      const response = await trips.fetch(new Request(`https://app.test${path}`), {}, ctx);
+      return response.status === 200 ? await response.text() : response.status;
+    };
+    expect(await visit("/trip")).toBe("top");
+    expect(await visit("/trip/new")).toBe("new");
+    expect(await visit("/trip/2026")).toBe("year 2026");
+    expect(await visit("/trip/2026/summary")).toBe("summary 2026");
+    expect(await visit("/trip/2026/italy")).toBe("rest 2026/italy");
+    expect(await visit("/trip/2026/italy/day1/photos/a/b/c/d/e")).toBe("rest 2026/italy/day1/photos/a/b/c/d/e");
+    expect(await visit("/trip/2026/it%20aly/day1")).toBe("rest 2026/it aly/day1");
+    expect(await visit("/files/ann/a/b.txt")).toBe("ann: a/b.txt");
+    for (const path of ["/files/ann", "/trip/2026//x", "/trip/a%2Fb/c"]) expect(await visit(path), path).toBe(404);
+  });
+
+  it("P49: *name is only ever the last segment, named once, and in the params schema", () => {
+    expect(() => page({ path: "/x", routes: { "/*path/:id": () => "" } })).toThrow(/must be the last segment/);
+    expect(() => page({ path: "/x", routes: { "/:path/*path": () => "" } })).toThrow(/names path twice/);
+    expect(() => page({ path: "/x", routes: { "/*": () => "" } })).toThrow(/neither text/);
+    expect(() => page({ path: "/x", routes: { "/*path": route({ params: z.object({ other: z.string() }) }, () => "") } })).toThrow(/\*path/);
+    expect(() => pageServer([page({ path: "/x", routes: { "/*a": () => "", "/*b": () => "" } })])).toThrow(/same paths/);
+  });
+
   it("P45: the root page answers / alone; every path below it goes on to the handler", async () => {
     expect(() => page({ path: "/", routes: { "/": () => "", "/:id": () => "" } })).toThrow(/only route is "\/"/);
     expect(() => page({ path: "/", routes: { "/about": () => "" } })).toThrow(/only route is "\/"/);

@@ -96,7 +96,9 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 1. **Paths:** plain segments, never a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
    - **Root page:** `page({ path: "/", routes: { "/": handler } })` answers `/` alone, never the paths below it; it wins over a static `index.html` at `/`, which still serves every other unmatched path.
-2. **Routes:** `"/"` is the claimed path itself; a path matching no route under the claim gets the 404 page. A plain function gets its `:name` segments as decoded strings; `route({ params })` checks and converts them with Zod, and a refused value is a 404.
+2. **Routes:** `"/"` is the claimed path itself; a path matching no route under the claim gets the 404 page. A plain function gets its `:name` segments as decoded strings.
+   - **Any depth:** a last `*name` segment, such as `"/*path"` or `"/:owner/*path"`, matches one or more segments and gets them joined by `/`, so `/trip/2026/italy/day1` gives `path` = `2026/italy/day1`; use it when paths are made after the deploy, never a route per depth. Text routes win over `:name`, which wins over `*name`; `*name` is only ever last, so split anything after it in the handler. Gate it with a function, `access: { point: ({ path }) => pointFor(path), level: "read" }`.
+   - **Checked params:** `route({ params })` checks and converts them with Zod, and a refused value is a 404.
 3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
