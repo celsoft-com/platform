@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { parseArgs } from "node:util";
@@ -17,7 +17,9 @@ import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { generate } from "./generate.js";
 import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
+import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
 import { packageScripts, runScript, startScript } from "./scripts.js";
+import { AGENT_SKILLS_DIR, installSkills } from "./skills.js";
 import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
@@ -26,6 +28,9 @@ import { loadSecrets, loadVars } from "./secrets.js";
 const usage = `usage: npx @celsoft/platform <command> [--dry-run] [--dir <app dir>]
 
 commands:
+  skills           copy the package's skills into .claude/skills/ and point AGENTS.md at them
+  new              write a new app's files into this folder, then install its dependencies;
+                   --name, --hostname and --neon-project answer its questions
   init             set up GitHub secrets, Environments and the deploy workflow
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
@@ -47,13 +52,13 @@ commands:
   apps move        give the app's name to this repo, when it takes the app over from another
   ci               run the command for the current GitHub Actions event`;
 
-type Command = { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "db run"; file: string } | { name: "db stats" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
+type Command = { name: "skills" } | { name: "new" } | { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "db run"; file: string } | { name: "db stats" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, name: { type: "string" }, hostname: { type: "string" }, "neon-project": { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -74,6 +79,19 @@ async function main(argv: string[]): Promise<void> {
     if (changes.length === 0) return console.log(`✓ ${CONFIG_FILE} already has the current shape`);
     await writeFile(join(appDir, CONFIG_FILE), text);
     console.log(`updated ${CONFIG_FILE}: ${changes.join(", ")}; review and commit it`);
+    return;
+  }
+
+  if (command.name === "skills") {
+    const changed = await installSkills(appDir);
+    for (const file of changed) console.log(`✓ ${file}`);
+    console.log(`${changed.length === 0 ? "skills already current; " : ""}next: read ${SETUP_SKILL} and follow it`);
+    return;
+  }
+
+  if (command.name === "new") {
+    const name = values.name ?? (rules.name.pattern.test(basename(appDir)) ? basename(appDir) : undefined);
+    await newApp(appDir, { name, hostname: values.hostname, neonProject: values["neon-project"] });
     return;
   }
 
@@ -176,6 +194,7 @@ function parseCommand([name, pr, extra]: string[]): Command {
   }
   if (name === "db" && pr === "stats") return { name: "db stats" };
   if (name === "apps" && pr === "move") return { name: "apps move" };
+  if (name === "skills" || name === "new") return { name };
   if (name === "upgrade" || name === "sweep" || name === "previews" || name === "generate") return { name };
   if (name === "init" || name === "dev" || name === "deploy" || name === "destroy") return { name };
   if (name === "preview" || name === "cleanup") return { name, pr: prNumber(pr) };
@@ -331,6 +350,37 @@ async function newPassword(): Promise<string> {
   return password;
 }
 
+// Asks for whatever the flags left out, in a terminal; elsewhere a missing answer stops it with
+// the flag to pass.
+async function newApp(appDir: string, answers: Partial<Answers>): Promise<void> {
+  if (process.stdin.isTTY && !process.env.CI) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const labels: Record<keyof Answers, string> = { name: "App name", hostname: "Prod hostname", neonProject: "Neon project id" };
+    try {
+      for (const key of Object.keys(labels) as (keyof Answers)[]) {
+        while (!rules[key].pattern.test(answers[key] ?? "")) {
+          if (answers[key]) console.log(`  must be ${rules[key].hint}`);
+          answers[key] = (await rl.question(`${labels[key]}: `)).trim();
+        }
+      }
+    } finally {
+      rl.close();
+    }
+  }
+  const flags: Record<keyof Answers, string> = { name: "--name", hostname: "--hostname", neonProject: "--neon-project" };
+  const bad = invalid(answers);
+  if (bad.length > 0) throw new UsageError(bad.map((key) => `${flags[key]}: ${rules[key].hint}`).join("\n"));
+
+  const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  const { written, kept } = await scaffold(appDir, answers as Answers, version);
+  for (const file of written) console.log(`✓ ${file}`);
+  for (const file of kept) console.log(`• ${file} already there, kept`);
+  const manager = await packageManager(appDir);
+  console.log(`\n${manager} install`);
+  execFileSync(manager, ["install"], { cwd: appDir, stdio: "inherit" });
+  console.log(`\nnext: continue ${SETUP_SKILL} at "Secrets file"`);
+}
+
 // Destroy lists what it will delete, then needs the app's name typed and a final yes, so a
 // slip of the keyboard can never start it.
 async function confirmDestroy(ctx: Context, appName: string, data: boolean): Promise<void> {
@@ -389,6 +439,8 @@ function maskInCi(values: string[]): void {
 }
 
 class UsageError extends Error {}
+
+const SETUP_SKILL = join(AGENT_SKILLS_DIR, "celsoft-platform-setup", "SKILL.md");
 
 main(process.argv.slice(2)).catch((error: unknown) => {
   const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError;
