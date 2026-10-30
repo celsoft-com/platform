@@ -9,22 +9,32 @@ const Note = z.object({ id: z.number(), folder: z.string(), body: z.string(), ur
 const app = defineApp(() => new Response("handler"), {
   endpoints: {
     getNote: endpoint(
-      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: Note },
+      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: Note, access: "anon" },
       ({ id, urgent }) => {
         if (id === 404) throw new EndpointError(404, "note not found");
         return { id, folder: "inbox", body: "hello", urgent };
       },
     ),
     addNote: endpoint(
-      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: Note },
+      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: Note, access: "anon" },
       ({ folder, body }) => ({ id: 1, folder, body, urgent: false }),
     ),
-    broken: endpoint({ method: "GET", path: "/api/public/broken", input: z.object({}), output: Note }, () => ({ id: "nope" }) as never),
-    signedIn: endpoint({ method: "GET", path: "/api/public/me", input: z.object({}), output: z.object({}) }, async (_, a) => {
+    broken: endpoint({ method: "GET", path: "/api/public/broken", input: z.object({}), output: Note, access: "anon" }, () => ({ id: "nope" }) as never),
+    signedIn: endpoint({ method: "GET", path: "/api/public/me", input: z.object({}), output: z.object({}), access: "anon" }, async (_, a) => {
       await a.requireUser();
       return {};
     }),
-    toolOnly: endpoint({ serve: ["mcp"], input: z.object({}), output: z.object({}) }, () => ({})),
+    search: endpoint(
+      {
+        method: "GET",
+        path: "/api/public/search",
+        input: z.object({ names: z.array(z.string()), filter: z.object({ status: z.string(), limit: z.number() }) }),
+        output: z.object({ names: z.array(z.string()), status: z.string(), limit: z.number() }),
+        access: "anon",
+      },
+      ({ names, filter }) => ({ names, ...filter }),
+    ),
+    toolOnly: endpoint({ serve: ["mcp"], input: z.object({}), output: z.object({}), access: "anon" }, () => ({})),
   },
 });
 
@@ -36,6 +46,10 @@ const call = async (path: string, init?: RequestInit) => {
 describe("endpoints over the API", () => {
   it("builds one input from the path and query, converting strings to the schema's types", async () => {
     expect(await call("/api/public/notes/42?urgent=true")).toEqual({ status: 200, body: { id: 42, folder: "inbox", body: "hello", urgent: true } });
+  });
+
+  it("reads arrays and objects from the query in bracket notation", async () => {
+    expect(await call("/api/public/search?names[]=a&names[]=b&filter[status]=open&filter[limit]=5")).toEqual({ status: 200, body: { names: ["a", "b"], status: "open", limit: 5 } });
   });
 
   it("merges path parameters with the JSON body", async () => {

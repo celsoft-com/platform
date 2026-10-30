@@ -60,6 +60,7 @@ async function named<G extends { to: Grantee }>(app: App, grants: G[]): Promise<
   return grants.map((g) => {
     const to = g.to;
     if ("everyone" in to) return { ...g, kind: "everyone", value: null, name: "Everyone, signed in or not" };
+    if ("owner" in to) return { ...g, kind: "owner", value: null, name: "The app's owner" };
     if ("email" in to) return { ...g, kind: "email", value: to.email, name: to.email };
     if ("user" in to) {
       const row = person.get(to.user);
@@ -192,8 +193,8 @@ export default defineApp(
   {
     schema,
     pages: [print, stats],
-    // A static point, declared here and applied at every start: anyone may read the about line.
-    access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
+    // A static point, declared here and applied at every start: anyone may read the about line, and the owner manages it.
+    access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }, { to: { owner: true }, level: "manage" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
     endpoints: {
       about: endpoint(
@@ -331,7 +332,7 @@ export default defineApp(
       ),
       // Other people's personal notes the signed-in user can read, filtered by access in the query itself.
       sharedNotes: endpoint(
-        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: "user" },
+        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: { level: "read" } },
         async (_, app) => {
           const user = await app.requireUser();
           return app.db
@@ -352,13 +353,13 @@ export default defineApp(
           description: "The organizations the signed-in user belongs to, with their ids for the organization note tools",
           input: z.object({}),
           output: z.array(Org),
-          access: "user",
+          access: { level: "read" },
         },
         async (_, app) => (await app.organizations.list()).map(({ id, name }) => ({ id, name })),
       ),
       // Its members may add notes, so the organization's point gives them create, not only read.
       createOrganization: endpoint(
-        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: "user" },
+        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: { level: "create" } },
         async ({ name }, app) => {
           const org = await app.organizations.create({ name });
           await app.access.grant(organizationPoint(org.id), { organization: org.id }, "create");

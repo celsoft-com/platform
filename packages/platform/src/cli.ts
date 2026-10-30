@@ -16,6 +16,7 @@ import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { generate } from "./generate.js";
+import { HttpsError, waitForHttps } from "./https.js";
 import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
 import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
 import { packageScripts, runScript, startScript } from "./scripts.js";
@@ -179,7 +180,9 @@ async function main(argv: string[]): Promise<void> {
   if (!dryRun && (await packageScripts(appDir)).build) await runScript(appDir, await packageManager(repoRoot(appDir)), "build");
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
-  console.log(`\nlive at https://${hostname}`);
+  console.log(`\nwaiting for https://${hostname} to answer over HTTPS`);
+  await waitForHttps(`https://${hostname}`);
+  console.log(`live at https://${hostname}`);
 
   if (inCi && command.name === "preview") {
     await commentPreviewLink(process.env, command.pr, `https://${hostname}`, command.sha);
@@ -461,7 +464,7 @@ class UsageError extends Error {}
 const SETUP_SKILL = join(AGENT_SKILLS_DIR, "celsoft-platform-setup", "SKILL.md");
 
 main(process.argv.slice(2)).catch((error: unknown) => {
-  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError;
+  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError || error instanceof HttpsError;
   console.error(`✗ ${known ? (error as Error).message : error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
   process.exit(1);
 });

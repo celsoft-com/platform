@@ -6,14 +6,14 @@ import { defineApp, endpoint } from "./index.js";
 const app = defineApp(undefined, {
   endpoints: {
     getNote: endpoint(
-      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: z.object({ id: z.number(), urgent: z.boolean(), at: z.date() }) },
+      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: z.object({ id: z.number(), urgent: z.boolean(), at: z.date() }), access: "anon" },
       ({ id, urgent }) => {
         if (id === 404) throw new Error("unreachable");
         return { id, urgent, at: new Date("2026-10-25T00:00:00Z") };
       },
     ),
     addNote: endpoint(
-      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: z.object({ folder: z.string(), body: z.string() }) },
+      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: z.object({ folder: z.string(), body: z.string() }), access: "anon" },
       (input) => input,
     ),
   },

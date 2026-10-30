@@ -62,10 +62,14 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     databaseHooks: {
       user: {
         create: {
-          // The first account becomes the owner; a single statement, so two at once cannot both win.
+          // The first account is saved as the owner, so the sign-up reply and its session say so.
+          // Two sign-ups at the same instant on a new app may both become owner; that is accepted.
+          before: async (user) => {
+            const [row] = (await db.execute(sql`select exists (select 1 from "user" where role = ${OWNER_ROLE}) as taken`)).rows as { taken: boolean }[];
+            return row?.taken ? undefined : { data: { ...user, role: OWNER_ROLE } };
+          },
           // Its invitation, if it had one, is used up.
           after: async (user) => {
-            await db.execute(sql`update "user" set role = ${OWNER_ROLE} where id = ${user.id} and not exists (select 1 from "user" where role = ${OWNER_ROLE})`);
             await useInvite(db, user.email);
           },
         },

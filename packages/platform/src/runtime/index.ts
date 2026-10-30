@@ -7,7 +7,7 @@ import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, sh
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, undeclaredAccess, type Endpoint } from "./endpoints.js";
+import { apiHandler, requireDeclaredAccess, tokenCaps, type Endpoint } from "./endpoints.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import type { z } from "zod";
@@ -164,14 +164,15 @@ export function defineApp<
   const api = apiHandler(options.endpoints ?? {});
   const once: Once = {};
   const pages = pageServer(options.pages ?? []);
-  const undeclared = [...undeclaredAccess(options.endpoints ?? {}).map((name) => `endpoint ${name}`), ...(pages?.undeclared ?? [])];
+  requireDeclaredAccess(options.endpoints ?? {});
+  const undeclared = pages?.undeclared ?? [];
 
   // One request, answered; `trace` collects where its time goes.
   async function serve(request: Request, env: Env, ctx: ExecutionContext, trace: Trace | undefined): Promise<Response> {
     const url = new URL(request.url);
     // With access on, every endpoint and page says what it checks, so a forgotten check never ships open.
     if (env.ACCESS === "on" && undeclared.length > 0) {
-      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level }, "user" or "anon"`);
+      console.error(`${undeclared.join(", ")} declare no access; add access: { point, level }, { level } or "anon"`);
       return json({ error: "this app is misconfigured; see its logs" }, 500);
     }
     const { app, close } = createContext(request, env, ctx, options, once, undefined, undefined, trace);
@@ -380,6 +381,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     },
     waitUntil: (promise) => ctx.waitUntil(promise),
   };
+  if (cap) tokenCaps.set(app, cap);
   return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
 }
 

@@ -53,11 +53,14 @@ export default defineApp(undefined, {
 });
 ```
 
-1. **Inputs:** path parameters, the query and a JSON body merge into one input object; URL strings are converted to the schema's types.
+1. **Inputs:** path parameters, the query and a JSON body merge into one input object; URL strings are converted to the schema's types. A GET carries arrays and objects in bracket notation: `?names[]=a&names[]=b&filter[status]=open`.
 2. **Checks:** bad input is a 400; an output that does not match its schema is a 500, logged.
 3. **Errors:** throw `EndpointError(status, message)`; a thrown `Response`, as `requireUser()` throws, keeps its status.
 4. **Access:** every `/api/` path needs a signed-in user except under `/api/public/`; MCP calls always carry one.
-5. **Point access:** with `access` on, every endpoint says `access: { point: "id", level: "write" }`, naming the input field or a function of the input that gives the control point, or `access: "user"` (anyone signed in) or `"anon"` (anyone, only under `/api/public/`); the caller needs that level or gets a 404, over the API and MCP alike, and the function never runs.
+5. **Access:** every endpoint says who may call it, or the app stops at start naming it; the function never runs for anyone refused, over the API and MCP alike.
+   - **`{ level: "read" }`:** anyone signed in; an API token capped below the level gets a 403. Use `read` for reads, and `create`, `write`, `delete` or `manage` for what the call changes. Never under `/api/public/`.
+   - **`{ point: "id", level: "write" }`:** with `access` on, the caller needs that level on the control point named by the input field, or by a function of the input, or gets a 404.
+   - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
@@ -83,7 +86,7 @@ const notesPage = page({
   path: "/notes",                       // claims /notes and /notes/*; no static file is served there
   routes: {
     "/": route({ access: "anon" }, () => "<h1>Notes</h1>"),
-    "/new": route({ access: "user" }, () => "<h1>New</h1>"),   // text segments win over parameters
+    "/new": route({ access: { level: "read" } }, () => "<h1>New</h1>"),   // text segments win over parameters
     "/:id": route(
       { params: z.object({ id: z.uuid() }), access: { point: "id", level: "read" }, cache: true },
       async ({ id }, app) => `<h1>${escape(await publishedBody(app, id))}</h1>`,
@@ -102,7 +105,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 3. **Answers:** return an HTML string, sent as `text/html`, or a whole `Response`. Escape every value you put in the HTML; nothing escapes it for you.
 4. **Methods:** GET and HEAD only; send changes to endpoints.
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
-6. **Access gate:** with `access` on, every route declares who may read it: `{ point: "id", level: "read" }` (a param, or a function of the params), `"user"` (anyone signed in) or `"anon"` (anyone); the app refuses every request until each does. It is checked before the handler and the cache.
+6. **Access gate:** with `access` on, every route declares who may read it: `{ point: "id", level: "read" }` (a param, or a function of the params), `{ level: "read" }` (anyone signed in) or `"anon"` (anyone); the app refuses every request until each does. It is checked before the handler and the cache.
    - **Refused:** a refused visitor, a missing point and an unmatched path get one 404 page; signed out, it offers Sign in and Sign up, which return to the page. Never build a redirect for it.
    - **Share links:** `/print/7#link=<token>` opens a gated page; the 404 page swaps the token for a cookie and reloads, so put links after `#`, never in the query.
    - **API tokens:** count on page GET and HEAD, capped at their level.
@@ -123,6 +126,8 @@ Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`,
 `files` (R2, folders), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
 
+`app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
+
 ## Access
 
 With `"access": true`, the platform keeps who may do what to the app's resources through control points:
@@ -130,15 +135,15 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 1. **A point per resource:** `await app.db.transaction(async (tx) => { ...insert...; await app.access.in(tx).create(row.id, { parent, inherit }); })`.
    The id is the resource's own id, any globally unique string; ids starting `organization:` or `team:` are the platform's. Whoever creates it gets `manage`; creating needs a signed-in user and, with a `parent`, `create` on it.
 2. **Levels:** `read` < `create` < `write` < `delete` < `manage`; each includes those below.
-3. **Principals:** a person (`{ user }` or a confirmed `{ email }`), `{ team }`, `{ organization }` and `{ everyone: true }` (read only, signed in or not).
+3. **Principals:** a person (`{ user }` or a confirmed `{ email }`), `{ team }`, `{ organization }`, `{ everyone: true }` (read only, signed in or not) and `{ owner: true }`, whoever has the owner role when the check runs, so `owner reset` moves it.
 4. **Inheritance:** with `inherit: true` a point also uses its parent's grants, up to the first point that does not inherit. Each principal stops at its nearest grant and the highest wins, so a grant to a person on a note can lower that person there, while a grant to a whole organization never lowers its teams.
 5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
 6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
-7. **Endpoints:** with access on, every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }`, `access: "user"` or `access: "anon"`; the app refuses every request until each one does.
+7. **Endpoints:** every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }`, `access: { level: "write" }` or `access: "anon"`; see Endpoints above.
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
 10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
-11. **Static points:** `defineApp(handler, { access: { points: { settings: { grants: [{ to: { email: "boss@x.com" }, level: "manage" }] } } } })`, written by every deploy and `dev`; their grants change only in code.
+11. **Static points:** `defineApp(handler, { access: { points: { site: { grants: [{ to: { owner: true }, level: "manage" }] } } } })`, written by every deploy and `dev`; their grants change only in code. A grant to `{ owner: true }` gives the app's owner a point with no organization and no address in code.
 12. **Organizations:** each has the point `organizationPoint(id)` granting its members `read`, and each team `teamPoint(id)` granting the team `write`; members of the built-in Admins team get `manage` on everything under their organization.
 13. **As the app:** `app.access.asApp()` passes every check, for work no person asked for; never use it for a request's own data.
 
@@ -171,7 +176,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
 2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, and on page reads; `requireUser()` returns the token's owner.
-3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, and a `read` token gets a 403 on anything but GET. Endpoints declared `"user"` or `"anon"` are limited only by that, so put writes behind a point when tokens should not reach them.
+3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, an endpoint declared `{ level }` refuses a token capped below it with a 403, and a `read` token gets a 403 on anything but GET. Send structured reads as GET in bracket notation so read tokens reach them.
 4. **Lifetime:** 90 days unless chosen, at most 365.
 5. **Never:** on `/api/auth/*` or `/mcp`.
 
@@ -188,7 +193,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 1. **`database`:** `true` turns on a Neon database, in the project `NEON_PROJECT_ID` names in `.env.secrets` beside `NEON_API_KEY`; prod, each preview and `dev` get their own branch. An older `"database": { "neonProject": ... }` stops every command until `npx @celsoft/platform upgrade` moves the id to `.env.secrets`; then run `init` to store it in GitHub.
 2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
 3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams, and `{ "apiTokens": true }` personal API tokens; see those sections above. Needs `database` and `email`.
-   `"signup"` is `"invite"` unless set to `"open"`: once the app has its first account (the owner), only invited addresses may sign up. The owner and admins invite at `/invites`, or in code with `app.invites.create(email)`, `list()` and `revoke(id)`; an open organization invitation or a share to an address also lets that address sign up. Never build a sign-up path around it; to open sign-up, set `"open"`.
+   `"signup"` is `"invite"` unless set to `"open"`: the first account is saved as the owner, and its sign-up reply and session say `role: "owner"`; after it, only invited addresses may sign up. The owner and admins invite at `/invites`, or in code with `app.invites.create(email)`, `list()` and `revoke(id)`; an open organization invitation or a share to an address also lets that address sign up. Never build a sign-up path around it; to open sign-up, set `"open"`.
 4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
@@ -204,7 +209,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 | `dev` | Runs the app locally on its own `dev` database branch; starts the `dev` script beside it, with `plugins: [platform()]` from `@celsoft/platform/vite` |
 | `db generate` | Writes migrations for schema changes |
 | `generate` | Rewrites `.platform/`; also runs on install |
-| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests |
+| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
 | `previews` | Lists the previews that exist |
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |

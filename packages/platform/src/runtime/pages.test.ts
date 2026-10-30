@@ -64,8 +64,8 @@ describe("Pages: declaring", () => {
 
   it("P5: a route's access is checked when the page is defined", () => {
     expect(() => page({ path: "/x", routes: { "/:id": route({ access: { point: "other", level: "read" } }, () => "") } })).toThrow(/other/);
-    expect(() => page({ path: "/x", routes: { "/:id": route({ access: "none" as never }, () => "") } })).toThrow(/"user" or "anon"/);
-    for (const access of ["anon", "user", { point: "id", level: "read" }] as const) {
+    expect(() => page({ path: "/x", routes: { "/:id": route({ access: "none" as never }, () => "") } })).toThrow(/\{ level \} or "anon"/);
+    for (const access of ["anon", { level: "read" }, { point: "id", level: "read" }] as const) {
       expect(() => page({ path: "/x", routes: { "/:id": route({ access }, () => "") } }), JSON.stringify(access)).not.toThrow();
     }
   });
@@ -210,7 +210,7 @@ describe("Pages: beside sign-in, links and tokens", () => {
         routes: {
           "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, ({ id }) => (ran.push(id), `<h1>${id}</h1>`)),
           "/:id/edit": route({ params: NoteId, access: { point: ({ id }) => id, level: "write" } }, ({ id }) => `<h1>edit ${id}</h1>`),
-          "/mine/list": route({ access: "user" }, () => "<p>signed in</p>"),
+          "/mine/list": route({ access: { level: "read" } }, () => "<p>signed in</p>"),
           "/open/door": route({ access: "anon" }, () => "<p>open</p>"),
         },
       }),
