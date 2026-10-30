@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {

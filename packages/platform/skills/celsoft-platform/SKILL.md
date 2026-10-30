@@ -128,6 +128,20 @@ Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
 
+Code outside the handlers takes `app` as a parameter typed `App`, so `app.db` knows the app's tables:
+
+```ts
+import type { App } from "@celsoft/platform";
+import * as schema from "./schema";
+
+export async function getSettings(app: App<typeof schema>, id: string) {
+  const [row] = await app.db.select().from(schema.settings).where(eq(schema.settings.id, id));
+  return row;
+}
+```
+
+`App<typeof schema, { STRIPE_KEY: string }>` also types the app's own secrets on `app.env`.
+
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
 
 ## `app.files`
@@ -263,6 +277,7 @@ it("lists items to the signed-in person", async () => {
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |
 | `db run <file> --pr <n>` | Runs a SQL file on a preview's database, such as load test data |
+| `upgrade` | After installing a newer version: rewrites an older `platform.jsonc`, and adds what `new` now writes and the app lacks, such as a test script and a Postgres pin in `mise.toml`, keeping what the app has; review and commit |
 | `--dry-run` | Shows what would change, writing nothing; `new` lists the files it would write and keep; `skills`, `generate`, `upgrade`, `db generate` and `db stats --reset` refuse it |
 
 ## Rules

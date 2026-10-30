@@ -75,7 +75,7 @@ flowchart LR
 
 ### Generated and provided files
 
-1. **Your files:** `platform new` writes them once, after `npm install @celsoft/platform` and `platform skills`, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments.
+1. **Your files:** `platform new` writes them once, after `npm install @celsoft/platform` and `platform skills`, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments, and adds what a newer `new` writes that the app lacks, such as a Postgres pin in `mise.toml`.
 2. **Migrations:** `db generate` writes them; an edited migration that already ran never runs again, so databases created before and after the edit end up different.
 3. **Workflow:** `init` writes it; CI stops if it differs from what the installed version writes, so an edit fails the next deploy until `init` is rerun.
 4. **Temporary:** `deploy` and `dev` write the Wrangler config, entry module, a stub standing in for Better Auth's unused Kysely adapter, and secrets, then delete them; they are gitignored. The deployed Worker is minified, so it starts faster.
