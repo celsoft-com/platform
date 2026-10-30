@@ -24,6 +24,16 @@ const app = defineApp(() => new Response("handler"), {
       await a.requireUser();
       return {};
     }),
+    search: endpoint(
+      {
+        method: "GET",
+        path: "/api/public/search",
+        input: z.object({ names: z.array(z.string()), filter: z.object({ status: z.string(), limit: z.number() }) }),
+        output: z.object({ names: z.array(z.string()), status: z.string(), limit: z.number() }),
+        access: "anon",
+      },
+      ({ names, filter }) => ({ names, ...filter }),
+    ),
     toolOnly: endpoint({ serve: ["mcp"], input: z.object({}), output: z.object({}), access: "anon" }, () => ({})),
   },
 });
@@ -36,6 +46,10 @@ const call = async (path: string, init?: RequestInit) => {
 describe("endpoints over the API", () => {
   it("builds one input from the path and query, converting strings to the schema's types", async () => {
     expect(await call("/api/public/notes/42?urgent=true")).toEqual({ status: 200, body: { id: 42, folder: "inbox", body: "hello", urgent: true } });
+  });
+
+  it("reads arrays and objects from the query in bracket notation", async () => {
+    expect(await call("/api/public/search?names[]=a&names[]=b&filter[status]=open&filter[limit]=5")).toEqual({ status: 200, body: { names: ["a", "b"], status: "open", limit: 5 } });
   });
 
   it("merges path parameters with the JSON body", async () => {
