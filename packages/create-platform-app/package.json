@@ -7,6 +7,7 @@
   "homepage": "https://github.com/celsoft-com/platform#readme",
   "publishConfig": { "access": "public" },
   "type": "module",
+  "engines": { "node": ">=24" },
   "bin": { "create-platform-app": "./dist/cli.js" },
   "files": ["dist"],
   "scripts": {

@@ -60,6 +60,7 @@ const NO_DRY_RUN = new Set(["skills", "generate", "upgrade", "db generate"]);
 type Command = { name: "skills" } | { name: "new" } | { name: "generate" } | { name: "previews" } | { name: "apps move" } | { name: "db generate"; custom?: string } | { name: "sweep" } | { name: "owner reset"; email: string } | { name: "db run"; file: string } | { name: "db stats" } | { name: "upgrade" } | { name: "init" } | { name: "dev" } | { name: "deploy" } | { name: "destroy" } | { name: "preview"; pr: number; sha?: string } | { name: "cleanup"; pr: number };
 
 async function main(argv: string[]): Promise<void> {
+  if (Number(process.versions.node.split(".")[0]) < MIN_NODE) throw new UsageError(`@celsoft/platform needs Node ${MIN_NODE} or later, as its package.json says; this is Node ${process.versions.node}`);
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -84,7 +85,7 @@ async function main(argv: string[]): Promise<void> {
     const { text, changes, neonProject: written } = upgradeConfigText(await readConfigText(appDir));
     if (written) await moveNeonProject(appDir, written);
     if (changes.length > 0) await writeFile(join(appDir, CONFIG_FILE), text);
-    const scaffolded = await upgradeScaffold(appDir, repoRoot(appDir));
+    const scaffolded = await upgradeScaffold(appDir);
     if (changes.length === 0 && scaffolded.length === 0) return console.log("✓ this app already has the current shape");
     if (changes.length > 0) console.log(`✓ ${CONFIG_FILE}: ${changes.join(", ")}`);
     for (const change of scaffolded) console.log(`✓ ${change}`);
@@ -463,6 +464,8 @@ function maskInCi(values: string[]): void {
 }
 
 class UsageError extends Error {}
+
+const MIN_NODE = 24;
 
 const SETUP_SKILL = join(AGENT_SKILLS_DIR, "celsoft-platform-setup", "SKILL.md");
 
