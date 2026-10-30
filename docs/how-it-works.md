@@ -14,6 +14,7 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Auth** | Accounts, sessions, email, teams, `/login` and friends | Nothing, or a stylesheet to restyle the screens |
 | **Files, email, live** | `app.files`, `app.email`, `app.live` | Calls them from its handler |
 | **Deploys** | Prod on push to main, a preview per PR, cleanup | Nothing |
+| **Tests** | `@celsoft/platform/testing`: the real runtime on a local Postgres, files in memory and captured email | Its tests, calling endpoints as people it signs up |
 
 ## Where each file comes from
 
@@ -165,6 +166,13 @@ flowchart LR
 4. **Browser:** `live()` from `/api/live/client.js`, or `@celsoft/platform/live` in a bundled app.
 5. **Storage:** none beyond the last 500 messages for catching up; the app saves what it wants kept.
 6. **Message types:** `live: { message: schema }` checks every message, from browsers and `publish`, against a Zod schema; a room with several kinds of message uses `z.discriminatedUnion("type", [...])`.
+
+### Testing
+
+1. **Real runtime:** `testApp(app)` runs the app's own code through the platform's routing, access checks and auth, so a test passes only when the deployed endpoint would.
+2. **Local stand-ins:** a Postgres 18 database of its own, migrated from `drizzle/`; files in memory; email kept in `t.emails`; live room messages in `t.published`.
+3. **People:** `t.signUp(email)` makes a person, and `t.as(person).call("listItems", {})` calls an endpoint as them.
+4. **Postgres:** pinned in the app's `mise.toml`, so `mise install` provides it, then `npm test` runs.
 
 ### Deploys
 
