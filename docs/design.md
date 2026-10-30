@@ -47,6 +47,7 @@ A published CLI, runtime library and app template that create and reuse each app
     2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.
     3. **Lifecycle**: creates, updates and deletes its own resources, previews included.
     4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
+    5. **Gaps are platform bugs**: when the platform cannot do what an app needs, the app stops and requests a fix rather than working around it; the shipped skills and the `AGENTS.md` block tell every app's agent so.
 3. **Line in app code**: see App Code.
 
 ## 6. Domains

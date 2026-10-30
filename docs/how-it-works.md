@@ -15,6 +15,13 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Files, email, live** | `app.files`, `app.email`, `app.live` | Calls them from its handler |
 | **Deploys** | Prod on push to main, a preview per PR, cleanup | Nothing |
 
+## When the platform falls short
+
+An app never works around the platform. When the platform cannot do something the app needs, or
+does it wrong, the app's agent stops and asks you to request a fix at
+https://github.com/celsoft-com/platform/issues. Hand-written replacements, such as direct Cloudflare
+calls, edited generated files or the app's own auth, hide the gap and break on upgrade.
+
 ## Where each file comes from
 
 | Kind | Files | In git | Who edits |
