@@ -240,7 +240,8 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Renames**: when a name disappears as another appears, drizzle-kit asks whether it was renamed; the platform never shows its terminal prompt, and answers from `--rename <old>=<new>` and `--create <new>` instead.
         1. **Unanswered**: `db generate`, and `dev` on start, stop with each question and the flags that answer it, and write nothing to `drizzle/`.
         2. **Unused**: a flag that answers no question stops the run the same way, so a typo never passes silently.
-        3. **Pinned**: the answers reach drizzle-kit by rewriting its prompt call as it loads, so the platform pins drizzle-kit's exact version and stops with that fix if the call is not found.
+        3. **Errors**: drizzle-kit prints some errors, such as a schema file that fails to load, and exits 0 with no migration; the platform fails the run instead, so `testApp` and deploy never read that as up to date.
+        4. **Pinned**: the answers reach drizzle-kit by rewriting its prompt call as it loads, so the platform pins drizzle-kit's exact version and stops with that fix if the call is not found.
     6. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
     7. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
     8. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
