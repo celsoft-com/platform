@@ -1,11 +1,37 @@
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "./config.js";
-import { invalid, scaffold } from "./scaffold.js";
+import { invalid, scaffold, upgradeScaffold } from "./scaffold.js";
 
 const answers = { name: "shop", hostname: "shop.example.com" };
+
+describe("upgradeScaffold", () => {
+  it("adds a test script, vitest and a Postgres pin to an app made by an older version, once", async () => {
+    const root = await mkdtemp(join(tmpdir(), "upgrade-"));
+    const app = join(root, "apps", "shop");
+    await mkdir(app, { recursive: true });
+    await writeFile(join(app, "package.json"), JSON.stringify({ name: "shop", scripts: { postinstall: "platform generate" }, devDependencies: { typescript: "^7" } }));
+    await writeFile(join(app, "mise.toml"), '[tools]\nnode = "24"\n');
+    expect(await upgradeScaffold(app, root)).toHaveLength(2);
+    const pkg = JSON.parse(await readFile(join(app, "package.json"), "utf8"));
+    expect(pkg).toMatchObject({ scripts: { postinstall: "platform generate", test: "vitest run" }, devDependencies: { typescript: "^7", vitest: expect.any(String) } });
+    expect(await readFile(join(app, "mise.toml"), "utf8")).toMatch(/^\[tools\]\n"conda:postgresql" = "18\.6"\nnode = "24"\n$/);
+    expect(await upgradeScaffold(app, root)).toEqual([]);
+  });
+
+  it("keeps the app's own test script and a pin anywhere up to the repo root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "upgrade-"));
+    const app = join(root, "apps", "shop");
+    await mkdir(app, { recursive: true });
+    await writeFile(join(app, "package.json"), JSON.stringify({ scripts: { test: "jest" } }));
+    await writeFile(join(root, "mise.toml"), '[tools]\npostgresql = "18"\n');
+    expect(await upgradeScaffold(app, root)).toEqual([]);
+    expect(JSON.parse(await readFile(join(app, "package.json"), "utf8")).scripts.test).toBe("jest");
+    expect(await readdir(app)).toEqual(["package.json"]);
+  });
+});
 
 describe("scaffold", () => {
   it("writes an app whose platform.jsonc the platform accepts", async () => {

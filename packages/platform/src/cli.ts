@@ -18,7 +18,7 @@ import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText,
 import { generate } from "./generate.js";
 import { HttpsError, waitForHttps } from "./https.js";
 import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
-import { invalid, rules, scaffold, type Answers } from "./scaffold.js";
+import { invalid, rules, scaffold, upgradeScaffold, type Answers } from "./scaffold.js";
 import { packageScripts, runScript, startScript } from "./scripts.js";
 import { AGENT_SKILLS_DIR, installSkills } from "./skills.js";
 import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, neonProject, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
@@ -37,7 +37,7 @@ commands:
   db generate      write migrations for changes to the platform's tables and src/schema.ts
                    --custom <name> writes an empty one for SQL of your own, such as moving data
   generate         write the .platform/ files the app's code imports, such as the browser client
-  upgrade          rewrite an older platform.jsonc to the current shape
+  upgrade          rewrite an older platform.jsonc to the current shape, and add what new now writes
   deploy           deploy prod
   preview <pr>     create or update the preview for a pull request
   cleanup <pr>     delete the preview for a pull request
@@ -82,10 +82,13 @@ async function main(argv: string[]): Promise<void> {
 
   if (command.name === "upgrade") {
     const { text, changes, neonProject: written } = upgradeConfigText(await readConfigText(appDir));
-    if (changes.length === 0) return console.log(`✓ ${CONFIG_FILE} already has the current shape`);
     if (written) await moveNeonProject(appDir, written);
-    await writeFile(join(appDir, CONFIG_FILE), text);
-    console.log(`updated ${CONFIG_FILE}: ${changes.join(", ")}; review and commit it`);
+    if (changes.length > 0) await writeFile(join(appDir, CONFIG_FILE), text);
+    const scaffolded = await upgradeScaffold(appDir, repoRoot(appDir));
+    if (changes.length === 0 && scaffolded.length === 0) return console.log("✓ this app already has the current shape");
+    if (changes.length > 0) console.log(`✓ ${CONFIG_FILE}: ${changes.join(", ")}`);
+    for (const change of scaffolded) console.log(`✓ ${change}`);
+    console.log("review and commit the changes");
     return;
   }
 

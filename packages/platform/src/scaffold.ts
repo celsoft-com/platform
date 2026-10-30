@@ -1,5 +1,5 @@
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG_FILE } from "./config.js";
 import { ensureIgnored } from "./skills.js";
@@ -50,6 +50,44 @@ export async function scaffold(appDir: string, answers: Answers, platformVersion
     }
   }
   return result;
+}
+
+// What `new` writes that an app made by an older version lacks, added without touching what the
+// app has: a test script and vitest when it has no test script, and a Postgres pin for tests when
+// no mise.toml from the app's folder up to `root` has one. Returns what it changed.
+export async function upgradeScaffold(appDir: string, root: string): Promise<string[]> {
+  const changes: string[] = [];
+  const template = JSON.parse(await readFile(join(TEMPLATE_DIR, "package.json"), "utf8")) as PackageJson;
+  const file = join(appDir, "package.json");
+  const pkg = JSON.parse(await readFile(file, "utf8")) as PackageJson;
+  if (!pkg.scripts?.test) {
+    pkg.scripts = { ...pkg.scripts, test: template.scripts!.test! };
+    pkg.devDependencies = Object.fromEntries(Object.entries({ vitest: template.devDependencies!.vitest!, ...pkg.devDependencies }).sort(([a], [b]) => a.localeCompare(b)));
+    await writeFile(file, `${JSON.stringify(pkg, null, 2)}\n`);
+    changes.push("package.json gained a test script and vitest; install, then run it");
+  }
+  const pin = (await readFile(join(TEMPLATE_DIR, MISE_FILE), "utf8")).split("\n").find((line) => line.includes(POSTGRES_TOOL))!;
+  if (!(await pinnedAbove(appDir, root))) {
+    const mise = join(appDir, MISE_FILE);
+    const text = await readFile(mise, "utf8").catch(() => undefined);
+    if (text === undefined) await writeFile(mise, await readFile(join(TEMPLATE_DIR, MISE_FILE), "utf8"));
+    else if (/^\[tools\]\s*$/m.test(text)) await writeFile(mise, text.replace(/^\[tools\]\s*$/m, (header) => `${header}\n${pin}`));
+    else await writeFile(mise, `${text.trimEnd()}\n\n[tools]\n${pin}\n`.trimStart());
+    changes.push(`${MISE_FILE} pins Postgres for tests; run mise install`);
+  }
+  return changes;
+}
+
+const MISE_FILE = "mise.toml";
+const POSTGRES_TOOL = "postgresql";
+
+async function pinnedAbove(dir: string, root: string): Promise<boolean> {
+  for (let at = dir; ; at = dirname(at)) {
+    for (const name of [MISE_FILE, ".mise.toml"]) {
+      if ((await readFile(join(at, name), "utf8").catch(() => "")).includes(POSTGRES_TOOL)) return true;
+    }
+    if (at === root || dirname(at) === at) return false;
+  }
 }
 
 type PackageJson = Record<string, unknown> & { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
