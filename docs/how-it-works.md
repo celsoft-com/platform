@@ -92,14 +92,14 @@ flowchart LR
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
 8. **What the server renders:** only content identical for everyone allowed to see it; anything that depends on who is looking or what they have done (sign-in state, saved choices, checkmarks, drafts, admin screens) is added by the browser after the page loads. A page can mix both, such as a checklist rendered with every box unchecked whose visitor's own ticks the browser fills in. A page's access gate decides who gets it, never what it says, so one kept copy serves everyone who passes.
-9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor then shares a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `"user"` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
+9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor then shares a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `{ level }` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
 
 ### Sign-in screens
 
 1. **Paths:** `/login`, `/signup`, `/forgot` and `/reset`, rendered by the platform when `auth` is on.
 2. **Restyling:** `defineApp(handler, { screens: { stylesheet: "/auth.css" } })` loads the app's own CSS after the platform's.
 3. **Replacing:** an app can build its own pages that call `/api/auth/*` directly instead.
-4. **Invite-only:** once the app has its first account, which becomes the owner, only invited addresses may sign up; the owner and admins invite at `/invites`, and an organization invitation or a share to an address also lets it in. `"auth": { "signup": "open" }` lets anyone sign up.
+4. **Invite-only:** the first account is saved as the owner, and after it only invited addresses may sign up; the owner and admins invite at `/invites`, and an organization invitation or a share to an address also lets it in. `"auth": { "signup": "open" }` lets anyone sign up.
 
 ### The app's API
 
@@ -130,7 +130,7 @@ flowchart LR
 
 1. **On:** `"auth": { "apiTokens": true }` in `platform.jsonc`.
 2. **Making:** people make, list and revoke their own at `/tokens`, choosing a name, a lifetime of up to 365 days (90 by default) and a level cap.
-3. **Using:** scripts send `Authorization: Bearer <token>` to `/api/`; the request runs as the token's owner, with every access check capped at the token's level, and a `read` token only reads.
+3. **Using:** scripts send `Authorization: Bearer <token>` to `/api/`; the request runs as the token's owner, with every access check capped at the token's level, an endpoint declared `{ level }` refusing a token capped below it, and a `read` token only reads.
 4. **Never on auth:** tokens are ignored on `/api/auth/*` and refused on `/mcp`.
 5. **Limits:** each token has its own allowance of `rateLimit` requests a minute, spent before it is looked up; a bad token also spends from its sender's address, so fake tokens cannot each get a fresh allowance.
 
@@ -147,7 +147,7 @@ flowchart LR
 1. **On:** `"access": true` in `platform.jsonc`, with auth on.
 2. **Control points:** the app creates a point for each resource it wants to gate with `app.access.create(id, { parent, inherit })`; the creator gets `manage`, and fixed sections are static points declared in `defineApp`.
 3. **Levels:** `read`, `create`, `write`, `delete`, `manage`, from grants to people, emails, teams, organizations and Everyone, links, and an organization's Admins team; each principal counts its nearest grant up the inherited parents, and the highest wins.
-4. **Checks:** every endpoint and page route declares `access: { point, level }`, `"user"` or `"anon"`, hand-written routes call `app.access.check`, and lists filter with `app.access.readable`; anything short is a 404.
+4. **Checks:** every endpoint and page route declares `access: { point, level }`, `{ level }` or `"anon"`, grants may go to `{ owner: true }`, the app's owner whoever that is at the time, hand-written routes call `app.access.check`, and lists filter with `app.access.readable`; anything short is a 404.
 5. **Sharing:** a new grant to a person emails them a link into the app; a link token in the page's `#link=` fragment travels with every `call()`, and is kept as a cookie so downloads count it too.
 6. **Rules:** every case is a row in [access-rules.md](access-rules.md), each with its own test.
 
@@ -169,7 +169,7 @@ flowchart LR
 ### Deploys
 
 1. **Prod:** a push to main backs up the database, applies migrations, then deploys the Worker and assets.
-2. **Preview:** each PR gets its own Worker, hostname, database copy and file space.
+2. **Preview:** each PR gets its own Worker, hostname, database copy and file space; the run says `live at` and posts the link only once the hostname answers over HTTPS.
 3. **Cleanup:** closing a PR deletes its preview, and a daily sweep catches any that were missed.
 4. **Same everywhere:** CI and a local `npx @celsoft/platform deploy` run the same steps.
 5. **Own resources only:** the platform changes or deletes only resources carrying a name it makes for the app; [design.md](design.md#7-resource-identity) lists every name.
