@@ -16,6 +16,12 @@ const app = defineApp(undefined, {
       { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: z.object({ folder: z.string(), body: z.string() }), access: "anon" },
       (input) => input,
     ),
+    fullFolder: endpoint(
+      { method: "POST", path: "/api/public/folders/:folder/full", input: z.object({ folder: z.string() }), output: z.object({}), access: "anon" },
+      ({ folder }) => {
+        throw new EndpointError(409, `${folder} is full`);
+      },
+    ),
   },
 });
 
@@ -34,7 +40,7 @@ afterEach(() => {
   vi.stubGlobal("fetch", fetcher);
 });
 
-const call = createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"], addNote: ["POST", "/api/public/folders/{folder}/notes"] }, { url: "https://app.test" });
+const call = createCall<typeof app>({ getNote: ["GET", "/api/public/notes/{id}"], addNote: ["POST", "/api/public/folders/{folder}/notes"], fullFolder: ["POST", "/api/public/folders/{folder}/full"] }, { url: "https://app.test" });
 
 describe("call", () => {
   it("calls an endpoint by name over its REST path", async () => {
@@ -44,8 +50,12 @@ describe("call", () => {
   });
 
   it("throws EndpointError with the server's status and message", async () => {
-    await expect(call("addNote", { folder: "work", body: "" })).rejects.toMatchObject({ status: 400, name: "EndpointError" });
-    await expect(call("addNote", { folder: "work", body: "" })).rejects.toBeInstanceOf(EndpointError);
+    await expect(call("fullFolder", { folder: "work" })).rejects.toMatchObject({ status: 409, name: "EndpointError", message: "work is full" });
+    await expect(call("fullFolder", { folder: "work" })).rejects.toBeInstanceOf(EndpointError);
+  });
+
+  it("names each field that failed validation in the message", async () => {
+    await expect(call("addNote", { folder: "work", body: "" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/^body: /) });
   });
 
   it("sends the page's #link= token with every call, and none without one", async () => {

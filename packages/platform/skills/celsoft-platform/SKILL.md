@@ -62,7 +62,7 @@ export default defineApp(undefined, {
    - **`{ level: "read" }`:** anyone signed in; an API token capped below the level gets a 403. Use `read` for reads, and `create`, `write`, `delete` or `manage` for what the call changes. Never under `/api/public/`.
    - **`{ point: "id", level: "write" }`:** with `access` on, the caller needs that level on the control point named by the input field, or by a function of the input, or gets a 404.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
-6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
+6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints; a refusal throws `EndpointError` with the server's `status` and `message`, and failed validation names each field, such as `body: Too small`.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
 ## Server pages
@@ -259,7 +259,7 @@ it("lists items to the signed-in person", async () => {
 
 1. **Database:** each `testApp` gets a database of its own, copied from one migrated with `drizzle/`, static points included; call it in `beforeEach` for a clean database per test. It stops when `src/schema.ts` has changes with no migration.
 2. **Postgres:** from the app's `embedded-postgres` dev dependency, which `new` and `upgrade` add and npm installs for each machine, or else Postgres 18 or later on the `PATH`. With pnpm, allow its binaries' install script under `allowBuilds` in `pnpm-workspace.yaml`. One server starts per test process, in about a second, and stops within a second of that process ending.
-3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status`. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
+3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status` and the server's `message`, so `rejects.toThrow("only the owner may publish")` checks what it says. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
 4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
 5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.
 6. **Running:** `npm test`, which runs `vitest run`.

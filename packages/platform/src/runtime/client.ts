@@ -27,6 +27,21 @@ export function linkFromPage(): string | null {
   return new URLSearchParams(location.hash.replace(/^#/, "")).get("link");
 }
 
+type Issue = { path?: (string | number)[]; message: string };
+
+// A refusal's body is oRPC's plus the `error` every platform API error carries, which oRPC's
+// client does not recognize, so it would throw only the status text; this hands it oRPC's own
+// body, its message naming each field that failed validation.
+async function readableError(response: Response): Promise<Response> {
+  if (response.ok) return response;
+  const body = (await response.clone().json().catch(() => undefined)) as { error?: unknown; message?: string; data?: { issues?: Issue[] } } | undefined;
+  if (!body || typeof body !== "object" || !("error" in body)) return response;
+  const { error: _, ...rest } = body;
+  const issues = rest.data?.issues;
+  if (Array.isArray(issues) && issues.length > 0) rest.message = issues.map((i) => (i.path?.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ");
+  return new Response(JSON.stringify(rest), { status: response.status, statusText: response.statusText, headers: { "content-type": "application/json" } });
+}
+
 // Calls the app's endpoints by name over its REST API; the generated .platform/client.ts passes
 // each endpoint's method and path, and the app's own type for the inputs and outputs. Every call
 // carries the page's access link token, or the one `link` returns. In a browser, the page's token
@@ -42,7 +57,7 @@ export function createCall<App>(routes: Record<string, readonly [Method, string]
         const token = (options.link ?? linkFromPage)();
         return { ...options.headers, ...(token && { [LINK_HEADER]: token }) };
       },
-      ...(options.fetch && { fetch: (request: Request) => options.fetch!(request) }),
+      fetch: async (request: Request, init?: RequestInit) => readableError(await (options.fetch ? options.fetch(request) : fetch(request, init))),
     }));
 
   let kept: string | null = null;
