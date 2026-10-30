@@ -42,6 +42,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Neon project**: one per app, on Postgres 18, in a region of its choosing; the platform manages only branches inside it.
     4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
+    6. **Tool managers**: its own choice; the platform never requires mise or any other tool manager, and never writes their files, such as `mise.toml`, into an app; what it needs comes through `package.json`.
 2. **Platform**: owns only what it creates.
     1. **Own resources only**: it changes or deletes only resources named the way Resource Identity says it names the app's.
     2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.

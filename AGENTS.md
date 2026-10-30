@@ -22,6 +22,9 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, in the app's own repo.
 - **No workarounds in the demo:** the demo exists to prove the platform, so it uses every
   feature the platform's own way; when it cannot, stop and fix or track the platform gap,
   never hand-write around it in the demo.
+- **No mise for apps:** this repo runs on mise, but apps never have to; never require mise, or
+  write `mise.toml` or any tool manager's files, in what the platform does to an app; what an app
+  needs comes through its `package.json`.
 - **Secrets:** `platform init` (here `mise run platform -- init`) writes a blank entry in
   `.env.secrets` for each token and reports which are empty. Never read `.env.secrets`.
 
