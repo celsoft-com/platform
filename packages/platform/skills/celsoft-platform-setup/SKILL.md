@@ -11,6 +11,7 @@ app deploys, the `celsoft-platform` skill covers changing it.
 
 - **Never read `.env.secrets`:** the user pastes each token into it; `init` reports which are empty.
 - **No hand-written setup:** every file below is written by a command; never write them yourself.
+- **Never work around a failure:** when a step fails in a way these instructions do not fix, stop and ask the user to request a fix at https://github.com/celsoft-com/platform/issues, with the step and its exact output; never create the resource or file by hand.
 
 ## 0. Start
 

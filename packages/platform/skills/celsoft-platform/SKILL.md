@@ -10,6 +10,19 @@ the cloud resources and the deploys; the app writes its endpoints, tables and pa
 command as `npx @celsoft/platform <command>` from the app's folder. To create an app or deploy it
 for the first time, follow the `celsoft-platform-setup` skill instead.
 
+## Platform gaps: stop, never work around
+
+When the platform cannot do what the app needs, does it wrong, or a command fails in a way the
+app cannot fix, **stop and ask the user to request a fix** at
+https://github.com/celsoft-com/platform/issues. A workaround hides the gap, breaks on the next
+upgrade, and keeps the fix from reaching every app.
+
+1. **Stop:** tell the user what the app needs, what the platform lacks or did, and the exact output.
+2. **Request:** the user opens an issue there with those three things; offer to draft it.
+3. **Wait:** leave that part of the app undone until a release fixes it, then `npm install` the new version.
+4. **Never instead:** run `wrangler`, the Cloudflare API or the Neon API yourself; create, change or delete cloud resources by hand; edit generated files or `node_modules`; patch the package; or rebuild in the app something the platform owns, such as auth, sessions, migrations, routing, files, email or live rooms.
+5. **Not a gap:** a mistake in the app's own code or `platform.jsonc`, or a step the skills say the user does, such as creating an account or token; fix those.
+
 ## Files
 
 | File | Who writes it | Rule |
@@ -217,3 +230,4 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 2. **Never read or print** `.env.secrets`; it holds the deploy tokens.
 3. **Resource names are reserved:** anything in the Cloudflare account named after the app, or the app followed by `--`, belongs to the platform.
 4. **Failures stop the run:** a failed build, migration or check leaves the running version in place; fix the cause rather than working around it.
+5. **No workarounds:** a platform gap stops the work until it is fixed; see Platform gaps above.
