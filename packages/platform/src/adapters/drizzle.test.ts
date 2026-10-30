@@ -17,7 +17,11 @@ const { pool, url } = await freshDatabase();
 let app: string;
 let migrator: DrizzleMigrator;
 const migrations = async () => (await readdir(join(app, "drizzle"))).filter((f) => f.endsWith(".sql")).sort();
-const latest = async () => readFile(join(app, "drizzle", (await migrations()).at(-1)!), "utf8");
+// Two migrations made in one second sort by their random names, so the journal says which is last.
+const latest = async () => {
+  const journal: { entries: { tag: string }[] } = JSON.parse(await readFile(join(app, "drizzle", "meta", "_journal.json"), "utf8"));
+  return readFile(join(app, "drizzle", `${journal.entries.at(-1)!.tag}.sql`), "utf8");
+};
 
 beforeAll(async () => {
   await mkdir(base, { recursive: true });
@@ -80,6 +84,17 @@ describe("DrizzleMigrator", () => {
     const count = (await migrations()).length;
     await expect(migrator.generate({ answers: { renames: {}, creates: ["nothing"] } })).rejects.toThrow("--create nothing answers no question drizzle-kit asked");
     expect(await migrations()).toHaveLength(count);
+  }, 60_000);
+
+  it("fails, rather than reporting up to date, when drizzle-kit cannot read the schema", async () => {
+    const schema = await readFile(join(app, "src", "schema.ts"), "utf8");
+    await writeFile(join(app, "src", "schema.ts"), `${schema}\nthrow new Error("broken schema");\n`);
+    try {
+      expect(await migrator.upToDate()).toBe(false);
+      await expect(migrator.generate()).rejects.toThrow("broken schema");
+    } finally {
+      await writeFile(join(app, "src", "schema.ts"), schema);
+    }
   }, 60_000);
 
   it("forgets every signing key in a database, keeping everything else", async () => {

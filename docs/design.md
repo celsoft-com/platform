@@ -240,7 +240,8 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Renames**: when a name disappears as another appears, drizzle-kit asks whether it was renamed; the platform never shows its terminal prompt, and answers from `--rename <old>=<new>` and `--create <new>` instead.
         1. **Unanswered**: `db generate`, and `dev` on start, stop with each question and the flags that answer it, and write nothing to `drizzle/`.
         2. **Unused**: a flag that answers no question stops the run the same way, so a typo never passes silently.
-        3. **Pinned**: the answers reach drizzle-kit by rewriting its prompt call as it loads, so the platform pins drizzle-kit's exact version and stops with that fix if the call is not found.
+        3. **Errors**: drizzle-kit prints some errors, such as a schema file that fails to load, and exits 0 with no migration; the platform fails the run instead, so `testApp` and deploy never read that as up to date.
+        4. **Pinned**: the answers reach drizzle-kit by rewriting its prompt call as it loads, so the platform pins drizzle-kit's exact version and stops with that fix if the call is not found.
     6. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
     7. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
     8. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
@@ -424,7 +425,7 @@ A published CLI, runtime library and app template that create and reuse each app
 5. **App tests**: `@celsoft/platform/testing` runs an app's real runtime in its own tests, never a mock of the platform.
     1. **Why the platform**: apps reach the database, files, email and auth only through `app`, so only the platform can build one for a test.
     2. **Real code**: routing, access checks, token caps, validation and auth are the platform's own; only the cloud behind them is local.
-    3. **Database**: Postgres 18 or later, as Neon runs, started once per test process on a socket; one database migrated with the app's `drizzle/` and its static points, copied for each `testApp`; testing stops when the schema has changes with no migration.
+    3. **Database**: Postgres 18 or later, as Neon runs, started once per test process on a socket and stopped, with its folder removed, by a separate process once the test process is gone, however it ended; one database migrated with the app's `drizzle/` and its static points, copied for each `testApp`; testing stops when the schema has changes with no migration.
     4. **Stand-ins**: R2 is a bucket in memory, Resend an outbox, and live rooms a list of what was published; browsers cannot join a room in a test.
     5. **Calls**: through the same client browsers use, as a signed-up person, an API token, or no one; sign-up goes through the app's own, inviting the address when sign-up needs it.
     6. **Tool versions**: through `package.json`, never a tool manager's files: Postgres from the app's `embedded-postgres` dev dependency, prebuilt for each machine, or else one on the `PATH`; Node 24 or later in the platform's `engines`, checked by every command.

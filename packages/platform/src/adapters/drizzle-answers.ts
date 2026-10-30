@@ -48,4 +48,12 @@ registerHooks({
   },
 });
 
+// drizzle-kit prints an error it catches, such as a schema file that fails to load, and still
+// exits 0 with no migration written, which reads as "up to date".
+const printError = console.error;
+console.error = (...args: unknown[]) => {
+  process.exitCode = 1;
+  printError(...args);
+};
+
 process.on("exit", () => writeFileSync(process.env.PLATFORM_DRIZZLE_REPORT!, JSON.stringify(report)));
