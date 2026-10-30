@@ -245,7 +245,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Session**: `app.session()`, looked up once per request, and `app.requireUser()`, which returns the user or answers 401.
     4. **Screens**: login, sign-up, forgot-password and reset pages with a default stylesheet and documented class names; `defineApp({ screens: { stylesheet } })` adds the app's own stylesheet after it.
     5. **Email**: `app.email.send()`, from `noreply@` the app's hostname in prod, captured to logs in previews and local dev. A preview really emails only the addresses in `previews.sendEmailTo` in `platform.jsonc`, such as `*@yourcompany.com`, sending from prod's domain with a Resend key of its own that only sends, made when the preview is and deleted by its cleanup; every other address stays captured, since a preview's database is a copy of prod. Each app sends from its own hostname, so the project's existing email setup is never touched: the platform registers the hostname in Resend and writes its DKIM and bounce records in the zone, tagged as its own. Mail comes from `noreply@`, with no receiving and no reply-to.
-    6. **Files**: `app.files` in R2, storing, reading, listing, deleting and serving objects by path, `/` making folders, with JSON helpers; prod has a bucket per app, and previews share one bucket under a per-PR folder, added out of sight, which closing a PR deletes and which expires after 14 days as a backstop.
+    6. **Files**: `app.files` in R2, storing, reading, listing, deleting and serving objects by path, `/` making folders, with JSON helpers; a file may carry up to 2 KB of string metadata beside its content type; a folder lists one page at a time, at most 1,000 entries, with a cursor for the next, so no call's work grows with the folder; prod has a bucket per app, and previews share one bucket under a per-PR folder, added out of sight, which closing a PR deletes and which expires after 14 days as a backstop.
     7. **Live rooms**: Durable Objects rooms over WebSockets, offered as building blocks with no outside service; rooms carry messages and know nothing about documents or saving, which stay entirely the app's business.
         1. **Switch**: `"live": true` in `platform.jsonc`; no new token permission or account.
         2. **Rooms**: one per name the app chooses, such as `note:123`, each reaching one Durable Object; rooms start on first use and go idle when empty, so cost follows activity, not page count.
@@ -415,5 +415,13 @@ A published CLI, runtime library and app template that create and reuse each app
     5. **Release**: publishes to npm only after the main deploy succeeds, using npm trusted publishing. Deferred until an outside project adopts the platform; the first version is published by hand, since trusted publishing needs the package to exist.
 2. **Fast tests**: resource modules run against in-memory fakes, covering every event's steps with no cloud account.
 3. **Upgrade test**: deploys the demo with the last published version, then the new build, proving the new one converges.
-4. **Template test**: scaffolds an app from the template and builds it.
-5. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
+4. **Template test**: scaffolds an app from the template, builds it, and runs the test the template ships.
+5. **App tests**: `@celsoft/platform/testing` runs an app's real runtime in its own tests, never a mock of the platform.
+    1. **Why the platform**: apps reach the database, files, email and auth only through `app`, so only the platform can build one for a test.
+    2. **Real code**: routing, access checks, token caps, validation and auth are the platform's own; only the cloud behind them is local.
+    3. **Database**: Postgres 18 or later, as Neon runs, started once per test process on a socket; one database migrated with the app's `drizzle/` and its static points, copied for each `testApp`; testing stops when the schema has changes with no migration.
+    4. **Stand-ins**: R2 is a bucket in memory, Resend an outbox, and live rooms a list of what was published; browsers cannot join a room in a test.
+    5. **Calls**: through the same client browsers use, as a signed-up person, an API token, or no one; sign-up goes through the app's own, inviting the address when sign-up needs it.
+    6. **Postgres**: `new` writes `mise.toml` pinning it, so `mise install` provides it locally and in CI.
+    7. **Demo**: tests itself this way, as any app would.
+6. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.

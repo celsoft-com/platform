@@ -45,6 +45,12 @@ export function entryModule(worker: string): string {
   return `// Written by @celsoft/platform at deploy; never edit or commit it.\nimport app from ${JSON.stringify(fromGenerated(worker))};\nexport default app;\nexport const LiveRoom = app.LiveRoom;\n`;
 }
 
+// The Worker's settings that follow from platform.jsonc alone, the same for every deploy, `dev` and tests.
+export function featureVars(config: Config): Record<string, string> {
+  const auth = config.auth;
+  return { APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", AUTH_SIGNUP: auth.signup, MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) };
+}
+
 export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket, pages = [], placement }: WranglerInput): object {
   const auth = config.auth;
   return {
@@ -63,7 +69,7 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     alias: { kysely: `./${NO_KYSELY_FILE}`, "@better-auth/kysely-adapter": `./${NO_KYSELY_FILE}` },
     // Every query is a round trip to the database, so the Worker runs next to it, not next to the visitor.
     ...(placement && { placement: { region: placement } }),
-    vars: { ...vars, APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", AUTH_SIGNUP: auth.signup, MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) },
+    vars: { ...vars, ...featureVars(config) },
     ...(config.frontend && {
       assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? [...SCREEN_PATHS, INVITES_PATH] : []), ...(auth && auth.apiTokens ? [TOKENS_PATH] : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : []), ...pages.flatMap((p) => (p === "/" ? [p] : [p, `${p}/*`]))] },
     }),

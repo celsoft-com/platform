@@ -31,7 +31,8 @@ export function linkFromPage(): string | null {
 // each endpoint's method and path, and the app's own type for the inputs and outputs. Every call
 // carries the page's access link token, or the one `link` returns. In a browser, the page's token
 // is also kept as a cookie once, so plain links such as downloads and server pages count it too.
-export function createCall<App>(routes: Record<string, readonly [Method, string]>, options: { url?: string; link?: () => string | null } = {}): Call<App> {
+// `fetch` and `headers` let code outside a browser, such as @celsoft/platform/testing, send the calls itself.
+export function createCall<App>(routes: Record<string, readonly [Method, string]>, options: { url?: string; link?: () => string | null; fetch?: (request: Request) => Promise<Response>; headers?: Record<string, string> } = {}): Call<App> {
   const contract = Object.fromEntries(Object.entries(routes).map(([name, [method, path]]) => [name, oc.route({ method, path: path as `/${string}` })]));
   const url = options.url ?? (typeof location === "undefined" ? undefined : location.origin);
   if (!url) throw new Error("createCall needs a url outside a browser");
@@ -39,8 +40,9 @@ export function createCall<App>(routes: Record<string, readonly [Method, string]
       url,
       headers: (): Record<string, string> => {
         const token = (options.link ?? linkFromPage)();
-        return token ? { [LINK_HEADER]: token } : {};
+        return { ...options.headers, ...(token && { [LINK_HEADER]: token }) };
       },
+      ...(options.fetch && { fetch: (request: Request) => options.fetch!(request) }),
     }));
 
   let kept: string | null = null;

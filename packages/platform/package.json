@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/platform",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,8 @@
     "./schema": "./dist/schema.js",
     "./live": "./dist/runtime/live-client.js",
     "./client": "./dist/runtime/client.js",
-    "./vite": "./dist/vite.js"
+    "./vite": "./dist/vite.js",
+    "./testing": "./dist/testing.js"
   },
   "files": [
     "dist",

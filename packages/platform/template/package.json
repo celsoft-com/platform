@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "postinstall": "platform generate"
+    "postinstall": "platform generate",
+    "test": "vitest run"
   },
   "dependencies": {
     "@celsoft/platform": "^{{platformVersion}}",
@@ -12,6 +13,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261023.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }

@@ -21,6 +21,8 @@ for the first time, follow the `celsoft-platform-setup` skill instead.
 | `drizzle/` | `db generate` | Commit; never edit |
 | `.github/workflows/platform.yml` | `init` | Commit; never edit |
 | `.platform/` | The platform | Gitignored; regenerated on install, `dev` and deploy; never edit |
+| `src/*.test.ts` | The app | Tests through `@celsoft/platform/testing`; see Testing |
+| `mise.toml` | `new`, then the app | Pins Postgres for tests; add the app's own tools |
 
 ## Endpoints
 
@@ -123,10 +125,30 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 ## `app`
 
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `session()`, `requireUser()`,
-`files` (R2, folders), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
+`files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
 
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
+
+## `app.files`
+
+With `"files": true`, `app.files` keeps files in an R2 bucket under paths such as `assets/logo.png`; `/` makes folders.
+
+```ts
+await app.files.put("assets/7f3a.png", request.body!, { contentType: "image/png", metadata: { name: "Logo.PNG" } });
+const file = await app.files.get("assets/7f3a.png");      // null when missing
+file?.metadata.name;                                     // "Logo.PNG"
+await app.files.putJson("collections/products/42.json", { title: "Hat" });
+await app.files.getJson<{ title: string }>("collections/products/42.json");
+return app.files.response("assets/7f3a.png");            // streams it, with its content type; 404 when missing
+```
+
+1. **`put(path, body, options?)`:** `body` is a string, `ArrayBuffer`, `Blob` or `ReadableStream`, such as `request.body`; `options` is a content type string, or `{ contentType, metadata }` with up to 2 KB of string names and values.
+2. **`get(path)`:** `{ body, size, httpMetadata: { contentType }, metadata, text() }`, or `null`; `body` is a stream, read once.
+3. **`list(folder, { cursor, limit })`:** one page, at most `limit` entries, 1,000 by default and at most: `{ files: [{ path, size, uploaded }], folders: ["a/b/"], cursor }`; pass `cursor` back for the next page, and it is missing on the last. Loop for a whole folder; page an endpoint's own answer straight from it.
+4. **`delete(path)`:** removes one file; deleting a missing one is not an error.
+5. **Metadata or a table:** metadata goes with the file and is deleted with it, but cannot be searched; anything to query or sort across files belongs in `app.db`, keyed by the path.
+6. **Limits:** an upload through the Worker is at most 100 MB; paths with `..` are refused; previews share one bucket under their PR's folder, which `app.files` adds and hides.
 
 ## Access
 
@@ -194,11 +216,38 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 2. **`email`:** sending from `noreply@<hostname>` through Resend; previews and `dev` capture email instead of sending, except that previews really email the addresses in `"previews": { "sendEmailTo": ["*@yourcompany.com"] }`, so testers can confirm accounts and receive sharing emails.
 3. **`auth`:** sign-up and sign-in at `/login`, `/signup`, `/forgot`, `/reset`; `{ "organizations": true }` adds organizations and teams, and `{ "apiTokens": true }` personal API tokens; see those sections above. Needs `database` and `email`.
    `"signup"` is `"invite"` unless set to `"open"`: the first account is saved as the owner, and its sign-up reply and session say `role: "owner"`; after it, only invited addresses may sign up. The owner and admins invite at `/invites`, or in code with `app.invites.create(email)`, `list()` and `revoke(id)`; an open organization invitation or a share to an address also lets that address sign up. Never build a sign-up path around it; to open sign-up, set `"open"`.
-4. **`files`:** `app.files` in an R2 bucket; previews share one bucket under their PR's folder.
+4. **`files`:** `app.files` in an R2 bucket; see `app.files` above.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
+
+## Testing
+
+`@celsoft/platform/testing` runs the app's real runtime in a test: routing, access checks, token caps, validation and auth are the platform's own code, on a local Postgres, files in memory and captured email. Never build a fake `app` instead.
+
+```ts
+import { testApp } from "@celsoft/platform/testing";
+import { afterAll, expect, it } from "vitest";
+import { items } from "./schema";
+import app from "./worker";
+
+const t = await testApp(app);                             // run from the app's folder, or pass { dir }
+afterAll(() => t.close());
+
+it("lists items to the signed-in person", async () => {
+  const alice = await t.signUp("alice@example.com");      // the first sign-up is the owner
+  await t.db.insert(items).values({ name: "first" });
+  expect(await t.as(alice).call("listItems", {})).toMatchObject([{ name: "first" }]);
+});
+```
+
+1. **Database:** each `testApp` gets a database of its own, copied from one migrated with `drizzle/`, static points included; call it in `beforeEach` for a clean database per test. It stops when `src/schema.ts` has changes with no migration.
+2. **Postgres:** 18 or later on the `PATH`; `new` pins it in `mise.toml`, so `mise install` provides it. One server starts per test process, in about a second.
+3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status`. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
+4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
+5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.
+6. **Running:** `npm test`, which runs `vitest run`.
 
 ## Commands
 

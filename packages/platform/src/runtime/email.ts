@@ -7,6 +7,8 @@ export interface EmailMessage {
 
 export interface EmailBindings {
   EMAIL_MODE?: "send" | "capture";
+  // In capture mode, where captured messages go instead of the logs: tests read them here.
+  EMAIL_OUTBOX?: EmailMessage[];
   EMAIL_FROM?: string;
   EMAIL_API_KEY?: string;
   // In capture mode, the addresses that are really emailed anyway: exact, or `*@domain`.
@@ -29,7 +31,8 @@ export function createEmail(env: EmailBindings, fetcher: typeof fetch = fetch): 
     async send(message) {
       if (!env.EMAIL_MODE) throw new Error("this app has no email; add `email` to platform.jsonc");
       if (env.EMAIL_MODE === "capture" && !(env.EMAIL_API_KEY && allowed(message.to, env.EMAIL_SEND_TO))) {
-        console.log(`[email captured] to=${message.to} subject=${JSON.stringify(message.subject)}\n${message.text}`);
+        if (env.EMAIL_OUTBOX) env.EMAIL_OUTBOX.push(message);
+        else console.log(`[email captured] to=${message.to} subject=${JSON.stringify(message.subject)}\n${message.text}`);
         return;
       }
       const response = await fetcher("https://api.resend.com/emails", {

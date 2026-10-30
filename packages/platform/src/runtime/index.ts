@@ -30,7 +30,7 @@ export { EndpointError } from "./endpoint-error.js";
 export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
 export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
-export type { FileEntry, Files, Folder, StoredObject } from "./files.js";
+export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
 export type { Invite, Invites } from "./invites.js";
