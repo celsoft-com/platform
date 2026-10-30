@@ -331,7 +331,7 @@ export default defineApp(
       ),
       // Other people's personal notes the signed-in user can read, filtered by access in the query itself.
       sharedNotes: endpoint(
-        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: "user" },
+        { method: "GET", path: "/api/shared-notes", input: z.object({}), output: z.array(SharedNote.omit({ level: true })), access: { level: "read" } },
         async (_, app) => {
           const user = await app.requireUser();
           return app.db
@@ -352,13 +352,13 @@ export default defineApp(
           description: "The organizations the signed-in user belongs to, with their ids for the organization note tools",
           input: z.object({}),
           output: z.array(Org),
-          access: "user",
+          access: { level: "read" },
         },
         async (_, app) => (await app.organizations.list()).map(({ id, name }) => ({ id, name })),
       ),
       // Its members may add notes, so the organization's point gives them create, not only read.
       createOrganization: endpoint(
-        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: "user" },
+        { method: "POST", path: "/api/organizations", input: z.object({ name: z.string().trim().min(1).max(60) }), output: Org, access: { level: "create" } },
         async ({ name }, app) => {
           const org = await app.organizations.create({ name });
           await app.access.grant(organizationPoint(org.id), { organization: org.id }, "create");

@@ -17,8 +17,8 @@ const ran: string[] = [];
 const app = defineApp(undefined, {
   pool: (connectionString) => new Pool({ connectionString, max: 2 }),
   endpoints: {
-    whoAmI: endpoint({ method: "GET", path: "/api/me", input: z.object({}), output: z.object({ id: z.string() }), access: "user" }, async (_, a) => ({ id: (await a.requireUser()).id })),
-    makeDoc: endpoint({ method: "POST", path: "/api/docs", input: z.object({ id: z.string() }), output: z.object({}), access: "user" }, async ({ id }, a) => {
+    whoAmI: endpoint({ method: "GET", path: "/api/me", input: z.object({}), output: z.object({ id: z.string() }), access: { level: "read" } }, async (_, a) => ({ id: (await a.requireUser()).id })),
+    makeDoc: endpoint({ method: "POST", path: "/api/docs", input: z.object({ id: z.string() }), output: z.object({}), access: { level: "create" } }, async ({ id }, a) => {
       ran.push(`make ${id}`);
       await a.access.create(id);
       return {};
@@ -29,7 +29,8 @@ const app = defineApp(undefined, {
       { method: "POST", path: "/api/docs/:id/share", input: z.object({ id: z.string(), to: z.string() }), output: z.object({}), access: { point: "id", level: "manage" } },
       async ({ id, to }, a) => (ran.push(`share ${id}`), await a.access.grant(id, { user: to }, "read"), {}),
     ),
-    manageable: endpoint({ method: "GET", path: "/api/manageable", input: z.object({}), output: z.array(z.string()), access: "user" }, async (_, a) => {
+    clearDocs: endpoint({ method: "DELETE", path: "/api/docs", input: z.object({}), output: z.object({}), access: { level: "delete" } }, () => (ran.push("clear"), {})),
+    manageable: endpoint({ method: "GET", path: "/api/manageable", input: z.object({}), output: z.array(z.string()), access: { level: "read" } }, async (_, a) => {
       const rows = await pool.query(`select id from access_point where created_by = $1 order by id`, [(await a.requireUser()).id]);
       const out: string[] = [];
       for (const r of rows.rows) if (await a.access.can(r.id, "manage")) out.push(r.id);
@@ -122,6 +123,18 @@ describe("API tokens", () => {
     expect(ran).not.toContain(`share ${doc}`);
     expect((await send(`/api/docs/${doc}/share`, { cookie: p.cookie, body: { to: other.id } })).status).toBe(200);
     expect((await send("/api/manageable", { token: key })).body).toEqual([]);
+  });
+
+  it("T4: an endpoint's level with no point holds a token to its cap too", async () => {
+    const p = await person();
+    const create = (await token(p.cookie, { metadata: { cap: "create" } })).key;
+    const del = (await token(p.cookie, { metadata: { cap: "delete" } })).key;
+    expect((await send("/api/docs", { token: create, body: { id: `doc-${uid()}` } })).status).toBe(200);
+    const refused = await send("/api/docs", { token: create, method: "DELETE", body: {} });
+    expect(refused).toMatchObject({ status: 403, body: { error: "this API token is capped at create; this needs delete" } });
+    expect(ran).not.toContain("clear");
+    expect((await send("/api/docs", { token: del, method: "DELETE", body: {} })).status).toBe(200);
+    expect((await send("/api/docs", { cookie: p.cookie, method: "DELETE", body: {} })).status).toBe(200);
   });
 
   it("T4: a cap never raises a level the owner does not have", async () => {

@@ -35,7 +35,7 @@ describe("Endpoints", () => {
       { method: "GET", path: "/api/orgs/:org", input: z.object({ org: z.string() }), output: z.object({ org: z.string() }), access: { point: ({ org }) => organizationPoint(org), level: "read" } },
       ({ org }) => ({ org }),
     ),
-    open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({ ok: z.boolean() }), access: "user" }, () => ({ ok: true })),
+    open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({ ok: z.boolean() }), access: { level: "read" } }, () => ({ ok: true })),
   };
   const api = apiHandler(endpoints)!;
   const call = async (access: Access, method: string, path: string) => {
@@ -85,15 +85,19 @@ describe("Endpoints", () => {
     expect((await call(w.as(await w.user()), "GET", `/api/orgs/${id}`)).status).toBe(404);
   });
 
-  it("N7: access user runs with no point check", async () => {
-    expect(await call(w.as(null), "GET", "/api/open")).toEqual({ status: 200, body: { ok: true } });
+  it("N7: access { level } runs with no point check for anyone signed in, and is a 404 to no one", async () => {
+    const request = () => new Request("https://app.test/api/open");
+    const signedIn = await api.handle(request(), { access: w.as(null), session: async () => ({ user: {} }) });
+    expect({ status: signedIn!.status, body: await signedIn!.json() }).toEqual({ status: 200, body: { ok: true } });
+    expect((await api.handle(request(), { access: w.as(null), session: async () => null }))!.status).toBe(404);
   });
 
   it("N9: an endpoint's access is checked when it is defined", () => {
     const input = z.object({ id: z.string() });
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: "pageId", level: "read" } }, () => ({ id: "" }))).toThrow(/pageId/);
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: "id", level: "owner" as Level } }, () => ({ id: "" }))).toThrow(/unknown access level/);
-    expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: "all" as never }, () => ({ id: "" }))).toThrow(/"user" or "anon"/);
+    expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: "all" as never }, () => ({ id: "" }))).toThrow(/\{ level \} or "anon"/);
+    expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: "user" as never }, () => ({ id: "" }))).toThrow(/the endpoint at \/api\/x's access "user" is now \{ level \}/);
     expect(() => endpoint({ method: "GET", path: "/api/x", input, output: Page, access: { point: 7, level: "read" } as never }, () => ({ id: "" }))).toThrow(/function/);
   });
 
@@ -111,15 +115,16 @@ describe("Endpoints", () => {
     }
   });
 
-  it("N11: anon endpoints live under /api/public/ and user endpoints never do", () => {
-    const e = (path: string, access: "anon" | "user") => endpoint({ method: "GET", path, input: z.object({}), output: Page, access }, () => ({ id: "" }));
+  it("N11: anon endpoints live under /api/public/ and { level } endpoints never do", () => {
+    const signedIn = { level: "read" } as const;
+    const e = (path: string, access: "anon" | typeof signedIn) => endpoint({ method: "GET", path, input: z.object({}), output: Page, access }, () => ({ id: "" }));
     expect(() => apiRoutes({ a: e("/api/notes", "anon") })).toThrow(/under \/api\/public\//);
-    expect(() => apiRoutes({ a: e("/api/public/notes", "user") })).toThrow(/make it "anon"/);
-    expect(Object.keys(apiRoutes({ a: e("/api/public/notes", "anon"), b: e("/api/notes", "user") }))).toEqual(["a", "b"]);
+    expect(() => apiRoutes({ a: e("/api/public/notes", signedIn) })).toThrow(/make it "anon"/);
+    expect(Object.keys(apiRoutes({ a: e("/api/public/notes", "anon"), b: e("/api/notes", signedIn) }))).toEqual(["a", "b"]);
   });
 
   it("undeclared access lists only the endpoints that say nothing", () => {
-    expect(undeclaredAccess({ a: { access: "user" }, b: {}, c: { access: { point: "id", level: "read" } } })).toEqual(["b"]);
+    expect(undeclaredAccess({ a: { access: { level: "read" } }, b: {}, c: { access: { point: "id", level: "read" } } })).toEqual(["b"]);
   });
 });
 
@@ -196,16 +201,12 @@ describe("Wiring", () => {
     expect(await get(`/api/public/pages/${declared}`, {})).toEqual({ status: 200, body: { level: "read" } });
   });
 
-  it("N8: with access on, an endpoint that says nothing about access stops every request", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const careless = defineApp(() => new Response("ok"), {
-      endpoints: { forgot: endpoint({ method: "GET", path: "/api/public/forgot", input: z.object({}), output: z.object({}) }, () => ({})) },
-    });
-    const response = await careless.fetch(new Request("https://app.test/anything"), { ACCESS: "on" }, ctx);
-    expect(response.status).toBe(500);
-    expect(error.mock.calls[0]![0]).toMatch(/forgot/);
-    expect((await careless.fetch(new Request("https://app.test/anything"), { ACCESS: "off" }, ctx)).status).toBe(200);
-    error.mockRestore();
+  it("N8: an endpoint that says nothing about access stops the app at start, with access on or off", () => {
+    const careless = () =>
+      defineApp(() => new Response("ok"), {
+        endpoints: { forgot: endpoint({ method: "GET", path: "/api/public/forgot", input: z.object({}), output: z.object({}) }, () => ({})) },
+      });
+    expect(careless).toThrow(/endpoint forgot declare no access; add access: \{ level: "read" \}/);
   });
 });
 

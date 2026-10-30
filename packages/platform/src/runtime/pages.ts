@@ -22,8 +22,8 @@ export interface PageRoute<Params = any, App = AnyApp> {
   // Checks and converts the route's parameters, as an endpoint's input schema does; a failure is a 404.
   params?: z.ZodType;
   // Checked before the handler and the cache, as for an endpoint: `{ point, level }` names a
-  // parameter or a function of the parameters; "user" lets in anyone signed in, "anon" anyone at
-  // all. With access on, every route says one of them.
+  // parameter or a function of the parameters; `{ level }` lets in anyone signed in, "anon" anyone
+  // at all. With access on, every route says one of them.
   access?: EndpointAccess<Params>;
   // Keeps the answer, shared by every visitor who passes the gate, for 60 seconds or `seconds`, or until app.cache empties it.
   cache?: PageCacheOption;
@@ -210,9 +210,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       }
       // The gate runs before the cache, so a kept copy only ever reaches someone who passes it.
       try {
-        if (found.route.access === "user") {
-          if (!(await app.session())) return refuse();
-        } else await requireAccess(found.route.access, params, app);
+        await requireAccess(found.route.access, params, app);
       } catch (thrown) {
         if (thrown instanceof EndpointError && (thrown.status === 404 || thrown.status === 403)) return refuse();
         throw thrown;

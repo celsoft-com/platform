@@ -23,19 +23,19 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   input: Input;
   output: Output;
   // Checked before the function runs: the caller needs `level` on the control point named by the
-  // input field `point`, or by what the function returns for the input, or gets a 404. "user"
-  // checks no point and lets in anyone signed in, "anon" anyone at all; over the API the path
-  // agrees, so an "anon" endpoint sits under /api/public/ and a "user" one never does. With access
-  // on, every endpoint says one of them.
+  // input field `point`, or by what the function returns for the input, or gets a 404. `{ level }`
+  // alone checks no point and lets in anyone signed in, but an API token capped below `level` gets
+  // a 403; "anon" lets in anyone at all. Over the API the path agrees, so an "anon" endpoint sits
+  // under /api/public/ and a `{ level }` one never does. Every endpoint says one of them.
   access?: EndpointAccess<z.output<Input>>;
 }
 
-export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | "user" | "anon";
+export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | { level: Level } | "anon";
 
-// Who an access declaration with no point lets in.
-export const OPEN_ACCESS = ["user", "anon"] as const;
+// The level each request's API token is capped at, keyed by the request's `app`; absent without a token.
+export const tokenCaps = new WeakMap<object, Level>();
 
-const isOpen = (access: unknown): access is "user" | "anon" => (OPEN_ACCESS as readonly unknown[]).includes(access);
+const hasPoint = (access: object): access is { point: unknown } => "point" in access && access.point !== undefined;
 
 export interface Endpoint<Input extends z.ZodType = z.ZodType, Output extends z.ZodType = z.ZodType, App = AnyApp> extends EndpointDefinition<Input, Output> {
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>;
@@ -47,7 +47,7 @@ export function endpoint<Input extends z.ZodType, Output extends z.ZodType, App 
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>,
 ): Endpoint<Input, Output, App> {
   const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
-  checkAccessDeclaration(definition.access, shape && Object.keys(shape), "an endpoint");
+  checkAccessDeclaration(definition.access, shape && Object.keys(shape), definition.path ? `the endpoint at ${definition.path}` : "an endpoint");
   return { ...definition, handler };
 }
 
@@ -58,30 +58,44 @@ export function undeclaredAccess(endpoints: Record<string, { access?: unknown }>
     .map(([name]) => name);
 }
 
+// Throws when an endpoint says nothing about access, naming each, so the app stops at start.
+export function requireDeclaredAccess(endpoints: Record<string, { access?: unknown }>): void {
+  const names = undeclaredAccess(endpoints);
+  if (names.length > 0) throw new Error(`${names.map((n) => `endpoint ${n}`).join(", ")} declare no access; add access: { level: "read" } (or "create", "write", "delete", "manage") for anyone signed in, { point, level } or "anon"`);
+}
+
 // Runs one endpoint's function for either door, after its access check.
 export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
   await requireAccess(e.access, input, app);
   return e.handler(input as z.output<z.ZodType>, app);
 }
 
-// The point check an endpoint or a page declares, run against its input; "user" and "anon" check
-// no point, since who may call is settled before, by the path for an endpoint and by the page.
+// The check an endpoint or a page declares, run against its input. "anon" checks nothing; `{ level }`
+// needs someone signed in and an API token capped at `level` or above; a point is checked by `app.access`.
 export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: unknown): Promise<void> {
-  if (!access || isOpen(access)) return;
-  const { point, level } = access;
+  if (!access || access === "anon") return;
+  if (!hasPoint(access)) {
+    if (!(await (app as { session(): Promise<unknown> }).session())) throw new EndpointError(404, "not found");
+    const cap = tokenCaps.get(app as object);
+    if (cap && rank(cap) < rank(access.level)) throw new EndpointError(403, `this API token is capped at ${cap}; this needs ${access.level}`);
+    return;
+  }
+  const { point, level } = access as { point: string | ((input: unknown) => string); level: Level };
   const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
   // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
   if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new EndpointError(404, "not found");
   await (app as { access: Access }).access.require(id, level);
 }
 
-// Throws when an access declaration is neither { point, level }, "user" nor "anon", or names a
+// Throws when an access declaration is neither { point, level }, { level } nor "anon", or names a
 // field `fields` lacks; `what` names its owner in the message.
 export function checkAccessDeclaration(access: unknown, fields: readonly string[] | undefined, what: string): void {
-  if (access === undefined || isOpen(access)) return;
-  if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`${what}'s access is { point, level }, "user" or "anon"`);
+  if (access === undefined || access === "anon") return;
+  if (access === "user") throw new Error(`${what}'s access "user" is now { level }: { level: "read" } for reads, or "create", "write", "delete" or "manage" for changes; an API token capped below it gets a 403`);
+  if (typeof access !== "object" || access === null || !("level" in access)) throw new Error(`${what}'s access is { point, level }, { level } or "anon"`);
   const { point, level } = access as { point: unknown; level: Level };
   rank(level);
+  if (point === undefined) return;
   if (typeof point === "string") {
     if (!fields || !fields.includes(point)) throw new Error(`${what}'s access names ${point}, which it does not have`);
   } else if (typeof point !== "function") throw new Error(`${what}'s access point is a field name or a function`);
@@ -105,8 +119,8 @@ export function apiRoutes(endpoints: Record<string, Omit<Endpoint, "handler">>):
     if (!e.method || !e.path) throw new Error(`endpoint ${name} is served over the API, so it needs a method and a path`);
     if (!e.path.startsWith("/api/")) throw new Error(`endpoint ${name}'s path must start with /api/, where the Worker answers first`);
     const isPublic = e.path.startsWith("/api/public/");
-    if (e.access === "anon" && !isPublic) throw new Error(`endpoint ${name} lets anyone in with access "anon", so its path goes under /api/public/; or give it access "user"`);
-    if (e.access === "user" && isPublic) throw new Error(`endpoint ${name} is under /api/public/, where anyone may call, but its access is "user"; make it "anon", or move it out of /api/public/`);
+    if (e.access === "anon" && !isPublic) throw new Error(`endpoint ${name} lets anyone in with access "anon", so its path goes under /api/public/; or give it access { level }`);
+    if (typeof e.access === "object" && !hasPoint(e.access) && isPublic) throw new Error(`endpoint ${name} is under /api/public/, where anyone may call, but its access is { level }, for those signed in; make it "anon", or move it out of /api/public/`);
     const shape = (e.input as { shape?: Record<string, unknown> }).shape;
     for (const [, param] of e.path.matchAll(/:([A-Za-z_][A-Za-z0-9_]*)/g)) {
       if (!shape || !(param! in shape)) throw new Error(`endpoint ${name}'s path has :${param}, which its input schema does not have`);

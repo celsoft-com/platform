@@ -9,22 +9,22 @@ const Note = z.object({ id: z.number(), folder: z.string(), body: z.string(), ur
 const app = defineApp(() => new Response("handler"), {
   endpoints: {
     getNote: endpoint(
-      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: Note },
+      { method: "GET", path: "/api/public/notes/:id", input: z.object({ id: z.number(), urgent: z.boolean().default(false) }), output: Note, access: "anon" },
       ({ id, urgent }) => {
         if (id === 404) throw new EndpointError(404, "note not found");
         return { id, folder: "inbox", body: "hello", urgent };
       },
     ),
     addNote: endpoint(
-      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: Note },
+      { method: "POST", path: "/api/public/folders/:folder/notes", input: z.object({ folder: z.string(), body: z.string().min(1) }), output: Note, access: "anon" },
       ({ folder, body }) => ({ id: 1, folder, body, urgent: false }),
     ),
-    broken: endpoint({ method: "GET", path: "/api/public/broken", input: z.object({}), output: Note }, () => ({ id: "nope" }) as never),
-    signedIn: endpoint({ method: "GET", path: "/api/public/me", input: z.object({}), output: z.object({}) }, async (_, a) => {
+    broken: endpoint({ method: "GET", path: "/api/public/broken", input: z.object({}), output: Note, access: "anon" }, () => ({ id: "nope" }) as never),
+    signedIn: endpoint({ method: "GET", path: "/api/public/me", input: z.object({}), output: z.object({}), access: "anon" }, async (_, a) => {
       await a.requireUser();
       return {};
     }),
-    toolOnly: endpoint({ serve: ["mcp"], input: z.object({}), output: z.object({}) }, () => ({})),
+    toolOnly: endpoint({ serve: ["mcp"], input: z.object({}), output: z.object({}), access: "anon" }, () => ({})),
   },
 });
 
