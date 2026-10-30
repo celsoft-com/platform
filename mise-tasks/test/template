@@ -25,8 +25,9 @@ npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null
 ls drizzle/*.sql >/dev/null
-test -f mise.toml
-npm test
+! test -e mise.toml
+# Postgres for the tests comes from the app's embedded-postgres, never this repo's own.
+PATH=$(printf %s "$PATH" | tr : '\n' | grep -v postgresql | paste -sd: -) npm test
 test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
 grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
 grep -q "^.claude/skills/celsoft-platform\*/$" .gitignore

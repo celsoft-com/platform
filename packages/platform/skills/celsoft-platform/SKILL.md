@@ -22,7 +22,6 @@ for the first time, follow the `celsoft-platform-setup` skill instead.
 | `.github/workflows/platform.yml` | `init` | Commit; never edit |
 | `.platform/` | The platform | Gitignored; regenerated on install, `dev` and deploy; never edit |
 | `src/*.test.ts` | The app | Tests through `@celsoft/platform/testing`; see Testing |
-| `mise.toml` | `new`, then the app | Pins Postgres for tests; add the app's own tools |
 
 ## Endpoints
 
@@ -127,6 +126,20 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `session()`, `requireUser()`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
+
+Code outside the handlers takes `app` as a parameter typed `App`, so `app.db` knows the app's tables:
+
+```ts
+import type { App } from "@celsoft/platform";
+import * as schema from "./schema";
+
+export async function getSettings(app: App<typeof schema>, id: string) {
+  const [row] = await app.db.select().from(schema.settings).where(eq(schema.settings.id, id));
+  return row;
+}
+```
+
+`App<typeof schema, { STRIPE_KEY: string }>` also types the app's own secrets on `app.env`.
 
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
 
@@ -243,7 +256,7 @@ it("lists items to the signed-in person", async () => {
 ```
 
 1. **Database:** each `testApp` gets a database of its own, copied from one migrated with `drizzle/`, static points included; call it in `beforeEach` for a clean database per test. It stops when `src/schema.ts` has changes with no migration.
-2. **Postgres:** 18 or later on the `PATH`; `new` pins it in `mise.toml`, so `mise install` provides it. One server starts per test process, in about a second.
+2. **Postgres:** from the app's `embedded-postgres` dev dependency, which `new` and `upgrade` add and npm installs for each machine, or else Postgres 18 or later on the `PATH`. With pnpm, allow its binaries' install script under `allowBuilds` in `pnpm-workspace.yaml`. One server starts per test process, in about a second.
 3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status`. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
 4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
 5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.
@@ -263,6 +276,7 @@ it("lists items to the signed-in person", async () => {
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |
 | `db run <file> --pr <n>` | Runs a SQL file on a preview's database, such as load test data |
+| `upgrade` | After installing a newer version: rewrites an older `platform.jsonc`, and adds what `new` now writes and the app lacks, such as a test script and `embedded-postgres`, keeping what the app has; review and commit |
 | `--dry-run` | Shows what would change, writing nothing; `new` lists the files it would write and keep; `skills`, `generate`, `upgrade`, `db generate` and `db stats --reset` refuse it |
 
 ## Rules

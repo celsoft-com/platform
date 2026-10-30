@@ -31,9 +31,8 @@ and points `AGENTS.md` at them.
 3. **Neon:** an account at [neon.com](https://neon.com).
 4. **Resend:** an account at [resend.com](https://resend.com), needed only if the app sends email or uses auth.
 5. **GitHub:** a repo for the app, on a plan that allows Actions, with the app's folder inside a clone of it.
-6. **Node:** version 24 or later.
+6. **Node:** version 24 or later, installed however you like; every command checks it.
 7. **GitHub CLI:** [gh](https://cli.github.com), logged in with admin access to the repo.
-8. **Postgres for tests:** 18 or later on the `PATH`; with [mise](https://mise.jdx.dev), `mise install` in the app's folder installs the version `new` pins in `mise.toml`.
 
 ## 2. Neon project
 

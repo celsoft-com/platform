@@ -3,9 +3,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "./config.js";
-import { invalid, scaffold } from "./scaffold.js";
+import { invalid, scaffold, upgradeScaffold } from "./scaffold.js";
 
 const answers = { name: "shop", hostname: "shop.example.com" };
+
+describe("upgradeScaffold", () => {
+  it("adds a test script, vitest and embedded-postgres to an app made by an older version, once, and writes no other file", async () => {
+    const app = await mkdtemp(join(tmpdir(), "upgrade-"));
+    await writeFile(join(app, "package.json"), JSON.stringify({ name: "shop", scripts: { postinstall: "platform generate" }, devDependencies: { typescript: "^7" } }));
+    expect(await upgradeScaffold(app)).toHaveLength(3);
+    const pkg = JSON.parse(await readFile(join(app, "package.json"), "utf8"));
+    expect(pkg).toMatchObject({ scripts: { postinstall: "platform generate", test: "vitest run" } });
+    expect(Object.keys(pkg.devDependencies)).toEqual(["embedded-postgres", "typescript", "vitest"]);
+    expect(await upgradeScaffold(app)).toEqual([]);
+    expect(await readdir(app)).toEqual(["package.json"]);
+  });
+
+  it("keeps the app's own test script and its own Postgres package", async () => {
+    const app = await mkdtemp(join(tmpdir(), "upgrade-"));
+    await writeFile(join(app, "package.json"), JSON.stringify({ scripts: { test: "jest" }, devDependencies: { "embedded-postgres": "18.1.0-beta.16" } }));
+    expect(await upgradeScaffold(app)).toEqual([]);
+    expect(JSON.parse(await readFile(join(app, "package.json"), "utf8"))).toMatchObject({ scripts: { test: "jest" }, devDependencies: { "embedded-postgres": "18.1.0-beta.16" } });
+  });
+});
 
 describe("scaffold", () => {
   it("writes an app whose platform.jsonc the platform accepts", async () => {

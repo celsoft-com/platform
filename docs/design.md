@@ -42,6 +42,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Neon project**: one per app, on Postgres 18, in a region of its choosing; the platform manages only branches inside it.
     4. **Tokens**: creates the scoped Cloudflare token and a Neon key scoped to the app's project.
     5. **Secret values**: sets each app's secrets in its GitHub Environments.
+    6. **Tool managers**: its own choice; the platform never requires mise or any other tool manager, and never writes their files, such as `mise.toml`, into an app; what it needs comes through `package.json`.
 2. **Platform**: owns only what it creates.
     1. **Own resources only**: it changes or deletes only resources named the way Resource Identity says it names the app's.
     2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.
@@ -206,7 +207,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
     7. **`db generate`**: writes new migrations from the platform's tables and the app's schema; `--custom <name>` writes an empty one the app fills with its own SQL, such as moving data.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
-    9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape.
+    9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape, and adds what `new` now writes that the app lacks, never changing what the app has: a test script and vitest when it has no test script, and `embedded-postgres` when it has none.
     10. **`previews`**: lists every preview that exists, with its pull request's state and the pieces found; changes nothing.
     11. **`apps move`**: gives the app's name to the repo it runs in; only ever suggested by the error that needs it.
     12. **`db run <file> --pr <n>`**: runs a file of SQL on a preview's database in one transaction, such as load test data; it refuses prod.
@@ -383,7 +384,7 @@ A published CLI, runtime library and app template that create and reuse each app
 1. **Versioning**: the CLI and runtime library release together under one version.
     1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
     2. **Stable workflow**: the workflow holds no logic, so it rarely changes, and rerunning `init` updates it when it does.
-    3. **Template**: used only to create an app, never upgraded.
+    3. **Template**: used only to create an app, never rewritten; `upgrade` adds only the template's files and entries an app lacks.
     4. **One Drizzle**: `drizzle-orm` is a peer dependency, so the app and the platform share one installed copy.
 2. **Tested**: any PR that changes the platform version gets a preview with the new version and a prod `--dry-run` of the prod-only steps.
 3. **Detection**: the platform acts on what exists, not on version numbers.
@@ -422,6 +423,6 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Database**: Postgres 18 or later, as Neon runs, started once per test process on a socket; one database migrated with the app's `drizzle/` and its static points, copied for each `testApp`; testing stops when the schema has changes with no migration.
     4. **Stand-ins**: R2 is a bucket in memory, Resend an outbox, and live rooms a list of what was published; browsers cannot join a room in a test.
     5. **Calls**: through the same client browsers use, as a signed-up person, an API token, or no one; sign-up goes through the app's own, inviting the address when sign-up needs it.
-    6. **Postgres**: `new` writes `mise.toml` pinning it, so `mise install` provides it locally and in CI.
+    6. **Tool versions**: through `package.json`, never a tool manager's files: Postgres from the app's `embedded-postgres` dev dependency, prebuilt for each machine, or else one on the `PATH`; Node 24 or later in the platform's `engines`, checked by every command.
     7. **Demo**: tests itself this way, as any app would.
 6. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.

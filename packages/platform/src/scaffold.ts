@@ -52,6 +52,33 @@ export async function scaffold(appDir: string, answers: Answers, platformVersion
   return result;
 }
 
+// What `new` writes that an app made by an older version lacks, added without touching what the
+// app has: a test script and vitest when it has no test script, and embedded-postgres, the
+// Postgres its tests run on, when it has none. Returns what it changed.
+export async function upgradeScaffold(appDir: string): Promise<string[]> {
+  const changes: string[] = [];
+  const template = JSON.parse(await readFile(join(TEMPLATE_DIR, "package.json"), "utf8")) as PackageJson;
+  const file = join(appDir, "package.json");
+  const pkg = JSON.parse(await readFile(file, "utf8")) as PackageJson;
+  const added: Record<string, string> = {};
+  if (!pkg.scripts?.test) {
+    pkg.scripts = { ...pkg.scripts, test: template.scripts!.test! };
+    added.vitest = template.devDependencies!.vitest!;
+    changes.push("package.json gained a test script and vitest");
+  }
+  if (!pkg.dependencies?.[POSTGRES_PACKAGE] && !pkg.devDependencies?.[POSTGRES_PACKAGE]) {
+    added[POSTGRES_PACKAGE] = template.devDependencies![POSTGRES_PACKAGE]!;
+    changes.push(`package.json gained ${POSTGRES_PACKAGE}, the Postgres tests run on`);
+  }
+  if (changes.length === 0) return changes;
+  pkg.devDependencies = Object.fromEntries(Object.entries({ ...added, ...pkg.devDependencies }).sort(([a], [b]) => a.localeCompare(b)));
+  await writeFile(file, `${JSON.stringify(pkg, null, 2)}\n`);
+  changes.push("install, then run the tests");
+  return changes;
+}
+
+const POSTGRES_PACKAGE = "embedded-postgres";
+
 type PackageJson = Record<string, unknown> & { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 
 async function mergePackageJson(appDir: string, template: PackageJson): Promise<void> {

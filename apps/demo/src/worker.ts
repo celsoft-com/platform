@@ -1,4 +1,4 @@
-import { defineApp, endpoint, EndpointError, organizationPoint, page, route, teamPoint, type AppContext, type Grantee, type PlatformBindings } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, organizationPoint, page, route, teamPoint, type App, type Grantee } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
 import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -9,8 +9,6 @@ const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt, organizationId: notes.organizationId, teamId: notes.teamId };
 const groupColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
 const ROOM = /^(organization|team):[0-9a-f-]{36}$/;
-
-type App = AppContext<PlatformBindings, typeof schema>;
 
 // The demo is where people try every access feature by hand. Every note is a control point named
 // by its id. A personal note stands alone, so only its author and whoever they share it with can
@@ -40,7 +38,7 @@ function grantee(to: z.infer<typeof To>): Grantee {
   return { [to.kind]: to.value } as Grantee;
 }
 
-async function sharedNote(app: App, id: string) {
+async function sharedNote(app: App<typeof schema>, id: string) {
   const [note] = await app.db.select({ ...columns, author: users.name }).from(notes).innerJoin(users, eq(users.id, notes.userId)).where(eq(notes.id, id));
   if (!note) throw new EndpointError(404, "not found");
   return { ...note, level: await app.access.check(id) };
@@ -48,7 +46,7 @@ async function sharedNote(app: App, id: string) {
 
 // Grants with the name of whoever each is for, so the panel never shows a bare id: one query per
 // kind of grantee, never one per grant.
-async function named<G extends { to: Grantee }>(app: App, grants: G[]): Promise<(G & { kind: string; value: string | null; name: string })[]> {
+async function named<G extends { to: Grantee }>(app: App<typeof schema>, grants: G[]): Promise<(G & { kind: string; value: string | null; name: string })[]> {
   const ids = (kind: "user" | "team" | "organization") => grants.flatMap((g) => (kind in g.to ? [(g.to as Record<string, string>)[kind]!] : []));
   const [people, teams, orgs] = await Promise.all([
     ids("user").length ? app.db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(inArray(users.id, ids("user"))) : [],
@@ -72,14 +70,14 @@ async function named<G extends { to: Grantee }>(app: App, grants: G[]): Promise<
 }
 
 // A room is named after a control point, an organization's or a team's, so whoever can read it may join.
-async function inRoom(room: string, _user: unknown, app: App): Promise<boolean> {
+async function inRoom(room: string, _user: unknown, app: App<typeof schema>): Promise<boolean> {
   return ROOM.test(room) && (await app.access.level(room)) !== null;
 }
 
 const noteFolder = (userId: string, noteId: string) => `notes/${userId}/${noteId}`;
 
 // Notes in an organization or a team, newest first, only those the caller can read.
-async function groupNotes(app: App, where: ReturnType<typeof eq>) {
+async function groupNotes(app: App<typeof schema>, where: ReturnType<typeof eq>) {
   return app.db
     .select(groupColumns)
     .from(notes)
@@ -90,7 +88,7 @@ async function groupNotes(app: App, where: ReturnType<typeof eq>) {
 }
 
 // A new note under a group's point, inheriting from it, announced to the group's room.
-async function addGroupNote(app: App, values: { organizationId: string; teamId: string | null }, point: string, body: string) {
+async function addGroupNote(app: App<typeof schema>, values: { organizationId: string; teamId: string | null }, point: string, body: string) {
   const user = await app.requireUser();
   const inserted = await app.db.transaction(async (tx) => {
     const [row] = await tx.insert(notes).values({ body, userId: user.id, ...values }).returning({ id: notes.id, body: notes.body, createdAt: notes.createdAt });
@@ -117,7 +115,7 @@ const pageHtml = (title: string, body: string) =>
 const print = page({
   path: "/print",
   routes: {
-    "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, async ({ id }, app: App) => {
+    "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, async ({ id }, app: App<typeof schema>) => {
       const [note] = await app.db.select({ body: notes.body, createdAt: notes.createdAt, author: users.name }).from(notes).innerJoin(users, eq(users.id, notes.userId)).where(eq(notes.id, id));
       if (!note) throw new EndpointError(404, "not found");
       return pageHtml(note.body.slice(0, 60), `<h1>Note</h1><p class="meta">By ${escape(note.author)}, ${note.createdAt.toISOString().slice(0, 10)}; rendered at ${new Date().toISOString()}.</p><p class="body">${escape(note.body)}</p>`);
@@ -131,7 +129,7 @@ const print = page({
 const stats = page({
   path: "/stats",
   routes: {
-    "/": route({ access: "anon", cache: true }, async (_, app: App) => {
+    "/": route({ access: "anon", cache: true }, async (_, app: App<typeof schema>) => {
       const [row] = await app.db.select({ total: count() }).from(notes);
       return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p>`);
     }),

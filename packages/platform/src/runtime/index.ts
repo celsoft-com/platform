@@ -81,6 +81,10 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+// The `app` every handler gets, for code outside the handlers that takes it as a parameter:
+// `App<typeof schema>` types `app.db` with the app's tables, and `App<typeof schema, Secrets>` adds its secrets.
+export type App<Schema extends Record<string, unknown> = Record<string, never>, Secrets extends object = object> = AppContext<Secrets & PlatformBindings, Schema>;
+
 export type Handler<Env, Schema extends Record<string, unknown>> = (request: Request, app: AppContext<Env, Schema>) => Response | Promise<Response>;
 
 // Who may join and send to a live room, and what the app does with messages browsers send.
