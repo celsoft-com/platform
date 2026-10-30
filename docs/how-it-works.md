@@ -75,7 +75,7 @@ flowchart LR
 
 ### Generated and provided files
 
-1. **Your files:** `platform new` writes them once, after `npm install @celsoft/platform` and `platform skills`, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments, and adds what a newer `new` writes that the app lacks, such as a Postgres pin in `mise.toml`.
+1. **Your files:** `platform new` writes them once, after `npm install @celsoft/platform` and `platform skills`, then they are yours; the platform never rewrites them, except `upgrade`, which updates `platform.jsonc` to a new shape and keeps its comments, and adds what a newer `new` writes that the app lacks, such as a test script.
 2. **Migrations:** `db generate` writes them; an edited migration that already ran never runs again, so databases created before and after the edit end up different.
 3. **Workflow:** `init` writes it; CI stops if it differs from what the installed version writes, so an edit fails the next deploy until `init` is rerun.
 4. **Temporary:** `deploy` and `dev` write the Wrangler config, entry module, a stub standing in for Better Auth's unused Kysely adapter, and secrets, then delete them; they are gitignored. The deployed Worker is minified, so it starts faster.
@@ -172,7 +172,7 @@ flowchart LR
 1. **Real runtime:** `testApp(app)` runs the app's own code through the platform's routing, access checks and auth, so a test passes only when the deployed endpoint would.
 2. **Local stand-ins:** a Postgres 18 database of its own, migrated from `drizzle/`; files in memory; email kept in `t.emails`; live room messages in `t.published`.
 3. **People:** `t.signUp(email)` makes a person, and `t.as(person).call("listItems", {})` calls an endpoint as them.
-4. **Postgres:** pinned in the app's `mise.toml`, so `mise install` provides it, then `npm test` runs.
+4. **Postgres:** from the app's `embedded-postgres` dev dependency, so `npm install` provides it, then `npm test` runs.
 
 ### Deploys
 
