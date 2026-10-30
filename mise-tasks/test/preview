@@ -72,6 +72,8 @@ check "grant Everyone read" "$(status -b "$jar" -d '{"to":{"kind":"everyone"},"l
 check "Everyone reads it signed out" "$(json "$note_url" | level)"
 check "revoke Everyone" "$(status -b "$jar" -d '{"to":{"kind":"everyone"}}' "$base/api/notes/$id/grants/revoke")"
 check "static point readable by everyone" "$(json "$base/api/public/about" | level)"
+check "owner manages the static point" "$(json -b "$jar" "$base/api/public/about" | level)"
+check "others only read it" "$(json -b "$jar2" "$base/api/public/about" | level)"
 
 # Server pages: /stats is claimed by the Worker, and every visitor gets the same page.
 page() { curl -s -o /dev/null -w '%{http_code}' "$@"; }

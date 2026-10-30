@@ -60,6 +60,7 @@ async function named<G extends { to: Grantee }>(app: App, grants: G[]): Promise<
   return grants.map((g) => {
     const to = g.to;
     if ("everyone" in to) return { ...g, kind: "everyone", value: null, name: "Everyone, signed in or not" };
+    if ("owner" in to) return { ...g, kind: "owner", value: null, name: "The app's owner" };
     if ("email" in to) return { ...g, kind: "email", value: to.email, name: to.email };
     if ("user" in to) {
       const row = person.get(to.user);
@@ -192,8 +193,8 @@ export default defineApp(
   {
     schema,
     pages: [print, stats],
-    // A static point, declared here and applied at every start: anyone may read the about line.
-    access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }] } } },
+    // A static point, declared here and applied at every start: anyone may read the about line, and the owner manages it.
+    access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }, { to: { owner: true }, level: "manage" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
     endpoints: {
       about: endpoint(

@@ -11,7 +11,7 @@ export { LINK_HEADER };
 
 export const LEVELS = ["read", "create", "write", "delete", "manage"] as const;
 export type Level = (typeof LEVELS)[number];
-export type Grantee = { user: string } | { team: string } | { organization: string } | { email: string } | { everyone: true };
+export type Grantee = { user: string } | { team: string } | { organization: string } | { email: string } | { everyone: true } | { owner: true };
 
 export interface Grant {
   to: Grantee;
@@ -221,17 +221,22 @@ interface GranteeColumns {
   team: string | null;
   organization: string | null;
   everyone: true | null;
+  owner: true | null;
   email: string | null;
 }
 
 function granteeColumns(to: Grantee): GranteeColumns {
   const keys = Object.keys(to ?? {});
-  if (keys.length !== 1 || !["user", "team", "organization", "email", "everyone"].includes(keys[0]!)) {
-    throw new Error("grant to exactly one of { user }, { team }, { organization }, { email } or { everyone: true }");
+  if (keys.length !== 1 || !["user", "team", "organization", "email", "everyone", "owner"].includes(keys[0]!)) {
+    throw new Error("grant to exactly one of { user }, { team }, { organization }, { email }, { everyone: true } or { owner: true }");
   }
   if ("everyone" in to) {
     if (to.everyone !== true) throw new Error("a grant to Everyone is { everyone: true }");
-    return { user: null, team: null, organization: null, everyone: true, email: null };
+    return { user: null, team: null, organization: null, everyone: true, owner: null, email: null };
+  }
+  if ("owner" in to) {
+    if (to.owner !== true) throw new Error("a grant to the owner is { owner: true }");
+    return { user: null, team: null, organization: null, everyone: null, owner: true, email: null };
   }
   const value = Object.values(to)[0];
   if (typeof value !== "string" || value.trim() === "") throw new Error("a grantee needs a non-empty id or email");
@@ -240,15 +245,17 @@ function granteeColumns(to: Grantee): GranteeColumns {
     team: "team" in to ? to.team : null,
     organization: "organization" in to ? to.organization : null,
     everyone: null,
+    owner: null,
     email: "email" in to ? to.email.trim().toLowerCase() : null,
   };
 }
 
-function grantee(row: { user_id: string | null; team_id: string | null; organization_id: string | null; everyone: boolean | null; email: string | null }): Grantee {
+function grantee(row: { user_id: string | null; team_id: string | null; organization_id: string | null; everyone: boolean | null; owner: boolean | null; email: string | null }): Grantee {
   if (row.user_id) return { user: row.user_id };
   if (row.team_id) return { team: row.team_id };
   if (row.organization_id) return { organization: row.organization_id };
   if (row.everyone) return { everyone: true };
+  if (row.owner) return { owner: true };
   return { email: row.email! };
 }
 
@@ -396,8 +403,8 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
           at,
           // xmax is 0 only for a row this statement inserted, so a changed grant sends no second email.
           sql`
-          insert into access_grant (point_id, user_id, team_id, organization_id, everyone, email, level, granted_by)
-          values (${point}, ${g.user}::uuid, ${g.team}::uuid, ${g.organization}::uuid, ${g.everyone}, ${g.email}, ${n}, ${grantedBy}::uuid)
+          insert into access_grant (point_id, user_id, team_id, organization_id, everyone, owner, email, level, granted_by)
+          values (${point}, ${g.user}::uuid, ${g.team}::uuid, ${g.organization}::uuid, ${g.everyone}, ${g.owner}, ${g.email}, ${n}, ${grantedBy}::uuid)
           on conflict on constraint access_grant_once do update set level = excluded.level, granted_by = excluded.granted_by, updated_at = now()
           returning xmax = 0 as inserted,
             coalesce(email, (select u.email from "user" u where u.id = access_grant.user_id)) as recipient,
@@ -450,7 +457,7 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
           }
           const row = (await pointRow(tx, point))!;
           for (const { g } of grants) await checkSameOrganization(tx, row, g);
-          if (creator) await insertGrant(tx, point, { user: creator, team: null, organization: null, everyone: null, email: null }, MANAGE, creator);
+          if (creator) await insertGrant(tx, point, { user: creator, team: null, organization: null, everyone: null, owner: null, email: null }, MANAGE, creator);
           for (const { g, n } of grants) await insertGrant(tx, point, g, n, creator);
         });
       },
@@ -521,15 +528,15 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
             delete from access_grant where point_id = ${point}
               and user_id is not distinct from ${g.user}::uuid and team_id is not distinct from ${g.team}::uuid
               and organization_id is not distinct from ${g.organization}::uuid and everyone is not distinct from ${g.everyone}
-              and email is not distinct from ${g.email}`),
+              and owner is not distinct from ${g.owner} and email is not distinct from ${g.email}`),
         );
       },
 
       async grants(point) {
         await need(on, point, MANAGE);
-        const found = await rows<{ user_id: string | null; team_id: string | null; organization_id: string | null; everyone: boolean | null; email: string | null; level: number; granted_by: string | null }>(
+        const found = await rows<{ user_id: string | null; team_id: string | null; organization_id: string | null; everyone: boolean | null; owner: boolean | null; email: string | null; level: number; granted_by: string | null }>(
           on,
-          sql`select user_id, team_id, organization_id, everyone, email, level, granted_by from access_grant where point_id = ${point} order by created_at, id`,
+          sql`select user_id, team_id, organization_id, everyone, owner, email, level, granted_by from access_grant where point_id = ${point} order by created_at, id`,
         );
         return found.map((row) => ({ to: grantee(row), level: named(Number(row.level))!, grantedBy: row.granted_by }));
       },
@@ -633,8 +640,8 @@ export async function applyStaticPoints(db: Db, points: Record<string, StaticPoi
       await tx.execute(sql`delete from access_grant where point_id = ${name}`);
       for (const { g, n } of grants) {
         await tx.execute(sql`
-          insert into access_grant (point_id, user_id, team_id, organization_id, everyone, email, level)
-          values (${name}, ${g.user}::uuid, ${g.team}::uuid, ${g.organization}::uuid, ${g.everyone}, ${g.email}, ${n})`);
+          insert into access_grant (point_id, user_id, team_id, organization_id, everyone, owner, email, level)
+          values (${name}, ${g.user}::uuid, ${g.team}::uuid, ${g.organization}::uuid, ${g.everyone}, ${g.owner}, ${g.email}, ${n})`);
       }
     }
   });

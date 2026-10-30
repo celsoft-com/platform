@@ -47,7 +47,8 @@ const STATEMENTS = [
     end $$`),
   // A caller's level on a point, 0 for none, given their principals: the person's id and confirmed
   // email, the organizations they belong to, their teams in those organizations, the organizations
-  // whose Admins they are in, and the link tokens' hashes they carry. Each principal stops at its
+  // whose Admins they are in, and the link tokens' hashes they carry; the owner's grants count when
+  // the person has the owner role now. Each principal stops at its
   // nearest grant on the point's chain and the highest wins; organization and team grants count
   // only on points of their own organization or of none; Admins get manage; a link counts only on
   // its own point. In PL/pgSQL, so each database connection plans the query once and reuses it.
@@ -68,6 +69,9 @@ const STATEMENTS = [
         select c.depth, g.level, 'person' from chain c join access_grant g on g.point_id = c.id and g.email = my_email
         union all
         select c.depth, g.level, 'everyone' from chain c join access_grant g on g.point_id = c.id and g.everyone
+        union all
+        select c.depth, g.level, 'owner' from chain c join access_grant g on g.point_id = c.id and g.owner
+        where exists (select 1 from "user" u where u.id = me and u.role = 'owner')
         union all
         select c.depth, g.level, 'organization ' || g.organization_id from chain c
         join access_grant g on g.point_id = c.id and g.organization_id = any(my_orgs)

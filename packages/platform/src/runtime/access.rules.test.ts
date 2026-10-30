@@ -340,6 +340,30 @@ describe("Static points", () => {
     await Promise.all(Array.from({ length: 6 }, () => applyStaticPoints(db, points)));
     expect(await count("access_grant", "point_id = $1", [id])).toBe(1);
   });
+
+  it("S10: a grant to the owner follows the owner role, in code and at runtime", async () => {
+    const site = `static-${uid()}`;
+    const [first, second, other] = [await w.user(), await w.user(), await w.user()];
+    const role = (user: string, value: string) => w.query(`update "user" set role = $2 where id = $1`, [user, value]);
+    await role(first, "owner");
+    await applyStaticPoints(db, { [site]: { grants: [{ to: { owner: true }, level: "manage" }] } });
+    expect(await w.as(first).level(site)).toBe("manage");
+    expect(await w.as(other).level(site)).toBe(null);
+    expect(await w.as(null).level(site)).toBe(null);
+    expect(await createAccess(db, async () => ({ userId: first, link: null, cap: "write" })).level(site)).toBe("write");
+    await role(first, "user");
+    await role(second, "owner");
+    expect(await w.as(first).level(site)).toBe(null);
+    expect(await w.as(second).level(site)).toBe("manage");
+    const doc = `doc-${uid()}`;
+    await w.as(other).create(doc);
+    await w.as(other).grant(doc, { owner: true }, "write");
+    expect(await w.as(second).level(doc)).toBe("write");
+    expect((await w.as(other).grants(doc)).map((g) => g.to)).toContainEqual({ owner: true });
+    await w.as(other).revoke(doc, { owner: true });
+    expect(await w.as(second).level(doc)).toBe(null);
+    await role(second, "user");
+  });
 });
 
 describe("Grants", () => {

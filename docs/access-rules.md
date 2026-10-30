@@ -63,6 +63,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | S7 | Everyone granted more than `read` | The start fails |
 | S8 | Several Workers start at once | One set of grants |
 | S9 | Writing them fails | The deploy stops before the Worker ships, leaving the running version in place |
+| S10 | A grant to `{ owner: true }`, in code or at runtime | Counts for whoever has the owner role when the check runs, so `owner reset` moves it; capped like any grant |
 
 ## Grants
 
