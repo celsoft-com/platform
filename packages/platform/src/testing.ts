@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -196,16 +196,28 @@ async function startPostgres(appDir: string): Promise<string> {
   const data = join(folder, "data");
   tool(bin("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
   tool(bin("pg_ctl"), ["-D", data, "-l", join(folder, "log"), "-w", "-o", `-k ${folder} -c listen_addresses='' -c fsync=off -c max_connections=200`, "start"]);
-  process.once("exit", () => {
-    try {
-      execFileSync(bin("pg_ctl"), ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
-    } catch {
-      // Already stopped.
-    }
-    void rm(folder, { recursive: true, force: true });
-  });
+  // vitest can end a test process without running its exit handlers, so a process of its own
+  // stops the server and removes its folder once this one is gone, however it ended.
+  spawn(process.execPath, ["-e", STOP_WHEN_GONE, String(process.pid), bin("pg_ctl"), data, folder], { detached: true, stdio: "ignore" }).unref();
   return `postgresql://postgres@localhost/postgres?host=${encodeURIComponent(folder)}`;
 }
+
+const STOP_WHEN_GONE = `
+const { execFileSync } = require("node:child_process");
+const { rmSync } = require("node:fs");
+const [pid, pgCtl, data, folder] = process.argv.slice(1);
+const timer = setInterval(() => {
+  try {
+    process.kill(Number(pid), 0);
+    return;
+  } catch {}
+  clearInterval(timer);
+  try {
+    execFileSync(pgCtl, ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
+  } catch {}
+  rmSync(folder, { recursive: true, force: true });
+}, 500);
+`;
 
 const databaseUrl = (base: string, name: string) => base.replace("/postgres?", `/${name}?`);
 
