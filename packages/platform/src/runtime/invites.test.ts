@@ -45,8 +45,10 @@ describe("Invite-only sign-up", () => {
     const first = address();
     const made = await signUp(first);
     expect(made.status).toBe(200);
+    expect(made.body.user.role).toBe("owner");
     owner = made.cookie;
     expect((await pool.query(`select role from "user" where email = $1`, [first])).rows[0].role).toBe("owner");
+    expect((await send("/api/auth/get-session", { cookie: owner })).body.user.role).toBe("owner");
     const stranger = await signUp(address());
     expect(stranger).toMatchObject({ status: 403, body: { message: INVITE_ONLY } });
     expect((await signUp(first)).body).toEqual(stranger.body);
