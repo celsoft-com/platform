@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { DrizzleMigrator } from "./adapters/drizzle.js";
@@ -18,7 +19,7 @@ import { featureVars } from "./wrangler-config.js";
 
 // Runs an app's real runtime for its tests: routing, access checks, token caps, validation and
 // auth are the platform's own code; only the cloud behind them is local. Postgres 18 for Neon,
-// started once per test process; a bucket in memory for R2; an outbox for Resend; and a list of
+// from the app's embedded-postgres or else the PATH, started once per test process; a bucket in memory for R2; an outbox for Resend; and a list of
 // what was published for live rooms, which take no WebSockets here.
 
 export const TEST_URL = "http://localhost";
@@ -153,7 +154,7 @@ let server: Promise<string> | undefined;
 const templates = new Map<string, Promise<string>>();
 
 async function freshDatabase(dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
-  const base = await (server ??= startPostgres());
+  const base = await (server ??= startPostgres(dir));
   let template = templates.get(dir);
   if (!template) templates.set(dir, (template = migratedTemplate(base, dir, config, staticPoints)));
   const name = await template;
@@ -174,17 +175,30 @@ async function migratedTemplate(base: string, dir: string, config: Config, stati
   return name;
 }
 
-async function startPostgres(): Promise<string> {
-  const version = tool("postgres", ["--version"], "testApp needs Postgres 18 or later to run the app's database; add `\"conda:postgresql\" = \"18.6\"` to [tools] in mise.toml, or install it");
+// Postgres's programs: from the app's embedded-postgres, which npm installs for this machine, or
+// else from the PATH, for a project that installs Postgres its own way.
+function postgresBin(appDir: string): (program: string) => string {
+  try {
+    const wrapper = createRequire(join(appDir, "package.json")).resolve("embedded-postgres");
+    const binaries = createRequire(wrapper).resolve(`@embedded-postgres/${process.platform}-${process.arch}`);
+    return (program) => join(dirname(dirname(binaries)), "native", "bin", program);
+  } catch {
+    return (program) => program;
+  }
+}
+
+async function startPostgres(appDir: string): Promise<string> {
+  const bin = postgresBin(appDir);
+  const version = tool(bin("postgres"), ["--version"], `testApp needs Postgres 18 or later: add embedded-postgres to the app's devDependencies, as \`new\` and \`upgrade\` do, or put Postgres 18 on the PATH`);
   const major = Number(/(\d+)\./.exec(version)?.[1]);
   if (!(major >= 18)) throw new Error(`testApp needs Postgres 18 or later, as Neon runs; found ${version.trim()}`);
   const folder = await mkdtemp(join(tmpdir(), "platform-pg-"));
   const data = join(folder, "data");
-  tool("initdb", ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
-  tool("pg_ctl", ["-D", data, "-l", join(folder, "log"), "-w", "-o", `-k ${folder} -c listen_addresses='' -c fsync=off -c max_connections=200`, "start"]);
+  tool(bin("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
+  tool(bin("pg_ctl"), ["-D", data, "-l", join(folder, "log"), "-w", "-o", `-k ${folder} -c listen_addresses='' -c fsync=off -c max_connections=200`, "start"]);
   process.once("exit", () => {
     try {
-      execFileSync("pg_ctl", ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
+      execFileSync(bin("pg_ctl"), ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
     } catch {
       // Already stopped.
     }
