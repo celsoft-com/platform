@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Start an app the documented way from the locally packed platform: install, skills, new; then type-check it and generate its migrations"
+#MISE description="Start an app the documented way from the locally packed platform: install, skills, new; then type-check it, generate its migrations and run its tests"
 #MISE depends=["build"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
@@ -25,7 +25,9 @@ npx --no-install tsc -p .
 npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null
 ls drizzle/*.sql >/dev/null
+test -f mise.toml
+npm test
 test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
 grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
 grep -q "^.claude/skills/celsoft-platform\*/$" .gitignore
-echo "✓ an app started from the package gets its skills, previews new without writing, gets its files from new, type-checks, and generates its migrations"
+echo "✓ an app started from the package gets its skills, previews new without writing, gets its files from new, type-checks, generates its migrations, and passes its tests"

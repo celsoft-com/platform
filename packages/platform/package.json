@@ -21,7 +21,8 @@
     "./schema": "./dist/schema.js",
     "./live": "./dist/runtime/live-client.js",
     "./client": "./dist/runtime/client.js",
-    "./vite": "./dist/vite.js"
+    "./vite": "./dist/vite.js",
+    "./testing": "./dist/testing.js"
   },
   "files": [
     "dist",
