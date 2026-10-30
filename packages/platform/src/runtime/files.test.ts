@@ -1,35 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFiles, type FilesBucket, type StoredObject } from "./files.js";
-
-function memoryBucket(): FilesBucket & { keys(): string[] } {
-  const store = new Map<string, { text: string; contentType?: string }>();
-  return {
-    keys: () => [...store.keys()].sort(),
-    async put(key, value, options) {
-      store.set(key, { text: String(value), ...(options?.httpMetadata?.contentType && { contentType: options.httpMetadata.contentType }) });
-    },
-    async get(key) {
-      const item = store.get(key);
-      if (!item) return null;
-      return { body: new Response(item.text).body!, size: item.text.length, httpMetadata: { contentType: item.contentType }, text: async () => item.text } as StoredObject;
-    },
-    async delete(key) {
-      store.delete(key);
-    },
-    async list({ prefix, delimiter }) {
-      const objects = [];
-      const folders = new Set<string>();
-      for (const key of [...store.keys()].sort()) {
-        if (!key.startsWith(prefix)) continue;
-        const rest = key.slice(prefix.length);
-        const cut = rest.indexOf(delimiter);
-        if (cut >= 0) folders.add(prefix + rest.slice(0, cut + 1));
-        else objects.push({ key, size: store.get(key)!.text.length, uploaded: new Date(0) });
-      }
-      return { objects, delimitedPrefixes: [...folders], truncated: false };
-    },
-  };
-}
+import { createFiles, memoryBucket } from "./files.js";
 
 describe("createFiles", () => {
   it("stores JSON and lists folders like a file browser", async () => {
@@ -49,7 +19,7 @@ describe("createFiles", () => {
     const files = createFiles({ FILES: bucket, FILES_PREFIX: "pr-7/" });
     await files.put("a/b.txt", "x");
 
-    expect(bucket.keys()).toEqual(["pr-7/a/b.txt"]);
+    expect((await bucket.list({ prefix: "", delimiter: "" })).objects.map((o) => o.key)).toEqual(["pr-7/a/b.txt"]);
     expect(await files.list("a")).toMatchObject({ files: [{ path: "a/b.txt" }] });
   });
 
@@ -65,5 +35,27 @@ describe("createFiles", () => {
     expect(response.headers.get("content-type")).toBe("text/plain");
     expect(await response.text()).toBe("hello");
     expect((await files.response("missing")).status).toBe(404);
+  });
+
+  it("keeps metadata with a file and returns it", async () => {
+    const files = createFiles({ FILES: memoryBucket() });
+    await files.put("assets/7f3a.png", new Uint8Array([1, 2, 3]).buffer, { contentType: "image/png", metadata: { name: "Logo.PNG" } });
+    const stored = await files.get("assets/7f3a.png");
+    expect(stored).toMatchObject({ size: 3, httpMetadata: { contentType: "image/png" }, metadata: { name: "Logo.PNG" } });
+    await files.put("plain.txt", "x");
+    expect((await files.get("plain.txt"))!.metadata).toEqual({});
+  });
+
+  it("lists a folder a page at a time, folders and files in key order", async () => {
+    const files = createFiles({ FILES: memoryBucket(), FILES_PREFIX: "pr-7/" });
+    for (const name of ["a", "b", "c", "d", "e"]) await files.put(`items/${name}.json`, "{}");
+    await files.put("items/sub/x.json", "{}");
+    const first = await files.list("items", { limit: 4 });
+    expect(first.files.map((f) => f.path)).toEqual(["items/a.json", "items/b.json", "items/c.json", "items/d.json"]);
+    expect(first.cursor).toBeTypeOf("string");
+    const second = await files.list("items", { limit: 4, cursor: first.cursor });
+    expect(second).toMatchObject({ files: [{ path: "items/e.json" }], folders: ["items/sub/"] });
+    expect(second.cursor).toBeUndefined();
+    await expect(files.list("items", { limit: 1001 })).rejects.toThrow(/1 to 1000/);
   });
 });
