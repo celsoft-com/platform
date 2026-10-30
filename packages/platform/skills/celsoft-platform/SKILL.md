@@ -219,6 +219,8 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Change** `src/schema.ts`, then run `npx @celsoft/platform db generate`; read and commit the SQL in `drizzle/`.
    For data changes, `db generate --custom <name>` writes an empty migration to fill with SQL; it is the one `drizzle/` file you edit, before it is deployed.
+   When a table, column or other name disappears as another appears, drizzle-kit asks whether it was renamed; `db generate` stops, writes nothing, and lists each question with the flags that answer it.
+   Answer with `--rename <old>=<new>` or `--create <new>`, such as `--rename users=accounts` or `--rename accounts.full_name=accounts.name`, and run it again; a renamed table can raise new questions about its columns.
 2. **Deploy** applies new migrations; it stops before any change when the schema has changes with no generated migration.
 3. **Auth tables** come from the platform; reference users with `user.id` from `@celsoft/platform/schema`.
 4. **Ids** are `uuid` filled by Postgres's `uuidv7()`; never supply them.
@@ -269,7 +271,7 @@ it("lists items to the signed-in person", async () => {
 | `skills` | Copies these skills into `.claude/skills/`; also runs on install |
 | `new` | Writes a new app's files; see `celsoft-platform-setup` |
 | `dev` | Runs the app locally on its own `dev` database branch; starts the `dev` script beside it, with `plugins: [platform()]` from `@celsoft/platform/vite` |
-| `db generate` | Writes migrations for schema changes |
+| `db generate` | Writes migrations for schema changes; `--rename <old>=<new>` and `--create <new>` answer its rename questions |
 | `generate` | Rewrites `.platform/`; also runs on install |
 | `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
 | `previews` | Lists the previews that exist |

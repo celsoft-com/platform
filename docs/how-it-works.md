@@ -122,7 +122,7 @@ flowchart LR
 2. **Platform tables:** user, session, account, verification and the team tables, from `@celsoft/platform/schema`, included when `auth` is on.
 3. **Linking:** app tables may reference platform ones, such as `user.id`.
 4. **Helpers:** `id()` gives a `uuidv7()` primary key and `timestamps()` gives `created_at` and `updated_at`.
-5. **Generate:** `npx @celsoft/platform db generate` compares both sets of tables with the last migration and writes the difference to `drizzle/`; `--custom <name>` writes an empty migration for the app's own SQL, such as moving data, the one `drizzle/` file the app edits.
+5. **Generate:** `npx @celsoft/platform db generate` compares both sets of tables with the last migration and writes the difference to `drizzle/`; `--custom <name>` writes an empty migration for the app's own SQL, such as moving data, the one `drizzle/` file the app edits; when drizzle-kit asks whether something was renamed, it stops and lists the `--rename <old>=<new>` and `--create <new>` flags that answer it.
 6. **Apply:** deploy applies new migrations under a lock, and stops before any change if `db generate` was not run.
 7. **Platform SQL:** after migrations, deploy and `dev` install the platform's access triggers and functions and write the app's static points, so no request ever does.
 8. **Previews:** each PR gets its own copy of the prod database, so migrations are tried there first.

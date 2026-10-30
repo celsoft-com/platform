@@ -10,7 +10,7 @@ import { commentPreviewLink, GhCli } from "./adapters/github.js";
 import { NeonApi } from "./adapters/neon.js";
 import { R2Registry } from "./adapters/registry.js";
 import { ResendApi } from "./adapters/resend.js";
-import { DrizzleMigrator } from "./adapters/drizzle.js";
+import { DrizzleMigrator, MigrationQuestions } from "./adapters/drizzle.js";
 import { queryStats, runSqlFile } from "./adapters/database.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
@@ -36,6 +36,8 @@ commands:
   dev              run the app locally against its own Neon branch
   db generate      write migrations for changes to the platform's tables and src/schema.ts
                    --custom <name> writes an empty one for SQL of your own, such as moving data
+                   --rename <old>=<new> and --create <new> answer drizzle-kit's "created or renamed?"
+                   questions, such as --rename users=accounts or --rename accounts.full_name=accounts.name
   generate         write the .platform/ files the app's code imports, such as the browser client
   upgrade          rewrite an older platform.jsonc to the current shape, and add what new now writes
   deploy           deploy prod
@@ -64,7 +66,7 @@ async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, name: { type: "string" }, hostname: { type: "string" }, help: { type: "boolean", short: "h" } },
+    options: { "dry-run": { type: "boolean", default: false }, custom: { type: "string" }, rename: { type: "string", multiple: true }, create: { type: "string", multiple: true }, data: { type: "boolean", default: false }, pr: { type: "string" }, reset: { type: "boolean", default: false }, dir: { type: "string", default: "." }, name: { type: "string" }, hostname: { type: "string" }, help: { type: "boolean", short: "h" } },
   });
   if (values.help || positionals.length === 0) {
     console.log(usage);
@@ -133,7 +135,14 @@ async function main(argv: string[]): Promise<void> {
   if (command.name === "db generate") {
     const custom = values.custom;
     if (custom !== undefined && !/^[a-z0-9][a-z0-9_-]*$/.test(custom)) throw new UsageError("--custom takes a name of lowercase letters, digits, - and _, such as place-notes");
-    await new DrizzleMigrator(appDir, app.config).generate(custom);
+    if (custom !== undefined && (values.rename || values.create)) throw new UsageError("--custom writes an empty migration, so drizzle-kit asks nothing; drop --rename and --create");
+    const renames: Record<string, string> = {};
+    for (const flag of values.rename ?? []) {
+      const [from, to, more] = flag.split("=");
+      if (!from || !to || more !== undefined) throw new UsageError(`--rename takes <old>=<new>, such as users=accounts or accounts.full_name=accounts.name; got ${flag}`);
+      renames[to] = from;
+    }
+    await new DrizzleMigrator(appDir, app.config).generate({ custom, answers: { renames, creates: values.create ?? [] } });
     return;
   }
   // The app's code imports these, so they are fresh for every run that builds or serves it.
@@ -470,7 +479,7 @@ const MIN_NODE = 24;
 const SETUP_SKILL = join(AGENT_SKILLS_DIR, "celsoft-platform-setup", "SKILL.md");
 
 main(process.argv.slice(2)).catch((error: unknown) => {
-  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError || error instanceof HttpsError;
+  const known = error instanceof ConfigError || error instanceof PreflightError || error instanceof UsageError || error instanceof HttpsError || error instanceof MigrationQuestions;
   console.error(`✗ ${known ? (error as Error).message : error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
   process.exit(1);
 });

@@ -205,7 +205,7 @@ A published CLI, runtime library and app template that create and reuse each app
     4. **`preview`**: creates or updates a PR's preview.
     5. **`cleanup`**: deletes a PR's preview.
     6. **`ci`**: run by the workflow; reads the GitHub event and runs `deploy`, `preview` or `cleanup`.
-    7. **`db generate`**: writes new migrations from the platform's tables and the app's schema; `--custom <name>` writes an empty one the app fills with its own SQL, such as moving data.
+    7. **`db generate`**: writes new migrations from the platform's tables and the app's schema; `--custom <name>` writes an empty one the app fills with its own SQL, such as moving data; `--rename <old>=<new>` and `--create <new>` answer drizzle-kit's rename questions.
     8. **`destroy`**: deletes everything the platform created for an app, prod and previews; `--data` also drops the prod database's tables. It lists what will go, makes the user type the app's name, then asks a final Y/N.
     9. **`upgrade`**: the one command that rewrites an older `platform.jsonc` to the current shape, and adds what `new` now writes that the app lacks, never changing what the app has: a test script and vitest when it has no test script, and `embedded-postgres` when it has none.
     10. **`previews`**: lists every preview that exists, with its pull request's state and the pieces found; changes nothing.
@@ -236,10 +236,14 @@ A published CLI, runtime library and app template that create and reuse each app
     1. **Tables**: the app defines its tables with Drizzle in `src/schema.ts` and references users through `user` from `@celsoft/platform/schema`.
     2. **Generate**: `platform db generate` (and `platform dev` on start) runs `drizzle-kit` over the platform's tables, auth when on, and the app's file, writing timestamped SQL files to `drizzle/` for the app to review and commit.
     3. **Apply**: every deploy applies new files with Drizzle's migrator, against prod after its backup, each PR's own branch, or the `dev` branch locally; the app has no migration script or setting.
-    4. **Check**: `platform ci` stops a run whose schema has changes with no generated migration; CI never generates, because rename prompts need a person.
-    5. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
-    6. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
-    7. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
+    4. **Check**: `platform ci` stops a run whose schema has changes with no generated migration; CI never generates, because whether a name was renamed is the app's call.
+    5. **Renames**: when a name disappears as another appears, drizzle-kit asks whether it was renamed; the platform never shows its terminal prompt, and answers from `--rename <old>=<new>` and `--create <new>` instead.
+        1. **Unanswered**: `db generate`, and `dev` on start, stop with each question and the flags that answer it, and write nothing to `drizzle/`.
+        2. **Unused**: a flag that answers no question stops the run the same way, so a typo never passes silently.
+        3. **Pinned**: the answers reach drizzle-kit by rewriting its prompt call as it loads, so the platform pins drizzle-kit's exact version and stops with that fix if the call is not found.
+    6. **Shape**: every table's id is a `uuid` filled by Postgres's `uuidv7()`, with snake_case columns and `created_at` and `updated_at`.
+    7. **Upgrades**: a platform release that changes its tables shows up as a new generated migration in the app.
+    8. **Edits**: the platform does not guard against editing a migration that already ran; the app owns its migration history.
 5. **Platform provides**: through `defineApp` in the runtime library. How it stays fast on the same hardware is in [performance.md](performance.md).
     1. **Database**: `app.db`, a Drizzle client typed with the app's schema, over one `pg` pool shared with auth.
     2. **Auth routes**: every `/api/auth/*` route (sign-up, sign-in, sign-out, verification, password reset).

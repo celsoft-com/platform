@@ -115,8 +115,14 @@ export interface Wrangler {
   dev(wranglerConfig: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void>;
 }
 
+// `custom` names an empty migration for the app's own SQL; `answers` says, for each name
+// drizzle-kit asks about, that it was created or which name it was renamed from.
+export type GenerateOptions = { custom?: string; answers?: Answers };
+// Keyed by the name asked about: `renames` maps it to the old name, `creates` lists new ones.
+export type Answers = { renames: Record<string, string>; creates: string[] };
+
 export interface Migrator {
-  generate(custom?: string): Promise<void>;
+  generate(options?: GenerateOptions): Promise<void>;
   upToDate(): Promise<boolean>;
   migrate(databaseUrl: string): Promise<void>;
   // Installs the platform's access triggers and writes the app's static control points, read from
