@@ -3,6 +3,7 @@ import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { experimental_ZodSmartCoercionPlugin } from "@orpc/zod/zod4";
 import type { z } from "zod";
 import { rank, type Access, type Level } from "./access.js";
+import type { Cache } from "./cache.js";
 import { EndpointError } from "./endpoint-error.js";
 import type { AppContext } from "./index.js";
 
@@ -28,7 +29,13 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   // a 403; "anon" lets in anyone at all. Over the API the path agrees, so an "anon" endpoint sits
   // under /api/public/ and a `{ level }` one never does. Every endpoint says one of them.
   access?: EndpointAccess<z.output<Input>>;
+  // The cached pages a successful call empties, once the handler returns and before the answer
+  // goes out: "all" clears every page, a list or a function of the input and output names paths,
+  // and [] empties none. Without it, the app's `invalidates` applies to every endpoint but a GET.
+  invalidates?: Invalidates<z.output<Input>, z.input<Output>>;
 }
+
+export type Invalidates<In = any, Out = any> = "all" | readonly string[] | ((input: In, output: Out) => readonly string[] | Promise<readonly string[]>);
 
 // A point is an input field, or a function of the input returning one id or a list, sync or async;
 // with a list, the first point that exists decides.
@@ -50,7 +57,9 @@ export function endpoint<Input extends z.ZodType, Output extends z.ZodType, App 
   handler: (input: z.output<Input>, app: App) => z.input<Output> | Promise<z.input<Output>>,
 ): Endpoint<Input, Output, App> {
   const shape = (definition.input as { shape?: Record<string, unknown> }).shape;
-  checkAccessDeclaration(definition.access, shape && Object.keys(shape), definition.path ? `the endpoint at ${definition.path}` : "an endpoint");
+  const what = definition.path ? `the endpoint at ${definition.path}` : "an endpoint";
+  checkAccessDeclaration(definition.access, shape && Object.keys(shape), what);
+  checkInvalidates(definition.invalidates, what);
   return { ...definition, handler };
 }
 
@@ -67,10 +76,37 @@ export function requireDeclaredAccess(endpoints: Record<string, { access?: unkno
   if (names.length > 0) throw new Error(`${names.map((n) => `endpoint ${n}`).join(", ")} declare no access; add access: { level: "read" } (or "create", "write", "delete", "manage") for anyone signed in, { point, level } or "anon"`);
 }
 
-// Runs one endpoint's function for either door, after its access check.
+// Throws when `invalidates` is neither "all", a list of paths nor a function; `what` names its owner.
+export function checkInvalidates(invalidates: unknown, what: string): void {
+  if (invalidates === undefined || invalidates === "all" || typeof invalidates === "function") return;
+  if (!Array.isArray(invalidates) || invalidates.some((path) => typeof path !== "string")) throw new Error(`${what}'s invalidates is "all", a list of paths such as ["/stats"], or a function of the input and output returning one`);
+}
+
+// Gives every endpoint that sets no `invalidates` the app's, except a GET, which changes nothing.
+export function withInvalidates<T extends Record<string, { method?: Method; invalidates?: Invalidates }>>(endpoints: T, invalidates: "all" | readonly string[] | undefined): T {
+  if (invalidates === undefined) return endpoints;
+  checkInvalidates(invalidates, "the app");
+  return Object.fromEntries(Object.entries(endpoints).map(([name, e]) => [name, e.invalidates !== undefined || e.method === "GET" ? e : { ...e, invalidates }])) as T;
+}
+
+// Runs one endpoint's function for either door, after its access check, then empties the cached
+// pages it declares; a failed handler empties nothing.
 export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
   await requireAccess(e.access, input, app);
-  return e.handler(input as z.output<z.ZodType>, app);
+  const output = await e.handler(input as z.output<z.ZodType>, app);
+  if (e.invalidates !== undefined) await invalidate(e.invalidates, input, output, (app as { cache: Cache }).cache);
+  return output;
+}
+
+// A write that succeeded still answers success when emptying fails; its pages expire within `seconds`.
+async function invalidate(invalidates: Invalidates, input: unknown, output: unknown, cache: Cache): Promise<void> {
+  try {
+    const paths = typeof invalidates === "function" ? await invalidates(input, output) : invalidates;
+    if (paths === "all") await cache.clear();
+    else for (const path of new Set(paths)) await cache.invalidate(path);
+  } catch (error) {
+    console.error("emptying cached pages after an endpoint failed; they expire within their seconds", error);
+  }
 }
 
 // The check an endpoint or a page declares, run against its input. "anon" checks nothing; `{ level }`

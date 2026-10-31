@@ -98,7 +98,6 @@ async function addGroupNote(app: App<typeof schema>, values: { organizationId: s
     await app.access.in(tx).create(row!.id, { parent: point, inherit: true });
     return row!;
   });
-  await app.cache.invalidate("/stats");
   const note = { ...inserted, author: user.name };
   // Saved first; the announcement only tells the group's open pages.
   await app.live.publish(point, { type: "note", note });
@@ -231,23 +230,21 @@ export default defineApp(
           input: NoteId.extend({ body: z.string().trim().min(1).max(10000) }),
           output: SharedNote,
           access: { point: "id", level: "write" },
+          invalidates: ({ id }) => [`/print/${id}`],
         },
         async ({ id, body }, app) => {
           await app.db.update(notes).set({ body, updatedAt: new Date() }).where(eq(notes.id, id));
-          await app.cache.invalidate(`/print/${id}`);
           return sharedNote(app, id);
         },
       ),
       // Removes the note's point and every point under it, then those notes and their files.
-      deleteNote: endpoint({ method: "DELETE", path: "/api/notes/:id", input: NoteId, output: z.object({ deleted: z.number() }), access: { point: "id", level: "delete" } }, async ({ id }, app) => {
+      // Every note under it goes too, each with its own printed page, so the whole cache is emptied.
+      deleteNote: endpoint({ method: "DELETE", path: "/api/notes/:id", input: NoteId, output: z.object({ deleted: z.number() }), access: { point: "id", level: "delete" }, invalidates: "all" }, async ({ id }, app) => {
         const gone = await app.db.transaction(async (tx) => {
           const ids = (await app.access.in(tx).remove(id)).filter((x) => z.uuid().safeParse(x).success);
           if (ids.length === 0) return [];
           return tx.delete(notes).where(inArray(notes.id, ids)).returning({ id: notes.id, userId: notes.userId, attachmentName: notes.attachmentName });
         });
-        // The count on /stats changed; a cached copy goes now, not in a minute.
-        if (gone.length > 0) await app.cache.invalidate("/stats");
-        for (const note of gone) await app.cache.invalidate(`/print/${note.id}`);
         for (const note of gone) if (note.attachmentName) await app.files.delete(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`).catch(() => {});
         return { deleted: gone.length };
       }),
@@ -407,6 +404,7 @@ export default defineApp(
           input: OrgId.extend({ body: z.string().trim().min(1).max(10000) }),
           output: GroupNote,
           access: { point: ({ organization }) => organizationPoint(organization), level: "create" },
+          invalidates: ["/stats"],
         },
         async ({ organization, body }, app) => addGroupNote(app, { organizationId: organization, teamId: null }, organizationPoint(organization), body),
       ),
@@ -431,6 +429,7 @@ export default defineApp(
           input: TeamId.extend({ body: z.string().trim().min(1).max(10000) }),
           output: GroupNote,
           access: { point: ({ team: id }) => teamPoint(id), level: "create" },
+          invalidates: ["/stats"],
         },
         async ({ team: id, body }, app) => {
           const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, id));

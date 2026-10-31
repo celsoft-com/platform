@@ -7,7 +7,7 @@ import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, sh
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, requireDeclaredAccess, tokenCaps, type Endpoint } from "./endpoints.js";
+import { apiHandler, requireDeclaredAccess, tokenCaps, withInvalidates, type Endpoint } from "./endpoints.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import type { z } from "zod";
@@ -27,7 +27,7 @@ export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Acce
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
-export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
+export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Invalidates, type Method } from "./endpoints.js";
 export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
@@ -111,6 +111,8 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   schema?: Schema;
   // Typed functions served over the API, MCP or both; see `endpoint`.
   endpoints?: Record<string, Endpoint<any, any, AppContext<Env, Schema>>>;
+  // The cached pages every endpoint but a GET empties after it succeeds, unless it sets its own.
+  invalidates?: "all" | readonly string[];
   // Paths the Worker renders on each request; see `page`.
   pages?: Page[];
   screens?: { stylesheet?: string };
@@ -167,10 +169,11 @@ export function defineApp<
   const onMessage = options.live?.onMessage;
   const check = messageCheck(options.live?.message);
   const handle = handler ?? (notFound as Handler<Env, Schema>);
-  const api = apiHandler(options.endpoints ?? {});
+  const endpoints = withInvalidates(options.endpoints ?? {}, options.invalidates);
+  const api = apiHandler(endpoints);
   const once: Once = {};
   const pages = pageServer(options.pages ?? []);
-  requireDeclaredAccess(options.endpoints ?? {});
+  requireDeclaredAccess(endpoints);
   const undeclared = pages?.undeclared ?? [];
 
   // One request, answered; `trace` collects where its time goes.
@@ -569,7 +572,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
     const { serveMcp } = await import("./mcp-server.js");
-    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
+    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, withInvalidates(options.endpoints ?? {}, options.invalidates));
   } finally {
     close();
   }

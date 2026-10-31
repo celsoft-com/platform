@@ -122,10 +122,14 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
     4. **Same for everyone who passes:** the gate runs on every request, hit or miss, before the cache; everyone who passes gets the kept copy, so a page's HTML must depend only on the URL and the data, never on cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
     5. **Drafts and per-person content:** the handler is blind and a query string picks a copy, never who may see it, so `/p?preview` renders for anyone `/p`'s gate lets in, cached or not. Content only some may see, such as drafts, gets its own route gated to them, such as `/preview/*path` with `{ point, level: "write" }`; anything that depends on who is looking is rendered in the browser from an endpoint.
     6. **Uncached answers:** an HTML string goes out `no-store`; a `Response` the handler returns keeps its own headers, so never give it `cache-control: public`.
-    7. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
-    8. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
-    9. **Deploys:** every deploy starts empty.
-    10. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
+    7. **Emptying it from endpoints:** an endpoint declares what it empties, and the platform empties it once the handler succeeds, before the answer goes out, over the API and MCP alike; a failed handler empties nothing.
+       - `invalidates: ["/stats"]`, or `({ id }, output) => [`/print/${id}`]`, empties those pages, every query string of each.
+       - `invalidates: "all"` empties every page; `[]` empties none.
+       - `defineApp(handler, { invalidates: "all" })` applies to every endpoint but a GET that sets none of its own, so a write never forgets.
+    8. **Emptying it by hand:** in hand-written routes, live messages and jobs, after the write commits, `await app.cache.invalidate("/stats")` or `await app.cache.clear()`; both reach every data center within a second and need a database.
+    9. **Which to use:** both cost one tiny query; `invalidate` keeps every other page cached, and `clear` makes every page render once more on its next visit, so an app whose templates span pages may clear on every write.
+    10. **Deploys:** every deploy starts empty.
+    11. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
