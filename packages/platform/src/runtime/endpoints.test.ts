@@ -57,10 +57,10 @@ describe("endpoints over the API", () => {
     expect(response).toEqual({ status: 200, body: { id: 1, folder: "work", body: "hi", urgent: false } });
   });
 
-  it("refuses bad input with 400 and an error", async () => {
+  it("refuses bad input with 400 and an error naming the field", async () => {
     const response = await call("/api/public/notes/abc");
     expect(response.status).toBe(400);
-    expect(response.body.error).toMatch(/validation/i);
+    expect(response.body.error).toMatch(/^id: /);
   });
 
   it("turns EndpointError into its status and message", async () => {
