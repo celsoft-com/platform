@@ -357,6 +357,17 @@ export interface AccessOptions {
   memo?: Map<string, number>;
 }
 
+// Runs a write with the request's remembered levels forgotten before and after it, since it can
+// change any of them; shared by every module whose writes change who may do what.
+export async function forgetting<T>(memo: Map<string, number> | undefined, write: () => Promise<T>): Promise<T> {
+  memo?.clear();
+  try {
+    return await write();
+  } finally {
+    memo?.clear();
+  }
+}
+
 // The calls that change access, after which no level found earlier can be trusted.
 const WRITES = ["create", "move", "remove", "inherit", "grant", "revoke", "link", "revokeLink"] as const;
 
@@ -605,12 +616,7 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       const write = api[name] as (...args: unknown[]) => Promise<unknown>;
       (api as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
         if (me === everyone) throw new Error(`app.access.asEveryone() only reads; ${name} needs the caller's own app.access`);
-        memo.clear();
-        try {
-          return await write(...args);
-        } finally {
-          memo.clear();
-        }
+        return forgetting(memo, () => write(...args));
       };
     }
     return api;

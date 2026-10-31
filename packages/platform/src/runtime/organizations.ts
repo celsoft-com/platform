@@ -1,6 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { createAccess, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
+import { createAccess, forgetting, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
 import { EndpointError, refusal } from "./endpoint-error.js";
 
 // The platform's own organizations, teams, members and invitations; see docs/design.md, Auth
@@ -118,7 +118,11 @@ function email(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
-export function createOrganizations(db: Db, caller: () => Promise<Caller>, notify?: (notice: InvitationNotice) => Promise<void>): Organizations {
+// Calls that can change who belongs where, and so any level the request found earlier: each
+// forgets `memo`, the request's remembered levels, before and after, as access's own writes do.
+const WRITES = ["create", "rename", "remove", "removeMember", "invite", "revokeInvitation", "accept", "decline", "createTeam", "renameTeam", "removeTeam", "addToTeam", "removeFromTeam"] as const;
+
+export function createOrganizations(db: Db, caller: () => Promise<Caller>, notify?: (notice: InvitationNotice) => Promise<void>, memo?: Map<string, number>): Organizations {
   const access: Access = createAccess(db, caller);
 
   async function me(): Promise<string> {
@@ -164,7 +168,7 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
           from member m join "user" u on u.id = m.user_id where ${where} order by u.name, u.id`,
     ).then((found) => found.map((r) => ({ userId: r.user_id, name: r.name, email: r.email, admin: Boolean(r.admin) })));
 
-  return {
+  const api: Organizations = {
     async create(input) {
       const creator = await me();
       const orgName = name(input?.name);
@@ -380,6 +384,11 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
       });
     },
   };
+  for (const name of WRITES) {
+    const write = api[name] as (...args: unknown[]) => Promise<unknown>;
+    (api as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => forgetting(memo, () => write(...args));
+  }
+  return api;
 }
 
 export const PLATFORM_API = "/api/platform/";

@@ -433,7 +433,7 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
     },
     get organizations() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      return (organizations ??= forgetLevelsOnChange(levels, createOrganizations(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
+      return (organizations ??= createOrganizations(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
         app.waitUntil(
           resources.email
             .send({
@@ -443,7 +443,8 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
             })
             .catch((error) => console.error("invitation email failed", error)),
         ),
-      )));
+        levels,
+      ));
     },
     session() {
       const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? resources.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
@@ -463,27 +464,6 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
   };
   if (cap) tokenCaps.set(app, cap);
   return app;
-}
-
-// Organization calls that only read; every other call can change who belongs where, and so any
-// level found earlier in the request.
-const ORGANIZATION_READS = new Set(["list", "get", "requireMember", "members", "invitations", "myInvitations", "team", "teams", "teamMembers"]);
-
-function forgetLevelsOnChange(levels: Map<string, number>, organizations: Organizations): Organizations {
-  return new Proxy(organizations, {
-    get(target, key) {
-      const value = Reflect.get(target, key);
-      if (typeof value !== "function" || ORGANIZATION_READS.has(String(key))) return value;
-      return async (...args: unknown[]) => {
-        levels.clear();
-        try {
-          return await value.apply(target, args);
-        } finally {
-          levels.clear();
-        }
-      };
-    },
-  });
 }
 
 // A session for a caller proved some other way than a cookie, such as an OAuth or API token.
