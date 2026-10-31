@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { RESERVED } from "./routes.js";
 import { EndpointError } from "./endpoint-error.js";
 import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
@@ -56,7 +57,6 @@ const PARAM = /^:([A-Za-z_][A-Za-z0-9_]*)$/;
 const REST = /^\*([A-Za-z_][A-Za-z0-9_]*)$/;
 
 // Claimed by the platform itself; a page under one would never be reached, or would hide it.
-const RESERVED = ["/api", "/mcp", "/.well-known", "/login", "/signup", "/forgot", "/reset", "/consent", "/tokens"];
 
 // One route with typed, checked parameters, an access gate, or cached; plain functions in
 // `routes` get their parameters as strings and declare no access.
@@ -144,6 +144,8 @@ export interface PageServer {
   undeclared: string[];
   // Whether a path is a claimed one.
   owns(pathname: string): boolean;
+  // Whether one of the routes matches a path, before its params, gate or handler are run.
+  routes(pathname: string): boolean;
   // The answer for a claimed path, or undefined for any other. `canSignIn` says the app has
   // sign-in screens to offer refused visitors; `cache` holds the answers of routes that ask.
   handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean, cache?: PageCache): Promise<Response | undefined>;
@@ -182,25 +184,35 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
 
   // The root claims `/` alone; any other claim, its path and everything below it.
   const claimOf = (pathname: string) => claims.find((c) => pathname === c || (c !== ROOT && pathname.startsWith(`${c}/`)));
+  // The claim's route matching a path, undefined for none, or null for a path that cannot be decoded.
+  const routeOf = (claim: string, pathname: string) => {
+    const rest = claim === ROOT ? "" : pathname.slice(claim.length).replace(/\/$/, "");
+    let parts: string[];
+    try {
+      parts = rest === "" ? [] : rest.slice(1).split("/").map(decodeURIComponent);
+    } catch {
+      return null;
+    }
+    const found = compiled.get(claim)!.find((c) => matches(c.segments, parts));
+    return found && { found, parts };
+  };
   return {
     claims,
     undeclared,
     owns: (pathname) => claimOf(pathname) !== undefined,
+    routes(pathname) {
+      const claim = claimOf(pathname);
+      return claim !== undefined && Boolean(routeOf(claim, pathname));
+    },
     async handle(request, url, app, canSignIn, cache) {
       const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
-      const rest = claim === ROOT ? "" : url.pathname.slice(claim.length).replace(/\/$/, "");
       // A missing page and a refused one get the same answer, so neither says which paths hold something.
       const refuse = async () => html(refusedPage(url, canSignIn && !(await app.session().catch(() => null))), 404);
-      let parts: string[];
-      try {
-        parts = rest === "" ? [] : rest.slice(1).split("/").map(decodeURIComponent);
-      } catch {
-        return refuse();
-      }
-      const found = compiled.get(claim)!.find((c) => matches(c.segments, parts));
-      if (!found) return refuse();
+      const matched = routeOf(claim, url.pathname);
+      if (!matched) return refuse();
+      const { found, parts } = matched;
       const raw = Object.fromEntries(found.segments.flatMap((s, i) => (s.param ? [[s.param, parts[i]!]] : s.rest ? [[s.rest, parts.slice(i).join("/")]] : [])));
       let params: unknown = raw;
       if (found.route.params) {
@@ -300,6 +312,9 @@ const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCode
 function errorPage(status: number, message: string, extra = ""): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
 }
+
+// The one 404 page, for any path outside /api/ that nothing answers, as for a missing page.
+export const notFoundPage = (url: URL, signedOut: boolean) => html(refusedPage(url, signedOut), 404);
 
 // The one answer for a page that is missing or refused. A signed-out visitor is offered sign-in
 // and sign-up, which return here, and is never sent anywhere unasked. Its script takes a `link=`

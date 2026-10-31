@@ -7,7 +7,8 @@ import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, sh
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, requireDeclaredAccess, tokenCaps, type Endpoint } from "./endpoints.js";
+import { apiHandler, getMatcher, requireDeclaredAccess, tokenCaps, withInvalidates, type Endpoint } from "./endpoints.js";
+import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import type { z } from "zod";
@@ -15,7 +16,7 @@ import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH,
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
-import { pageServer, type Page, type PageCache } from "./pages.js";
+import { notFoundPage, pageServer, type Page, type PageCache } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { createInvites, INVITE_ONLY, INVITES_API, INVITES_PATH, serveInvites, signupAllowed, type Invites } from "./invites.js";
 import { isScreen, renderInvitesScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
@@ -27,14 +28,16 @@ export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Acce
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
-export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Method } from "./endpoints.js";
+export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Invalidates, type Method } from "./endpoints.js";
 export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
 export { jsonPath, query } from "./jsonpath.js";
+export { upload, type UploadOptions } from "./upload.js";
 export type { QueryOptions, QueryResult } from "./jsonpath.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
+export type { Routes, Served } from "./routes.js";
 export type { Invite, Invites } from "./invites.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
 
@@ -55,6 +58,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   ACCESS?: string;
   // The deployed version, which keys cached pages so every deploy starts with none.
   CF_VERSION_METADATA?: { id: string };
+  // "spa" when unknown paths get the frontend's index.html, "files" when they are 404s; absent without a frontend.
+  FRONTEND?: string;
   // "on" on previews and in local dev: every response says where its time went, in Server-Timing;
   // "sample" in prod: one request in SAMPLE_EVERY logs it instead.
   TRACE?: string;
@@ -78,6 +83,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly organizations: Organizations;
   readonly cache: Cache;
   readonly invites: Invites;
+  readonly routes: Routes;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -111,6 +117,8 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   schema?: Schema;
   // Typed functions served over the API, MCP or both; see `endpoint`.
   endpoints?: Record<string, Endpoint<any, any, AppContext<Env, Schema>>>;
+  // The cached pages every endpoint but a GET empties after it succeeds, unless it sets its own.
+  invalidates?: "all" | readonly string[];
   // Paths the Worker renders on each request; see `page`.
   pages?: Page[];
   screens?: { stylesheet?: string };
@@ -124,6 +132,11 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
 interface Once {
   // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
   auth?: Map<string, Auth>;
+  // What answers which path, for app.routes: the pages and GET endpoints, and the frontend's files,
+  // which the deploy's entry module sets.
+  page: (pathname: string) => boolean;
+  endpoint: (pathname: string) => boolean;
+  files: ReadonlySet<string>;
 }
 
 type Db = NodePgDatabase<Record<string, unknown>>;
@@ -152,7 +165,8 @@ const notFound: Handler<unknown, Record<string, unknown>> = () => json({ error: 
 
 // `Secrets` names the app's secrets, such as `defineApp<{ SESSION_SECRET: string }>`; the
 // platform's own bindings are added to it. Pass the app's tables as `schema` for a typed `app.db`.
-// Endpoints are answered first; the handler, when given, takes every other request. A handler or
+// Endpoints are answered first; the handler, when given, takes every other /api/ request, and any
+// other path gets the one 404 page. A handler or
 // endpoint may throw a Response, as `requireUser` does, and it is sent as the answer.
 export function defineApp<
   Secrets extends object = object,
@@ -167,10 +181,11 @@ export function defineApp<
   const onMessage = options.live?.onMessage;
   const check = messageCheck(options.live?.message);
   const handle = handler ?? (notFound as Handler<Env, Schema>);
-  const api = apiHandler(options.endpoints ?? {});
-  const once: Once = {};
+  const endpoints = withInvalidates(options.endpoints ?? {}, options.invalidates);
+  const api = apiHandler(endpoints);
   const pages = pageServer(options.pages ?? []);
-  requireDeclaredAccess(options.endpoints ?? {});
+  const once: Once = { page: (pathname) => Boolean(pages?.routes(pathname)), endpoint: getMatcher(endpoints), files: new Set() };
+  requireDeclaredAccess(endpoints);
   const undeclared = pages?.undeclared ?? [];
 
   // One request, answered; `trace` collects where its time goes.
@@ -223,6 +238,9 @@ export function defineApp<
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
+      // Hand-written routes live under /api/; any other path no file, page or platform route
+      // answers gets the one 404 page, so a broken link is a 404 and app.routes agrees.
+      if (!url.pathname.startsWith("/api/")) return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
       return await handle(request, current);
     } catch (thrown) {
       if (thrown instanceof Response) return thrown;
@@ -242,6 +260,10 @@ export function defineApp<
     pages: pages?.claims ?? [],
     // Read by the deploy, which writes them after migrations; requests never do.
     staticPoints: options.access?.points ?? {},
+    // The frontend folder's files, relative to it, set by the deploy's entry module and by testApp.
+    set staticFiles(files: readonly string[]) {
+      once.files = new Set(servedFiles(files));
+    },
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       // Prod times one request in SAMPLE_EVERY into its logs, never into the response.
@@ -299,6 +321,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let organizations: Organizations | undefined;
   let cache: Cache | undefined;
   let invites: Invites | undefined;
+  let routes: Routes | undefined;
   const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
@@ -335,6 +358,9 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       return (invites ??= createInvites(app.db as unknown as NodePgDatabase<Record<string, unknown>>, () => app.requireUser(), app.email, origin, env.APP_NAME ?? new URL(origin).hostname));
+    },
+    get routes() {
+      return (routes ??= createRoutes({ features: features(env), frontend: env.FRONTEND, files: once.files, page: once.page, endpoint: once.endpoint }));
     },
     get cache() {
       if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
@@ -569,7 +595,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   try {
     if (!(await asUser.session())) return mcpChallenge(origin);
     const { serveMcp } = await import("./mcp-server.js");
-    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, options.endpoints ?? {});
+    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, withInvalidates(options.endpoints ?? {}, options.invalidates));
   } finally {
     close();
   }

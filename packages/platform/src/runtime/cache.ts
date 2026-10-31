@@ -36,24 +36,17 @@ export async function pageVersion(db: Db, path: string, now = Date.now()): Promi
 }
 
 export interface Cache {
-  // Empties every cached page, within a second everywhere. Call it after the write commits, and
-  // only for rare, sweeping changes: each one makes every page render again.
+  // Empties every cached page, within a second everywhere, for one query; every page then renders
+  // once more on its next visit. Call it after the write commits.
   clear(): Promise<void>;
   // Empties one page, every query string of it, within a second everywhere; call it after the
   // write that changed the page commits.
   invalidate(path: string): Promise<void>;
 }
 
-// Clearing more often than this suggests clearing on ordinary writes, which leaves the cache empty.
-const CLEAR_WARN_MS = 60_000;
-let lastClear = 0;
-
 export function createCache(db: () => Db): Cache {
   return {
     async clear() {
-      const now = Date.now();
-      if (now - lastClear < CLEAR_WARN_MS) console.warn("app.cache.clear() ran twice within a minute; clearing on ordinary writes keeps every cached page empty, so use app.cache.invalidate(path) or let pages expire");
-      lastClear = now;
       await db().execute(sql`select nextval('platform_cache_clear')`);
       remembered.clear();
     },

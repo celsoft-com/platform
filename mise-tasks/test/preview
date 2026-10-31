@@ -12,6 +12,7 @@ first=$(curl -s -D - "$base/stats" | tr -d '\r')
 again=$(curl -s -D - "$base/stats" | tr -d '\r')
 check "public page cached (miss then hit)" "$(echo "$first" | awk 'tolower($1) == "platform-cache:" { print $2 }') $(echo "$again" | awk 'tolower($1) == "platform-cache:" { print $2 }')"
 check "cached copy is the same page" "$([ "$(echo "$first" | grep -o 'Rendered at [^;]*')" = "$(echo "$again" | grep -o 'Rendered at [^;]*')" ] && echo same || echo different)"
+check "unknown path is the one 404 page" "$(curl -s -o /dev/null -w '%{http_code}' "$base/no-such-page") $(curl -s "$base/no-such-page" | grep -c 'There is nothing here.')"
 check "GET /login has title" "$(curl -s "$base/login" | grep -c 'platform-title">Sign in')"
 check "GET /api/notes signed out" "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/notes")"
 check "cross-site form post" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/x-www-form-urlencoded' -H 'origin: https://evil.example' -d a=1 "$base/api/notes")"

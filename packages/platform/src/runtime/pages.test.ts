@@ -122,14 +122,14 @@ describe("Pages: declaring", () => {
     expect(() => pageServer([page({ path: "/x", routes: { "/*a": () => "", "/*b": () => "" } })])).toThrow(/same paths/);
   });
 
-  it("P45: the root page answers / alone; every path below it goes on to the handler", async () => {
+  it("P45: the root page answers / alone; every path below it is the one 404 page", async () => {
     expect(() => page({ path: "/", routes: { "/": () => "", "/:id": () => "" } })).toThrow(/only route is "\/"/);
     expect(() => page({ path: "/", routes: { "/about": () => "" } })).toThrow(/only route is "\/"/);
     const rooted = defineApp(() => new Response("handler"), { pages: [page({ path: "/", routes: { "/": () => "<h1>home</h1>" } }), page({ path: "/about", routes: { "/": () => "about" } })] });
     const body = async (path: string) => (await rooted.fetch(new Request(`https://app.test${path}`), {}, ctx)).text();
     expect(await body("/")).toBe("<h1>home</h1>");
     expect(await body("/about")).toBe("about");
-    for (const path of ["/notes", "/index.html", "/x/y"]) expect(await body(path), path).toBe("handler");
+    for (const path of ["/notes", "/index.html", "/x/y"]) expect(await body(path), path).toContain("There is nothing here.");
     expect(rooted.pages).toEqual(["/", "/about"]);
   });
 
@@ -164,8 +164,9 @@ describe("Pages: serving", () => {
     }
   });
 
-  it("P12: paths outside every claim go on to the handler, including look-alikes", async () => {
-    for (const path of ["/", "/notebook", "/notes.html", "/docs", "/docs/guidebook", "/NOTES"]) expect((await get(path)).body, path).toBe("handler");
+  it("P12: paths outside every claim are the one 404 page, including look-alikes, and only /api/ reaches the handler", async () => {
+    for (const path of ["/", "/notebook", "/notes.html", "/docs", "/docs/guidebook", "/NOTES"]) expect(await get(path), path).toMatchObject({ status: 404, body: expect.stringContaining("There is nothing here.") });
+    expect((await get("/api/anything")).body).toBe("handler");
   });
 
   it("P13: pages only answer GET and HEAD; HEAD has no body", async () => {
@@ -620,7 +621,7 @@ describe("Pages: caching", () => {
       else await a.cache.invalidate(path!);
       return new Response("done");
     });
-    const run = (kind: string, path = "") => app.fetch(new Request(`https://app.test/x?do=${kind}&do=${encodeURIComponent(path)}`), dbEnv, ctx);
+    const run = (kind: string, path = "") => app.fetch(new Request(`https://app.test/api/x?do=${kind}&do=${encodeURIComponent(path)}`), dbEnv, ctx);
     expect(await hit("/news")).toBe("miss");
     expect(await hit("/news")).toBe("hit");
     await run("invalidate", "/news");
@@ -631,7 +632,7 @@ describe("Pages: caching", () => {
     await run("clear");
     await later();
     expect(await hit("/news")).toBe("miss");
-    await expect(app.fetch(new Request("https://app.test/x?do=invalidate&do=news"), dbEnv, ctx)).rejects.toThrow(/path with no query/);
+    await expect(app.fetch(new Request("https://app.test/api/x?do=invalidate&do=news"), dbEnv, ctx)).rejects.toThrow(/path with no query/);
     const bare = new URL(databaseUrl);
     bare.pathname = "/postgres";
     const missing = { CF_VERSION_METADATA: { id: "v1" }, DB: { connectionString: bare.href } };

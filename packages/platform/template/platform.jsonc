@@ -3,7 +3,7 @@
   "name": "{{name}}",
   "hostname": "{{hostname}}",
   "worker": "src/worker.ts",
-  "frontend": "public",
+  "frontend": { "dir": "public" },
   "compatibilityDate": "{{compatibilityDate}}",
   "database": true
   // Accounts and sign-in: uncomment both lines. Sign-up is invite-only once the app has its first

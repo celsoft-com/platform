@@ -47,7 +47,7 @@ my-app/
 ```mermaid
 flowchart TD
   R[Request] --> A{Path starts with /api/ or is a sign-in screen?}
-  A -- no --> S[File from the frontend folder, or index.html when none matches]
+  A -- no --> S[File from the frontend folder; else index.html with spa, a server page, or the one 404 page]
   A -- yes --> L{/api/live/?}
   L -- yes --> LR[Platform: live room, if the app's canJoin agrees]
   L -- no --> P{Sign-in screen or /api/auth/?}
@@ -85,15 +85,15 @@ flowchart LR
 
 ### Pages and assets
 
-1. **Folder:** `frontend` in `platform.jsonc` names it: plain files, or a build's output such as `dist` in the demo.
+1. **Folder:** `"frontend": { "dir": "public" }` in `platform.jsonc` names it: plain files, or a build's output such as `dist` in the demo.
 2. **Served free:** files come straight from Cloudflare's asset store and never run the Worker.
-3. **Single-page apps:** a path with no matching file gets `index.html`, so client-side routing works.
+3. **Unknown paths:** a path with no matching file is a 404, so a broken link shows as one; `"spa": true` gives it `index.html` instead, so client-side routing works.
 4. **Build:** when `package.json` has a `build` script, every deploy runs it first; a failed build stops the deploy.
 5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
 8. **What the server renders:** only content identical for everyone allowed to see it; anything that depends on who is looking or what they have done (sign-in state, saved choices, checkmarks, drafts, admin screens) is added by the browser after the page loads. A page can mix both, such as a checklist rendered with every box unchecked whose visitor's own ticks the browser fills in. A page's access gate decides who gets it, never what it says, so one kept copy serves everyone who passes.
-9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor who passes its gate then shares a copy the Worker keeps in Cloudflare's Cache API, per data center, keyed by the path and whole query string, for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `{ level }` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
+9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor who passes its gate then shares a copy the Worker keeps in Cloudflare's Cache API, per data center, keyed by the path and whole query string, for 60 seconds, or `seconds`, until an endpoint's `invalidates` (`["/stats"]`, a function of the input and output, or `"all"`, with an app-wide default for every endpoint but a GET), `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `{ level }` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
 
 ### Sign-in screens
 
@@ -110,11 +110,13 @@ flowchart LR
 4. **Checks:** bad input is a 400 with `{ error }`; an output that does not match its schema is a 500, logged.
 5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`, and the generated client throws `EndpointError` with the same status and message.
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
-7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
-8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
-9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `env` and `waitUntil`, each created on first use.
-10. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
-11. **Forms:** cross-site form posts are refused before the handler runs.
+7. **Handler:** optional; it takes every `/api/` request no endpoint answers, for downloads, streaming and webhooks; any other path nothing answers gets the one 404 page.
+8. **Uploads:** an input field `upload({ maxBytes, types })` takes a file, sent as multipart by `call` and as `{ name, type, base64 }` (up to 5 MB) over MCP; the handler gets a checked `File`.
+9. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
+10. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.
+11. **Link checks:** `app.routes.serves("/about")` says what answers a GET of a path: `"platform"`, `"page"`, `"endpoint"`, `"file"`, `"fallback"` (index.html, with `spa`) or `null` for a 404; it sends no request.
+12. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
+13. **Forms:** cross-site form posts are refused before the handler runs.
 
 ### Tables and migrations
 

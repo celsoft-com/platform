@@ -21,6 +21,15 @@ describe("demo", () => {
     expect(await t.as(owner).call("about", {})).toEqual({ level: "manage" });
   });
 
+  it("adds a note with an attachment through an upload endpoint, and serves the file back", async () => {
+    const writer = await t.signUp("writer@example.com");
+    const note = await t.as(writer).call("addNote", { body: "with a file", file: new File(["attached"], "a.txt", { type: "text/plain" }) });
+    expect(note).toMatchObject({ body: "with a file", attachmentName: "a.txt" });
+    expect(await (await t.as(writer).fetch(`/api/public/notes/${note.id}/attachment`)).text()).toBe("attached");
+    const tooBig = await t.as(writer).call("addNote", { body: "big", file: new File([new Uint8Array(10 * 1024 * 1024 + 1)], "big.bin") }).catch((e: unknown) => e);
+    expect((tooBig as EndpointError).status).toBe(400);
+  });
+
   it("keeps one person's organization from another", async () => {
     const owner = await t.signUp("first@example.com");
     const stranger = await t.signUp("stranger@example.com");

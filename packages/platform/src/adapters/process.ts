@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { generatedPath } from "../generate.js";
 import type { Wrangler } from "../ports.js";
+import { listStaticFiles } from "../static-files.js";
 import { ENTRY_FILE, entryModule, NO_KYSELY_FILE, NO_KYSELY_MODULE } from "../wrangler-config.js";
 
 export class WranglerCli implements Wrangler {
@@ -16,7 +17,7 @@ export class WranglerCli implements Wrangler {
   async deploy(config: object, secrets: Record<string, string>): Promise<void> {
     const configFile = generatedPath(this.appDir, "wrangler.json");
     const secretsFile = generatedPath(this.appDir, "secrets.json");
-    const entryFiles = await this.writeEntry();
+    const entryFiles = await this.writeEntry(config);
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(secretsFile, JSON.stringify(secrets), { mode: 0o600 });
     try {
@@ -31,11 +32,14 @@ export class WranglerCli implements Wrangler {
     }
   }
 
-  private async writeEntry(): Promise<string[]> {
-    await mkdir(generatedPath(this.appDir, ""), { recursive: true });
+  // Written after the frontend is built, so the entry module lists the files the deploy uploads.
+  private async writeEntry(config: object): Promise<string[]> {
+    const generated = generatedPath(this.appDir, "");
+    await mkdir(generated, { recursive: true });
     const entry = generatedPath(this.appDir, ENTRY_FILE);
     const stub = generatedPath(this.appDir, NO_KYSELY_FILE);
-    await writeFile(entry, entryModule(this.worker));
+    const assets = (config as { assets?: { directory: string } }).assets;
+    await writeFile(entry, entryModule(this.worker, assets ? await listStaticFiles(resolve(generated, assets.directory)) : []));
     await writeFile(stub, NO_KYSELY_MODULE);
     return [entry, stub];
   }
@@ -45,7 +49,7 @@ export class WranglerCli implements Wrangler {
   async dev(config: object, secrets: Record<string, string>, databaseUrl: string | undefined): Promise<void> {
     const configFile = generatedPath(this.appDir, "wrangler.json");
     const devVars = generatedPath(this.appDir, ".dev.vars");
-    const entryFiles = await this.writeEntry();
+    const entryFiles = await this.writeEntry(config);
     await writeFile(configFile, JSON.stringify(config, null, 2));
     await writeFile(devVars, Object.entries(secrets).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n", { mode: 0o600 });
     try {

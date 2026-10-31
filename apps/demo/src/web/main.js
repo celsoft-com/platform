@@ -70,7 +70,7 @@ async function home() {
 // Pages that need a signed-in person show a sign-in prompt instead.
 const routes = [
   [/^\/$/, () => (signedIn() ? ((location.hash = "#/notes"), null) : home())],
-  [/^\/notes$/, () => notesPage(), true],
+  [/^\/notes$/, () => notesPage(call), true],
   [/^\/shared$/, () => sharedPage(call), true],
   [/^\/notes\/([0-9a-f-]{36})$/, ([id], ctx) => notePage(call, id, ctx)],
   [/^\/orgs$/, () => orgsPage(call), true],

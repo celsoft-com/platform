@@ -64,7 +64,11 @@ export default defineApp(undefined, {
    - **A list of points:** the function, sync or async, may return several ids; the first that exists is checked, and only that one, so a point that refuses never falls through to the next: ``point: ({ path }) => [`path:${path}`, ...foldersAbove(path), "site"]``. A function returning anything but ids throws.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints; a refusal throws `EndpointError` with the server's `status` and `message`, and failed validation names each field, such as `body: Too small`.
-7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
+7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every `/api/` request no endpoint answers, for downloads, streaming and webhooks; put them under `/api/`, since any other path that no file, page or platform route answers gets the one 404 page.
+8. **Uploads:** an input field `upload({ maxBytes: 5_000_000, types: ["image/*"] })` takes a file; the handler gets a `File` (`name`, `type`, `size`, bytes), checked before it runs. `maxBytes` is 10 MB by default, at most 100 MB, and a larger body is a 413 unread. Upload fields are top-level input fields, optional with `.optional()`.
+   - **Browser and tests:** pass a `File` to `call("addNote", { body, file })`; it goes as multipart. Never build an upload route by hand, or send base64 in JSON.
+   - **Scripts:** `curl -H "Authorization: Bearer <token>" -F body=hi -F file=@a.png`; other fields arrive as strings and are converted to the schema's types.
+   - **MCP:** an AI client sends `{ name, type, base64 }`, up to 5 MB whatever `maxBytes` says.
 
 ## Server pages
 
@@ -99,7 +103,7 @@ const notesPage = page({
 export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 ```
 
-1. **Paths:** plain segments, never a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
+1. **Paths:** plain segments, never a parameter, a trailing slash, or under a path the platform answers: `/api`, `/login`, `/signup`, `/forgot`, `/reset`, `/consent`, `/invites`, `/tokens`, `/mcp` or `/.well-known`; two claims never overlap. Every path not claimed is still a static file.
    - **Root page:** `page({ path: "/", routes: { "/": handler } })` answers `/` alone, never the paths below it; it wins over a static `index.html` at `/`, which still serves every other unmatched path.
 2. **Routes:** `"/"` is the claimed path itself; a path matching no route under the claim gets the 404 page. A plain function gets its `:name` segments as decoded strings.
    - **Any depth:** a last `*name` segment, such as `"/*path"` or `"/:owner/*path"`, matches one or more segments and gets them joined by `/`, so `/trip/2026/italy/day1` gives `path` = `2026/italy/day1`; use it when paths are made after the deploy, never a route per depth. Text routes win over `:name`, which wins over `*name`; `*name` is only ever last, so split anything after it in the handler. Gate it with a function, `access: { point: ({ path }) => pointFor(path), level: "read" }`.
@@ -122,16 +126,22 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
     4. **Same for everyone who passes:** the gate runs on every request, hit or miss, before the cache; everyone who passes gets the kept copy, so a page's HTML must depend only on the URL and the data, never on cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
     5. **Drafts and per-person content:** the handler is blind and a query string picks a copy, never who may see it, so `/p?preview` renders for anyone `/p`'s gate lets in, cached or not. Content only some may see, such as drafts, gets its own route gated to them, such as `/preview/*path` with `{ point, level: "write" }`; anything that depends on who is looking is rendered in the browser from an endpoint.
     6. **Uncached answers:** an HTML string goes out `no-store`; a `Response` the handler returns keeps its own headers, so never give it `cache-control: public`.
-    7. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
-    8. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
-    9. **Deploys:** every deploy starts empty.
-    10. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
+    7. **Emptying it from endpoints:** an endpoint declares what it empties, and the platform empties it once the handler succeeds, before the answer goes out, over the API and MCP alike; a failed handler empties nothing.
+       - `invalidates: ["/stats"]`, or `({ id }, output) => [`/print/${id}`]`, empties those pages, every query string of each.
+       - `invalidates: "all"` empties every page; `[]` empties none.
+       - `defineApp(handler, { invalidates: "all" })` applies to every endpoint but a GET that sets none of its own, so a write never forgets.
+    8. **Emptying it by hand:** in hand-written routes, live messages and jobs, after the write commits, `await app.cache.invalidate("/stats")` or `await app.cache.clear()`; both reach every data center within a second and need a database.
+    9. **Which to use:** both cost one tiny query; `invalidate` keeps every other page cached, and `clear` makes every page render once more on its next visit, so an app whose templates span pages may clear on every write.
+    10. **Deploys:** every deploy starts empty.
+    11. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
-Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `session()`, `requireUser()`,
+Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `routes`, `session()`, `requireUser()`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
+
+`app.routes.serves(path)` says what answers a GET of a path, for checking links: `"platform"` (a screen or platform API that is on), `"page"` (a page route matches), `"endpoint"` (a GET endpoint's path matches), `"file"` (a frontend file, `/about` for `about.html` or `about/index.html`), `"fallback"` (nothing else, and `spa` gives `index.html`), or `null` for a 404. It is free: lists built into the Worker, no request. A query or `#fragment` is ignored, and hand-written handler paths are unknown, so a link to one reads `null`.
 
 Code outside the handlers takes `app` as a parameter typed `App`, so `app.db` knows the app's tables:
 
@@ -251,6 +261,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
+9. **`frontend`:** `{ "dir": "public" }` serves that folder's files free, before the Worker; a path with no file is the one 404 page (signed out, it offers sign-in), unless `"spa": true` gives it `index.html` for browser routing. A bare `"frontend": "public"` is the older shape: `upgrade` rewrites it to `{ "dir": "public", "spa": true }`; drop `spa` unless the app routes in the browser.
 
 ## Testing
 

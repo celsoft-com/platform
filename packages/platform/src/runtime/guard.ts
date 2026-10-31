@@ -14,6 +14,8 @@ const OAUTH_FORM_PATHS = ["/oauth2/token", "/oauth2/revoke", "/oauth2/introspect
 export function isCrossSiteForm(request: Request, url: URL): boolean {
   if (!UNSAFE.includes(request.method)) return false;
   if (OAUTH_FORM_PATHS.includes(url.pathname)) return false;
+  // A form cannot set Authorization, so a script uploading with an API token is never a forged one.
+  if (request.headers.has("authorization")) return false;
   const type = request.headers.get("content-type")?.split(";", 1)[0]!.trim().toLowerCase() ?? "";
   if (!FORM_TYPES.includes(type)) return false;
   return request.headers.get("origin") !== url.origin;

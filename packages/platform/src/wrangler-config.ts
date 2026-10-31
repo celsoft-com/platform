@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Config } from "./config.js";
-import { INVITES_PATH } from "./runtime/invites.js";
-import { SCREEN_PATHS, TOKENS_PATH } from "./runtime/screens.js";
+import { features, workerFirst } from "./runtime/routes.js";
 
 export interface WranglerInput {
   config: Config;
@@ -41,18 +40,20 @@ const fromGenerated = (path: string) => `../${path.replace(/^\.\//, "")}`;
 export const NO_KYSELY_FILE = "no-kysely.cjs";
 export const NO_KYSELY_MODULE = `// Written by @celsoft/platform at deploy; never edit or commit it.\nmodule.exports = new Proxy(function () {}, { get: () => function kyselyIsNotBundled() { throw new Error("Kysely is not bundled; the platform reaches the database through Drizzle"); } });\n`;
 
-export function entryModule(worker: string): string {
-  return `// Written by @celsoft/platform at deploy; never edit or commit it.\nimport app from ${JSON.stringify(fromGenerated(worker))};\nexport default app;\nexport const LiveRoom = app.LiveRoom;\n`;
+// `staticFiles` lists the frontend folder's files, relative to it, for app.routes.
+export function entryModule(worker: string, staticFiles: readonly string[] = []): string {
+  return `// Written by @celsoft/platform at deploy; never edit or commit it.\nimport app from ${JSON.stringify(fromGenerated(worker))};\napp.staticFiles = ${JSON.stringify(staticFiles)};\nexport default app;\nexport const LiveRoom = app.LiveRoom;\n`;
 }
 
 // The Worker's settings that follow from platform.jsonc alone, the same for every deploy, `dev` and tests.
 export function featureVars(config: Config): Record<string, string> {
   const auth = config.auth;
-  return { APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", AUTH_SIGNUP: auth.signup, MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) };
+  return { APP_NAME: config.name, LIVE_ROOMS: config.live ? "on" : "off", ...(config.frontend && { FRONTEND: config.frontend.spa ? "spa" : "files" }), ...(auth && { AUTH_ORGANIZATIONS: auth.organizations ? "on" : "off", AUTH_API_TOKENS: auth.apiTokens ? "on" : "off", AUTH_SIGNUP: auth.signup, MCP: config.mcp ? "on" : "off", ACCESS: config.access ? "on" : "off" }) };
 }
 
 export function wranglerConfig({ config, worker, hostname, accountId, hyperdriveId, vars, bucket, pages = [], placement }: WranglerInput): object {
   const auth = config.auth;
+  const enabled = featureVars(config);
   return {
     name: worker,
     account_id: accountId,
@@ -69,9 +70,14 @@ export function wranglerConfig({ config, worker, hostname, accountId, hyperdrive
     alias: { kysely: `./${NO_KYSELY_FILE}`, "@better-auth/kysely-adapter": `./${NO_KYSELY_FILE}` },
     // Every query is a round trip to the database, so the Worker runs next to it, not next to the visitor.
     ...(placement && { placement: { region: placement } }),
-    vars: { ...vars, ...featureVars(config) },
+    vars: { ...vars, ...enabled },
     ...(config.frontend && {
-      assets: { directory: fromGenerated(config.frontend), not_found_handling: "single-page-application", run_worker_first: ["/api/*", ...(auth ? [...SCREEN_PATHS, INVITES_PATH] : []), ...(auth && auth.apiTokens ? [TOKENS_PATH] : []), ...(config.mcp ? ["/mcp", "/.well-known/*"] : []), ...pages.flatMap((p) => (p === "/" ? [p] : [p, `${p}/*`]))] },
+      assets: {
+        directory: fromGenerated(config.frontend.dir),
+        // Without spa, an unknown path is a real 404, so a broken link shows as one.
+        not_found_handling: config.frontend.spa ? "single-page-application" : "404-page",
+        run_worker_first: [...workerFirst(features(enabled)), ...pages.flatMap((p) => (p === "/" ? [p] : [p, `${p}/*`]))],
+      },
     }),
     ...(hyperdriveId && { hyperdrive: [{ binding: "DB", id: hyperdriveId }] }),
     ...(bucket && { r2_buckets: [{ binding: "FILES", bucket_name: bucket }] }),
