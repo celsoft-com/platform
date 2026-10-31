@@ -253,6 +253,8 @@ export default defineApp(
           if (ids.length === 0) return [];
           return tx.delete(notes).where(inArray(notes.id, ids)).returning({ id: notes.id, userId: notes.userId, attachmentName: notes.attachmentName });
         });
+        // The notes are gone and committed, so a file that fails to delete is left behind rather than
+        // failing a delete that already happened.
         for (const note of gone) if (note.attachmentName) await app.files.delete(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`).catch(() => {});
         return { deleted: gone.length };
       }),
