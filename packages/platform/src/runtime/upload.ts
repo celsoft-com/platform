@@ -58,9 +58,11 @@ export function mcpInput(input: z.ZodType): z.ZodType {
   })));
 }
 
-// Turns an MCP call's base64 files into the `File`s the handler gets, each checked as over the API.
+// Turns an MCP call's base64 files into the `File`s the handler gets, each parsed by the endpoint's
+// own field schema, so upload() alone holds the checks the API applies; only the MCP cap is here.
 export function filesFromMcp(input: z.ZodType, args: Record<string, unknown>): Record<string, unknown> {
   const fields = uploadFields(input);
+  const shape = (input as z.ZodObject).shape;
   const out = { ...args };
   for (const [name, f] of Object.entries(fields)) {
     const sent = args[name] as { name: string; type: string; base64: string } | undefined;
@@ -72,9 +74,10 @@ export function filesFromMcp(input: z.ZodType, args: Record<string, unknown>): R
       throw new EndpointError(400, `${name}: base64 is not valid`);
     }
     const file = new File([bytes as BlobPart], sent.name, { type: sent.type });
-    if (file.size > Math.min(f.maxBytes, MAX_MCP_UPLOAD)) throw new EndpointError(413, `${name}: the file is ${file.size} bytes; over MCP this takes at most ${Math.min(f.maxBytes, MAX_MCP_UPLOAD)}`);
-    if (!allowed(f.types, file.type)) throw new EndpointError(400, `${name}: the file's type ${JSON.stringify(file.type)} is not one of ${f.types.join(", ")}`);
-    out[name] = file;
+    if (file.size > MAX_MCP_UPLOAD && f.maxBytes > MAX_MCP_UPLOAD) throw new EndpointError(413, `${name}: the file is ${file.size} bytes; over MCP this takes at most ${MAX_MCP_UPLOAD}`);
+    const parsed = (shape[name] as z.ZodType).safeParse(file);
+    if (!parsed.success) throw new EndpointError(400, `${name}: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+    out[name] = parsed.data;
   }
   return out;
 }
