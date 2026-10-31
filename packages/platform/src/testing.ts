@@ -119,8 +119,10 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     },
     // A browser sends its page's origin with every form it posts, such as an upload.
     as: (who) => acting("token" in who ? { authorization: `Bearer ${who.token}` } : { cookie: who.cookie, origin: TEST_URL }),
+    // Ends the app's connections and drops the test's database, so a kept server holds none.
     async close() {
       await pool?.end();
+      if (url) await withClient(await server!, (c) => c.query(`drop database if exists ${new URL(url).pathname.slice(1)} with (force)`));
     },
   };
 }
@@ -155,8 +157,8 @@ async function loadConfig(dir: string): Promise<Config> {
 }
 
 // One Postgres for every test process of an app, started by the first, and one migrated template
-// per version of the app's migrations in it, made by the first that needs it; each process keeps
-// its own promise of both.
+// per version of the app's schema and migrations in it, made by the first that needs it and kept
+// between runs; each process keeps its own promise of both.
 let server: Promise<string> | undefined;
 const templates = new Map<string, Promise<string>>();
 
@@ -170,19 +172,31 @@ async function freshDatabase(dir: string, config: Config, staticPoints: Record<s
   return databaseUrl(base, fresh);
 }
 
-// Named by what it holds, so every process copies the same one; an advisory lock lets one migrate it.
-async function migratedTemplate(base: string, dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
-  const migrator = new DrizzleMigrator(dir, config);
-  if (!(await migrator.upToDate())) throw new Error("src/schema.ts has changes with no migration; run `npx @celsoft/platform db generate`, then test again");
+// A template's name: a hash of everything it is built from, the schema and every file it imports,
+// the migrations and the static points, so a template that exists was checked and built from
+// exactly what the app has now.
+export async function templateName(dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
   const hash = createHash("sha256").update(JSON.stringify({ auth: Boolean(config.auth), staticPoints }));
+  for (const file of await new DrizzleMigrator(dir, config).schemaSources()) hash.update(file).update(await readFile(file));
   const migrations = join(dir, MIGRATIONS_DIR);
   for (const file of await listStaticFiles(migrations)) hash.update(file).update(await readFile(join(migrations, file)));
-  const name = `template_${hash.digest("hex").slice(0, 32)}`;
+  return `template_${hash.digest("hex").slice(0, 32)}`;
+}
+
+// A template that exists is used at once. Otherwise one process, holding an advisory lock, checks
+// the schema has no ungenerated migration, which runs drizzle-kit and costs seconds, and builds it;
+// the rest wait for the lock and find it built. Older templates of the app are dropped.
+async function migratedTemplate(base: string, dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
+  const name = await templateName(dir, config, staticPoints);
+  const exists = (c: Client) => c.query("select 1 from pg_database where datname = $1", [name]).then((r) => Boolean(r.rowCount));
   await withClient(base, async (c) => {
-    await c.query("select pg_advisory_lock(hashtext($1))", [name]);
+    if (await exists(c)) return;
+    await c.query("select pg_advisory_lock(hashtext('platform template'))");
     try {
-      if ((await c.query("select 1 from pg_database where datname = $1", [name])).rowCount) return;
-      const building = `${name}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+      if (await exists(c)) return;
+      const migrator = new DrizzleMigrator(dir, config);
+      if (!(await migrator.upToDate())) throw new Error("src/schema.ts has changes with no migration; run `npx @celsoft/platform db generate`, then test again");
+      const building = `building_${randomUUID().replace(/-/g, "")}`;
       await c.query(`create database ${building}`);
       const url = databaseUrl(base, building);
       await migrator.migrate(url);
@@ -190,8 +204,10 @@ async function migratedTemplate(base: string, dir: string, config: Config, stati
       await migrator.prepareCache(url);
       // Renamed only once whole, so a template that exists is always complete.
       await c.query(`alter database ${building} rename to ${name}`);
+      const { rows } = await c.query<{ datname: string }>("select datname from pg_database where datname like 'template\\_%' and datname <> $1", [name]);
+      for (const { datname } of rows) await c.query(`drop database if exists ${datname} with (force)`);
     } finally {
-      await c.query("select pg_advisory_unlock(hashtext($1))", [name]);
+      await c.query("select pg_advisory_unlock(hashtext('platform template'))");
     }
   });
   return name;
@@ -229,6 +245,12 @@ async function sharedPostgres(appDir: string): Promise<string> {
         // Checked again under the lock: another process may have just started one.
         const again = await readFile(join(home, "url"), "utf8").catch(() => undefined);
         if (again && (await answers(again))) return again;
+        // A server the watcher was about to stop, kept now that this process has registered.
+        const stopping = await readFile(join(home, "url.stopping"), "utf8").catch(() => undefined);
+        if (stopping && (await answers(stopping))) {
+          await rename(join(home, "url.stopping"), join(home, "url"));
+          return stopping;
+        }
         return await startPostgres(appDir, home);
       } finally {
         await rm(lock, { recursive: true, force: true });
@@ -251,22 +273,51 @@ async function startPostgres(appDir: string, home: string): Promise<string> {
   const version = tool(bin("postgres"), ["--version"], `testApp needs Postgres 18 or later: add embedded-postgres to the app's devDependencies, as \`new\` and \`upgrade\` do, or put Postgres 18 on the PATH`);
   const major = Number(/(\d+)\./.exec(version)?.[1]);
   if (!(major >= 18)) throw new Error(`testApp needs Postgres 18 or later, as Neon runs; found ${version.trim()}`);
-  const data = join(home, `data-${randomUUID().slice(0, 8)}`);
-  tool(bin("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
-  tool(bin("pg_ctl"), ["-D", data, "-l", join(home, "log"), "-w", "-o", `-k ${home} -c listen_addresses='' -c fsync=off -c max_connections=500`, "start"]);
+  // Kept between runs, so its templates are too and a run starts with no initdb; one that will not
+  // start, such as one an older Postgres made, is made again.
+  const data = join(home, "data");
+  const start = () => tool(bin("pg_ctl"), ["-D", data, "-l", join(home, "log"), "-w", "-o", `-k ${home} -c listen_addresses='' -c fsync=off -c max_connections=500`, "start"]);
+  const make = async () => {
+    await rm(data, { recursive: true, force: true });
+    tool(bin("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
+    start();
+  };
+  if (await stat(join(data, "PG_VERSION")).then(() => true, () => false)) {
+    try {
+      start();
+    } catch (error) {
+      // Never remade under a server still running on it.
+      const running = (() => {
+        try {
+          tool(bin("pg_ctl"), ["-D", data, "status"]);
+          return true;
+        } catch {
+          return false;
+        }
+      })();
+      if (running) throw error;
+      await make();
+    }
+  } else await make();
   const url = `postgresql://postgres@localhost/postgres?host=${encodeURIComponent(home)}`;
+  // Nobody uses it yet, so what an earlier run left, such as a test's database it never closed or a
+  // template it was building when it ended, goes now; finished templates stay.
+  await withClient(url, async (c) => {
+    const { rows } = await c.query<{ datname: string }>("select datname from pg_database where datname like 'test\\_%' or datname like 'building\\_%'");
+    for (const { datname } of rows) await c.query(`drop database if exists ${datname} with (force)`);
+  });
   // Written whole, so a waiting process never reads half an address.
   await writeFile(join(home, "url.next"), url);
   await rename(join(home, "url.next"), join(home, "url"));
   // vitest can end a test process without running its exit handlers, so a process of its own
-  // stops the server and removes its data once no registered process is left, however they ended.
+  // stops the server once no registered process is left, however they ended; its data stays.
   spawn(process.execPath, ["-e", STOP_WHEN_GONE, bin("pg_ctl"), data, home], { detached: true, stdio: "ignore" }).unref();
   return url;
 }
 
 const STOP_WHEN_GONE = `
 const { execFileSync } = require("node:child_process");
-const { readdirSync, renameSync, rmSync, writeFileSync } = require("node:fs");
+const { mkdirSync, readdirSync, renameSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 const [pgCtl, data, home] = process.argv.slice(1);
 const pids = join(home, "pids");
@@ -293,12 +344,18 @@ const timer = setInterval(() => {
     } catch {}
     return;
   }
+  // Stopped cleanly under the start lock, so the next run never finds it half stopped.
+  try {
+    mkdirSync(join(home, "lock"));
+  } catch {
+    return;
+  }
   clearInterval(timer);
   try {
-    execFileSync(pgCtl, ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
+    execFileSync(pgCtl, ["-D", data, "-m", "fast", "-w", "stop"], { stdio: "ignore" });
   } catch {}
-  rmSync(data, { recursive: true, force: true });
   rmSync(join(home, "url.stopping"), { force: true });
+  rmSync(join(home, "lock"), { recursive: true, force: true });
 }, 500);
 `;
 
