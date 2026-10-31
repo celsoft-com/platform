@@ -140,7 +140,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `routes`, `session()`, `requireUser()`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
-`access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
+`access` (with `access` on), `organizations` (with organizations on), `cap` (the level the request's API token is capped at, or undefined), `env` and `waitUntil`. Each is created on first use.
 
 `app.routes.serves(path)` says what answers a GET of a path, for checking links: `"platform"` (a screen or platform API that is on), `"page"` (a page route matches), `"endpoint"` (a GET endpoint's path matches), `"file"` (a frontend file, `/about` for `about.html` or `about/index.html`), `"fallback"` (nothing else, and `spa` gives `index.html`), or `null` for a 404. It is free: lists built into the Worker, no request. A query or `#fragment` is ignored, and hand-written handler paths are unknown, so a link to one reads `null`.
 

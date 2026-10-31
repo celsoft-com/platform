@@ -6,11 +6,9 @@ import { rank, type Access, type Level } from "./access.js";
 import type { Cache } from "./cache.js";
 import { bodyLimit, uploadFields } from "./upload.js";
 import { EndpointError, refusal } from "./endpoint-error.js";
-import type { AppContext } from "./index.js";
+import type { AnyApp } from "./types.js";
 
-// What a handler gets as `app`; an app wanting its own secrets and tables typed annotates the
-// parameter with its own AppContext.
-export type AnyApp = AppContext<any, any>;
+export type { AnyApp };
 
 export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type Door = "api" | "mcp";
@@ -42,9 +40,6 @@ export type Invalidates<In = any, Out = any> = "all" | readonly string[] | ((inp
 // with a list, the first point that exists decides.
 export type PointIds = string | readonly string[];
 export type EndpointAccess<In = any> = { point: string | ((input: In) => PointIds | Promise<PointIds>); level: Level } | { level: Level } | "anon";
-
-// The level each request's API token is capped at, keyed by the request's `app`; absent without a token.
-export const tokenCaps = new WeakMap<object, Level>();
 
 const hasPoint = (access: object): access is { point: unknown } => "point" in access && access.point !== undefined;
 
@@ -93,7 +88,7 @@ export function withInvalidates<T extends Record<string, { method?: Method; inva
 // Runs one endpoint's function for either door, after its access check, then empties the cached
 // pages it declares; a failed handler empties nothing.
 export async function runEndpoint<App>(e: Endpoint<z.ZodType, z.ZodType, App>, input: unknown, app: App): Promise<unknown> {
-  await requireAccess(e.access, input, app);
+  await requireAccess(e.access, input, app as unknown as AccessCaller);
   const output = await e.handler(input as z.output<z.ZodType>, app);
   if (e.invalidates !== undefined) await invalidate(e.invalidates, input, output, (app as { cache: Cache }).cache);
   return output;
@@ -110,13 +105,20 @@ async function invalidate(invalidates: Invalidates, input: unknown, output: unkn
   }
 }
 
+// Who a check asks about; every `app` is one.
+export interface AccessCaller {
+  session(): Promise<unknown>;
+  readonly cap: Level | undefined;
+  readonly access: Access;
+}
+
 // The check an endpoint or a page declares, run against its input. "anon" checks nothing; `{ level }`
 // needs someone signed in and an API token capped at `level` or above; a point is checked by `app.access`.
-export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: unknown): Promise<void> {
+export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: AccessCaller): Promise<void> {
   if (!access || access === "anon") return;
   if (!hasPoint(access)) {
-    if (!(await (app as { session(): Promise<unknown> }).session())) throw new EndpointError(404, "not found");
-    const cap = tokenCaps.get(app as object);
+    if (!(await app.session())) throw new EndpointError(404, "not found");
+    const cap = app.cap;
     if (cap && rank(cap) < rank(access.level)) throw new EndpointError(403, `this API token is capped at ${cap}; this needs ${access.level}`);
     return;
   }
@@ -129,7 +131,7 @@ export async function requireAccess(access: EndpointAccess | undefined, input: u
   const ids = typeof named === "string" ? [named] : Array.isArray(named) ? (named as unknown[]) : [named];
   // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
   if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id.length === 0 || id.length > 200)) throw new EndpointError(404, "not found");
-  await (app as { access: Access }).access.require(ids.length === 1 ? (ids[0] as string) : (ids as string[]), level);
+  await app.access.require(ids.length === 1 ? (ids[0] as string) : (ids as string[]), level);
 }
 
 // Throws when an access declaration is neither { point, level }, { level } nor "anon", or names a

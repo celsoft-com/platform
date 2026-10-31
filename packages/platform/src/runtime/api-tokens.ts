@@ -4,7 +4,7 @@ import { apikey, user } from "../schema.js";
 import { hashToken, LEVELS, type Level } from "./access.js";
 import { AUTH_PATH } from "./auth.js";
 import type { RateLimiter } from "./guard.js";
-import type { Session } from "./index.js";
+import type { Session } from "./types.js";
 
 // Personal API tokens: who a token proves, the rate limit it spends, and the token routes the
 // tokens screen may call.

@@ -5,7 +5,8 @@ import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, shareMessa
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, getMatcher, requireDeclaredAccess, tokenCaps, withInvalidates, type Endpoint } from "./endpoints.js";
+import { apiHandler, getMatcher, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
+import type { AppContext, Session, User } from "./types.js";
 import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
@@ -68,25 +69,7 @@ export interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
 }
 
-export type Session = NonNullable<Awaited<ReturnType<Auth["api"]["getSession"]>>>;
-export type User = Session["user"];
-
-export interface AppContext<Env, Schema extends Record<string, unknown>> {
-  env: Env;
-  readonly db: NodePgDatabase<Schema>;
-  readonly email: Email;
-  readonly files: Files;
-  readonly auth: Auth;
-  readonly live: Live;
-  readonly access: Access;
-  readonly organizations: Organizations;
-  readonly cache: Cache;
-  readonly invites: Invites;
-  readonly routes: Routes;
-  session(): Promise<Session | null>;
-  requireUser(): Promise<User>;
-  waitUntil(promise: Promise<unknown>): void;
-}
+export type { AnyApp, AppContext, Session, User } from "./types.js";
 
 // The `app` every handler gets, for code outside the handlers that takes it as a parameter:
 // `App<typeof schema>` types `app.db` with the app's tables, and `App<typeof schema, Secrets>` adds its secrets.
@@ -417,6 +400,7 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
     get routes() {
       return resources.routes;
     },
+    cap,
     get invites() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       return (invites ??= createInvites(db(), () => app.requireUser(), resources.email, origin, appName));
@@ -462,7 +446,6 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
     },
     waitUntil: (promise) => resources.waitUntil(promise),
   };
-  if (cap) tokenCaps.set(app, cap);
   return app;
 }
 
