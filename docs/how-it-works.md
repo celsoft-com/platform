@@ -12,7 +12,7 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Database** | Postgres per environment, auth tables, migration runner | Its tables in `src/schema.ts` |
 | **Migrations** | `db generate`, and applying them at deploy | Commits the generated `drizzle/` folder |
 | **Auth** | Accounts, sessions, email, teams, `/login` and friends | Nothing, or a stylesheet to restyle the screens |
-| **Files, email, live** | `app.files`, `app.email`, `app.live` | Calls them from its handler |
+| **Files, email, live** | `app.files`, with JSONPath queries over JSON files, `app.email`, `app.live` | Calls them from its handler |
 | **Deploys** | Prod on push to main, a preview per PR, cleanup | Nothing |
 | **Tests** | `@celsoft/platform/testing`: the real runtime on a local Postgres, files in memory and captured email | Its tests, calling endpoints as people it signs up |
 

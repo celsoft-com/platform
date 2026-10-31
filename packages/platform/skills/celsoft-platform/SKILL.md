@@ -154,14 +154,23 @@ file?.metadata.name;                                     // "Logo.PNG"
 await app.files.putJson("collections/products/42.json", { title: "Hat" });
 await app.files.getJson<{ title: string }>("collections/products/42.json");
 return app.files.response("assets/7f3a.png");            // streams it, with its content type; 404 when missing
+await app.files.query("collections/books.json", "$[?@.stars == 4]", { limit: 50 });
+// { items: [{ path: "$[1]", value: { title: "Emma", stars: 4 } }], total: 1 }; null when missing
 ```
 
 1. **`put(path, body, options?)`:** `body` is a string, `ArrayBuffer`, `Blob` or `ReadableStream`, such as `request.body`; `options` is a content type string, or `{ contentType, metadata }` with up to 2 KB of string names and values.
 2. **`get(path)`:** `{ body, size, httpMetadata: { contentType }, metadata, text() }`, or `null`; `body` is a stream, read once.
 3. **`list(folder, { cursor, limit })`:** one page, at most `limit` entries, 1,000 by default and at most: `{ files: [{ path, size, uploaded }], folders: ["a/b/"], cursor }`; pass `cursor` back for the next page, and it is missing on the last. Loop for a whole folder; page an endpoint's own answer straight from it.
 4. **`delete(path)`:** removes one file; deleting a missing one is not an error.
-5. **Metadata or a table:** metadata goes with the file and is deleted with it, but cannot be searched; anything to query or sort across files belongs in `app.db`, keyed by the path.
-6. **Limits:** an upload through the Worker is at most 100 MB; paths with `..` are refused; previews share one bucket under their PR's folder, which `app.files` adds and hides.
+5. **`query(path, expression, { limit, offset })`:** runs a JSONPath (RFC 9535) expression over one JSON file and returns `{ items: [{ path, value }], total }`, or `null` when the file is missing.
+   - **Paging:** `limit` is 100 by default, 0 to 1,000, with 0 returning only `total`; `offset` skips that many matches; `total` counts them all.
+   - **Typed values:** they live in the expression, so `@.stars == 4` and `@.stars == '4'` differ, and a GET query string carries them exactly.
+   - **Refused with a 400:** an expression that does not parse, or is over 1,000 characters, or a `match()` or `search()` pattern over 100.
+   - **Other refusals:** a file that is not JSON (422) or over 25 MB (413), since each query reads and parses the whole file.
+   - **Endpoint input:** `input: z.object({ where: jsonPath() })`, with `jsonPath` from `@celsoft/platform`, refuses a bad expression before the handler, naming where it fails.
+   - **JSON already in hand:** `query(data, expression, options)` from `@celsoft/platform` does the same.
+6. **Metadata or a table:** metadata goes with the file and is deleted with it, but cannot be searched; anything to query or sort across files belongs in `app.db`, keyed by the path.
+7. **Limits:** an upload through the Worker is at most 100 MB; paths with `..` are refused; previews share one bucket under their PR's folder, which `app.files` adds and hides.
 
 ## Access
 

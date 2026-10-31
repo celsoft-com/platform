@@ -31,6 +31,8 @@ export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Metho
 export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
+export { jsonPath, query } from "./jsonpath.js";
+export type { QueryOptions, QueryResult } from "./jsonpath.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
 export type { Invite, Invites } from "./invites.js";
