@@ -20,5 +20,5 @@ if [ -n "$pr" ]; then
   rm -f "$invite_sql"
 fi
 [ -z "$pr" ] || mise run platform -- db stats --reset --pr "$pr"
-PERF_EMAIL="$email" SEEDED="$seed" node "$(dirname "$0")/_perf.mjs" "${args[@]}"
+PERF_EMAIL="$email" SEEDED="$seed" node "$(dirname "$0")/_perf.mjs" ${args[@]+"${args[@]}"}
 [ -z "$pr" ] || mise run platform -- db stats --pr "$pr"
