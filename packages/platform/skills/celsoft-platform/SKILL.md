@@ -113,13 +113,18 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
    - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler; fetch anything personal in the browser from an endpoint.
 7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
 8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
-9. **Caching:** any page may opt in:
+9. **Caching:** a page renders on every request unless its route opts in:
     `route({ cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
-    1. **Same for everyone who passes:** the gate runs first, then everyone who passes gets the kept copy, and the cache key is the path and query only, so a page's HTML must never depend on anything else about the request, such as cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
-    2. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
-    3. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
-    4. **Deploys:** every deploy starts empty.
-    5. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
+    1. **Where:** only in Cloudflare's Cache API, which the Worker itself reads and writes in each data center; no CDN cache sits in front of server pages, and browsers get `cache-control: no-store`, so no browser or proxy keeps a page.
+    2. **What:** a GET answered 200 without `Set-Cookie`; never a HEAD, an error page, a refused 404, the API, or a hand-written handler's answer.
+    3. **Key:** the deploy, the page's version, which `invalidate` and `clear` bump, the path and the whole query string, so `/p` and `/p?preview` are separate copies.
+    4. **Same for everyone who passes:** the gate runs on every request, hit or miss, before the cache; everyone who passes gets the kept copy, so a page's HTML must depend only on the URL and the data, never on cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
+    5. **Drafts and per-person content:** a query string picks a copy, never who may see it, so `/p?preview` shows a draft to anyone `/p`'s gate lets in, cached or not. Put drafts on a route whose access admits only their editors, such as `/drafts/*path` with `{ point, level: "write" }`, and render anything personal in the browser from an endpoint.
+    6. **Uncached answers:** an HTML string goes out `no-store`; a `Response` the handler returns keeps its own headers, so never give it `cache-control: public`.
+    7. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
+    8. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
+    9. **Deploys:** every deploy starts empty.
+    10. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
