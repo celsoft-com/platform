@@ -3,7 +3,8 @@ import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
 import { afterAll, inject } from "vitest";
 import { createAccess, type AccessOptions } from "../src/runtime/access.js";
-import { createOrganizations, type InvitationNotice } from "../src/runtime/organizations.js";
+import type { EmailMessage, Mail } from "../src/runtime/email.js";
+import { createOrganizations } from "../src/runtime/organizations.js";
 
 // A fresh database per test file, copied from the template the global setup migrated.
 export async function freshDatabase(): Promise<{ db: NodePgDatabase<Record<string, unknown>>; pool: Pool; url: string }> {
@@ -34,8 +35,8 @@ export function world(db: Db, pool: Pool) {
     as(userId: string | null, link: string | null = null, options: AccessOptions = {}) {
       return createAccess(db, async () => ({ userId, link }), options);
     },
-    orgs(userId: string | null, notify?: (notice: InvitationNotice) => Promise<void>) {
-      return createOrganizations(db, async () => ({ userId, link: null }), notify);
+    orgs(userId: string | null, mail?: Mail) {
+      return createOrganizations(db, async () => ({ userId, link: null }), mail);
     },
     // An organization made by `creator`, who is its first admin.
     async org(creator: string): Promise<{ id: string; admins: string }> {
@@ -55,4 +56,18 @@ export function world(db: Db, pool: Pool) {
     query: (text: string, values: unknown[] = []) => pool.query(text, values),
   };
   return w;
+}
+
+// A Mail that keeps what is sent, for tests; `settled` waits for what was sent after the answer.
+export function capturedMail(): Mail & { sent: EmailMessage[]; settled(): Promise<void> } {
+  const sent: EmailMessage[] = [];
+  const pending: Promise<unknown>[] = [];
+  return {
+    sent,
+    email: { send: async (message) => void sent.push(message) },
+    origin: "https://app.test",
+    appName: "Test App",
+    waitUntil: (promise) => void pending.push(promise),
+    settled: async () => void (await Promise.all(pending)),
+  };
 }

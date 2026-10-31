@@ -24,6 +24,16 @@ export interface Email {
   send(message: EmailMessage): Promise<void>;
 }
 
+// What a module needs to compose and send its own notices: the Email port, the app's origin and
+// name for links and subjects, and waitUntil, so a notice goes after the answer and a slow or
+// failing email never fails the change that sent it.
+export interface Mail {
+  email: Email;
+  origin: string;
+  appName: string;
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 // Previews capture instead of sending, so a copy of prod data never emails real users; captured
 // messages land in the Worker's logs. Only the addresses a project lists for previews get mail.
 export function createEmail(env: EmailBindings, fetcher: typeof fetch = fetch): Email {

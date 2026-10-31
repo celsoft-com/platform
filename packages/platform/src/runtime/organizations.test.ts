@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { freshDatabase, world } from "../../test/database.js";
+import { freshDatabase, world, capturedMail } from "../../test/database.js";
 import { organizationPoint, teamPoint } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
-import { serveOrganizations, type InvitationNotice } from "./organizations.js";
+import { serveOrganizations } from "./organizations.js";
 
 // The platform's own organizations: rows O1 onward of docs/access-rules.md, and their HTTP routes.
 
@@ -88,10 +88,11 @@ describe("Organizations", () => {
     await refused(w.orgs(c.member).invite(c.org, "x@example.com"));
     await refused(w.orgs(c.member).invitations(c.org));
     await refused(w.orgs(c.outsider).invite(c.org, "x@example.com"));
-    const sent: InvitationNotice[] = [];
-    const invitation = await w.orgs(c.admin, async (n) => void sent.push(n)).invite(c.org, " X@Example.com ");
+    const mail = capturedMail();
+    const invitation = await w.orgs(c.admin, mail).invite(c.org, " X@Example.com ");
+    await mail.settled();
     expect(invitation.email).toBe("x@example.com");
-    expect(sent).toEqual([{ to: "x@example.com", organization: "Org", invitedBy: "Test", invitationId: invitation.id }]);
+    expect(mail.sent).toEqual([{ to: "x@example.com", subject: "Join Org on Test App", text: `Test invited you to join Org:\n\nhttps://app.test/login?invitation=${invitation.id}\n` }]);
     expect((await w.orgs(c.admin).invitations(c.org)).map((i) => i.id)).toEqual([invitation.id]);
   });
 

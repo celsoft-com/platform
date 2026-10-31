@@ -1,6 +1,7 @@
 import type { z } from "zod";
+import { escape, htmlDocument } from "./html.js";
 import { RESERVED } from "./routes.js";
-import { EndpointError } from "./endpoint-error.js";
+import { refusal } from "./endpoint-error.js";
 import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 
@@ -224,7 +225,8 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       try {
         await requireAccess(found.route.access, params, app);
       } catch (thrown) {
-        if (thrown instanceof EndpointError && (thrown.status === 404 || thrown.status === 403)) return refuse();
+        const refused = thrown instanceof Response ? undefined : await refusal(thrown);
+        if (refused && (refused.status === 404 || refused.status === 403)) return refuse();
         throw thrown;
       }
       const seconds = found.route.cache === undefined ? undefined : cacheSeconds(found.route.cache);
@@ -244,14 +246,16 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       try {
         answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), request);
       } catch (thrown) {
-        if (!(thrown instanceof EndpointError)) throw thrown;
+        // A page answers in HTML, so a thrown Response is not one of its refusals.
+        const refused = thrown instanceof Response ? undefined : await refusal(thrown);
+        if (!refused) throw thrown;
         // A handler's 404 is the gate's one 404 page, so a missing page reads like a refused one;
         // its message goes to the logs only.
-        if (thrown.status === 404) {
-          console.log(`page ${url.pathname} not found: ${thrown.message}`);
+        if (refused.status === 404) {
+          console.log(`page ${url.pathname} not found: ${refused.message}`);
           return refuse();
         }
-        return html(errorPage(thrown.status, thrown.message), thrown.status);
+        return html(errorPage(refused.status, refused.message), refused.status);
       }
       const response = typeof answer === "string" ? html(answer, 200) : answer;
       if (key && response.status === 200 && !response.headers.has("set-cookie")) {
@@ -314,10 +318,8 @@ function html(body: string, status: number, headers: Record<string, string> = {}
   return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...headers } });
 }
 
-const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-
 function errorPage(status: number, message: string, extra = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
+  return htmlDocument({ title: String(status), body: `<h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p>` });
 }
 
 // The one 404 page, for any path outside /api/ that nothing answers, as for a missing page.

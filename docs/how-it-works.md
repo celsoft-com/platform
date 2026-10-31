@@ -113,7 +113,7 @@ flowchart LR
 7. **Handler:** optional; it takes every `/api/` request no endpoint answers, for downloads, streaming and webhooks; any other path nothing answers gets the one 404 page.
 8. **Uploads:** an input field `upload({ maxBytes, types })` takes a file, sent as multipart by `call` and as `{ name, type, base64 }` (up to 5 MB) over MCP; the handler gets a checked `File`.
 9. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
-10. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.
+10. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `cap`, `env` and `waitUntil`, each created on first use.
 11. **Link checks:** `app.routes.serves("/about")` says what answers a GET of a path: `"platform"`, `"page"`, `"endpoint"`, `"file"`, `"fallback"` (index.html, with `spa`) or `null` for a 404; it sends no request.
 12. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
 13. **Forms:** cross-site form posts are refused before the handler runs.

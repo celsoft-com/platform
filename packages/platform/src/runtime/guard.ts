@@ -1,3 +1,4 @@
+import { readJsonBody } from "./shared.js";
 import { AUTH_PATH } from "./auth.js";
 
 export const PUBLIC_API = "/api/public/";
@@ -45,8 +46,8 @@ export async function rateLimited(request: Request, pathname: string, limiter: R
   if (!limiter || !by || request.method !== "POST") return false;
   let subject = request.headers.get("cf-connecting-ip") ?? "unknown";
   if (by === "email") {
-    const body = (await request.clone().json().catch(() => ({}))) as { email?: unknown };
-    if (typeof body.email === "string") subject = body.email.trim().toLowerCase();
+    const body = await readJsonBody<{ email?: unknown }>(request, { clone: true });
+    if (typeof body?.email === "string") subject = body.email.trim().toLowerCase();
   }
   return !(await limiter.limit({ key: `${pathname}:${subject}` })).success;
 }

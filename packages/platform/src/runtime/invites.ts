@@ -1,20 +1,18 @@
+import { EMAIL, readJsonBody, type Db } from "./shared.js";
 import { sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Email } from "./email.js";
-import { EndpointError } from "./endpoint-error.js";
+import { EndpointError, refusal } from "./endpoint-error.js";
 
 // Invite-only sign-up: once an app has its first account, a new address may sign up only with an
 // invitation from the owner or an admin, an open organization invitation, or a share to that
 // address. See docs/design.md, Auth, Signup.
 
-type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute">;
 
 export const INVITES_PATH = "/invites";
 export const INVITES_API = "/api/platform/invites";
 export const INVITE_DAYS = 14;
 export const INVITE_ONLY = "This app is invite-only; ask an admin for an invitation";
 const INVITER_ROLES = ["owner", "admin"];
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export interface Invite {
   id: string;
@@ -98,7 +96,7 @@ export async function serveInvites(request: Request, path: string, invites: Invi
   try {
     if (path === INVITES_API && request.method === "GET") return Response.json(await invites.list());
     if (path === INVITES_API && request.method === "POST") {
-      const body = (await request.json().catch(() => undefined)) as { email?: unknown } | undefined;
+      const body = await readJsonBody<{ email?: unknown }>(request);
       if (!body || typeof body.email !== "string") return Response.json({ error: "send { email }" }, { status: 400 });
       return Response.json(await invites.create(body.email), { status: 201 });
     }
@@ -109,7 +107,8 @@ export async function serveInvites(request: Request, path: string, invites: Invi
     }
     return Response.json({ error: "not found" }, { status: 404 });
   } catch (thrown) {
-    if (thrown instanceof EndpointError) return Response.json({ error: thrown.message }, { status: thrown.status });
+    const refused = thrown instanceof Response ? undefined : await refusal(thrown);
+    if (refused) return Response.json({ error: refused.message }, { status: refused.status });
     throw thrown;
   }
 }

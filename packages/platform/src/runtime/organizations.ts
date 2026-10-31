@@ -1,7 +1,8 @@
+import { conflict, notFound, readJsonBody, rows, UUID, type Db } from "./shared.js";
 import { sql, type SQL } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { createAccess, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
-import { EndpointError } from "./endpoint-error.js";
+import { createAccess, forgetting, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
+import type { EmailMessage, Mail } from "./email.js";
+import { EndpointError, refusal } from "./endpoint-error.js";
 
 // The platform's own organizations, teams, members and invitations; see docs/design.md, Auth
 // behavior, Organizations. Members carry no roles: who may do what is decided by control points,
@@ -88,13 +89,8 @@ export interface Organizations {
   removeFromTeam(teamId: string, userId: string): Promise<void>;
 }
 
-type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute" | "transaction">;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const notFound = () => new EndpointError(404, "not found");
-const conflict = (message: string) => new EndpointError(409, message);
 const invalid = (message: string) => new EndpointError(400, message);
-const rows = async <T>(db: Db, query: SQL): Promise<T[]> => (await db.execute(query)).rows as T[];
 
 // Ids come from URLs and bodies; anything that is not a UUID names nothing.
 function uuid(value: unknown): string {
@@ -118,7 +114,20 @@ function email(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
-export function createOrganizations(db: Db, caller: () => Promise<Caller>, notify?: (notice: InvitationNotice) => Promise<void>): Organizations {
+// Calls that can change who belongs where, and so any level the request found earlier: each
+// forgets `memo`, the request's remembered levels, before and after, as access's own writes do.
+const WRITES = ["create", "rename", "remove", "removeMember", "invite", "revokeInvitation", "accept", "decline", "createTeam", "renameTeam", "removeTeam", "addToTeam", "removeFromTeam"] as const;
+
+// The email inviting someone to an organization, with the link that accepts it.
+export function invitationMessage(notice: InvitationNotice, appName: string, origin: string): EmailMessage {
+  return {
+    to: notice.to,
+    subject: `Join ${notice.organization} on ${appName}`,
+    text: `${notice.invitedBy ?? "Someone"} invited you to join ${notice.organization}:\n\n${new URL(`/login?invitation=${notice.invitationId}`, origin)}\n`,
+  };
+}
+
+export function createOrganizations(db: Db, caller: () => Promise<Caller>, mail?: Mail, memo?: Map<string, number>): Organizations {
   const access: Access = createAccess(db, caller);
 
   async function me(): Promise<string> {
@@ -164,7 +173,7 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
           from member m join "user" u on u.id = m.user_id where ${where} order by u.name, u.id`,
     ).then((found) => found.map((r) => ({ userId: r.user_id, name: r.name, email: r.email, admin: Boolean(r.admin) })));
 
-  return {
+  const api: Organizations = {
     async create(input) {
       const creator = await me();
       const orgName = name(input?.name);
@@ -260,7 +269,10 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
             on conflict on constraint invitation_once do update set team_id = excluded.team_id, expires_at = excluded.expires_at, inviter_id = excluded.inviter_id, updated_at = now()
             returning id, expires_at, (select name from "user" where id = ${inviter}::uuid) as inviter, (select name from organization where id = ${orgId}::uuid) as org`,
       );
-      await notify?.({ to, organization: row!.org, invitedBy: row!.inviter, invitationId: row!.id });
+      if (mail) {
+        const message = invitationMessage({ to, organization: row!.org, invitedBy: row!.inviter, invitationId: row!.id }, mail.appName, mail.origin);
+        mail.waitUntil(mail.email.send(message).catch((error) => console.error("invitation email failed", error)));
+      }
       return { id: row!.id, email: to, teamId, expiresAt: new Date(row!.expires_at) };
     },
 
@@ -380,6 +392,11 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
       });
     },
   };
+  for (const name of WRITES) {
+    const write = api[name] as (...args: unknown[]) => Promise<unknown>;
+    (api as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => forgetting(memo, () => write(...args));
+  }
+  return api;
 }
 
 export const PLATFORM_API = "/api/platform/";
@@ -419,7 +436,7 @@ export async function serveOrganizations(request: Request, path: string, orgs: O
     if (!match || request.method !== method) continue;
     let body: Record<string, unknown> = {};
     if (method === "POST" || method === "PATCH") {
-      const parsed = await request.json().catch(() => undefined);
+      const parsed = await readJsonBody<unknown>(request);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return Response.json({ error: "send a JSON object" }, { status: 400 });
       body = parsed as Record<string, unknown>;
     }
@@ -433,7 +450,8 @@ export async function serveOrganizations(request: Request, path: string, orgs: O
       const result = await run(orgs, params, body);
       return Response.json(result ?? {}, { status: method === "POST" && !rest.endsWith("/accept") ? 201 : 200 });
     } catch (error) {
-      if (error instanceof EndpointError) return Response.json({ error: error.message }, { status: error.status });
+      const refused = error instanceof Response ? undefined : await refusal(error);
+      if (refused) return Response.json({ error: refused.message }, { status: refused.status });
       throw error;
     }
   }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
-import { freshDatabase, world } from "../../test/database.js";
+import { freshDatabase, world, capturedMail } from "../../test/database.js";
 import { applyStaticPoints, createAccess, MAX_DEPTH, organizationPoint, shareMessage, teamPoint, type Level, type ShareNotice } from "./access.js";
 import { EndpointError } from "./endpoint-error.js";
 
@@ -594,46 +594,50 @@ describe("Grants", () => {
 });
 
 describe("Sharing email", () => {
+  // What was emailed, once everything sent after the answer has gone.
   const notices = () => {
-    const sent: ShareNotice[] = [];
-    return { sent, notify: vi.fn(async (n: ShareNotice) => void sent.push(n)) };
+    const mail = capturedMail();
+    return { mail, sent: mail.sent, settled: mail.settled };
   };
 
   it("E1: a new grant to a person emails them, naming who shared and the level", async () => {
     const owner = await w.user();
-    const { sent, notify } = notices();
-    const as = w.as(owner, null, { notify });
+    const { sent, mail, settled } = notices();
+    const as = w.as(owner, null, { mail });
     const id = `note-${uid()}`;
     await as.create(id);
     const address = `${uid()}@example.com`;
     const friend = await w.user({ email: address });
     await as.grant(id, { user: friend }, "write", { email: { path: "/notes/7" } });
-    expect(sent).toEqual([{ to: address, sharedBy: "Test", level: "write", path: "/notes/7", subject: undefined, text: undefined }]);
+    await settled();
+    expect(sent).toEqual([{ to: address, subject: "Test shared something with you on Test App", text: "Test gave you write access on Test App.\n\nhttps://app.test/notes/7\n" }]);
   });
 
   it("E2: a new grant to an email address emails that address", async () => {
-    const { sent, notify } = notices();
-    const as = w.as(await w.user(), null, { notify });
+    const { sent, mail, settled } = notices();
+    const as = w.as(await w.user(), null, { mail });
     const id = `note-${uid()}`;
     await as.create(id);
     await as.grant(id, { email: "New@Example.com" }, "read");
-    expect(sent.map((n) => [n.to, n.path])).toEqual([["new@example.com", "/"]]);
+    await settled();
+    expect(sent.map((n) => [n.to, n.text.trim().split("\n").at(-1)])).toEqual([["new@example.com", "https://app.test/"]]);
   });
 
   it("E3: changing a grant's level sends nothing", async () => {
-    const { sent, notify } = notices();
-    const as = w.as(await w.user(), null, { notify });
+    const { sent, mail, settled } = notices();
+    const as = w.as(await w.user(), null, { mail });
     const id = `note-${uid()}`;
     await as.create(id);
     await as.grant(id, { email: "a@example.com" }, "read");
     await as.grant(id, { email: "a@example.com" }, "write");
+    await settled();
     expect(sent).toHaveLength(1);
   });
 
   it("E4: teams, organizations and Everyone get no email", async () => {
     const c = await company();
-    const { sent, notify } = notices();
-    const as = w.as(c.admin, null, { notify });
+    const { sent, mail, settled } = notices();
+    const as = w.as(c.admin, null, { mail });
     const id = `doc-${uid()}`;
     await as.create(id, { parent: organizationPoint(c.org) });
     await as.grant(id, { team: c.team }, "read");
@@ -643,12 +647,12 @@ describe("Sharing email", () => {
   });
 
   it("E5: email false sends nothing; a refused grant sends nothing", async () => {
-    const { sent, notify } = notices();
-    const as = w.as(await w.user(), null, { notify });
+    const { sent, mail, settled } = notices();
+    const as = w.as(await w.user(), null, { mail });
     const id = `note-${uid()}`;
     await as.create(id);
     await as.grant(id, { email: "a@example.com" }, "read", { email: false });
-    await refused(w.as(await w.user(), null, { notify }).grant(id, { email: "b@example.com" }, "read"));
+    await refused(w.as(await w.user(), null, { mail }).grant(id, { email: "b@example.com" }, "read"));
     expect(sent).toEqual([]);
   });
 
