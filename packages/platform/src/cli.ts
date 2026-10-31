@@ -14,7 +14,7 @@ import { DrizzleMigrator, MigrationQuestions } from "./adapters/drizzle.js";
 import { queryStats, runSqlFile } from "./adapters/database.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
-import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
+import { CONFIG_FILE, ConfigError, loadApp, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { generate } from "./generate.js";
 import { HttpsError, waitForHttps } from "./https.js";
 import { checkWorkflow, init, tokenNames } from "./init.js";
@@ -115,6 +115,7 @@ async function main(argv: string[]): Promise<void> {
 
   if (command.name === "init") {
     const { config, variables } = await loadApp(appDir);
+    maskInCi(Object.values(variables));
     await init({
       repoRoot: repoRoot(appDir),
       appDir,
@@ -132,6 +133,7 @@ async function main(argv: string[]): Promise<void> {
   }
 
   const app = await loadApp(appDir);
+  maskInCi(Object.values(app.variables));
   if (command.name === "db generate") {
     const custom = values.custom;
     if (custom !== undefined && !/^[a-z0-9][a-z0-9_-]*$/.test(custom)) throw new UsageError("--custom takes a name of lowercase letters, digits, - and _, such as place-notes");
@@ -235,14 +237,6 @@ async function commandForGitHubEvent(): Promise<Command | undefined> {
   return undefined;
 }
 
-async function loadApp(appDir: string): Promise<{ config: Config; variables: Record<string, string> }> {
-  const text = await readConfigText(appDir);
-  const names = configVariables(text);
-  const vars = await loadVars(appDir, names);
-  const variables = Object.fromEntries(names.filter((name) => vars[name]).map((name) => [name, vars[name]!]));
-  maskInCi(Object.values(variables));
-  return { config: parseConfig(text, join(appDir, CONFIG_FILE), variables), variables };
-}
 
 async function context(appDir: string, config: Config, dryRun: boolean): Promise<Context> {
   // Every provider key is read whatever platform.jsonc turns on, so destroy can find what an
