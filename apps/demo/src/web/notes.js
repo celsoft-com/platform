@@ -17,7 +17,7 @@ export function noteRow(note, { author } = {}) {
 export async function notesPage(call) {
   const list = el("ul", { className: "list" });
   const load = async () => {
-    const notes = await request("/api/notes");
+    const notes = await call("listNotes", {});
     list.replaceChildren(...(notes.length ? notes.map((n) => noteRow(n)) : [el("li", {}, empty("No notes yet; write one above."))]));
   };
   const create = el(

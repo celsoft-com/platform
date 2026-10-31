@@ -1,6 +1,6 @@
-import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, upload, type App, type Grantee } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, jsonPath, LEVELS, organizationPoint, page, route, teamPoint, upload, type App, type Grantee } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
-import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, ne, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
 
@@ -16,12 +16,15 @@ const ROOM = /^(organization|team):[0-9a-f-]{36}$/;
 
 // A note as anyone who can open it sees it, with the level they have on it.
 const SharedNote = z.object({ id: z.uuid(), body: z.string(), attachmentName: z.string().nullable(), createdAt: z.date(), organizationId: z.uuid().nullable(), teamId: z.uuid().nullable(), author: z.string(), level: z.string() });
+// A note as its author lists it.
+const Note = SharedNote.omit({ author: true, level: true });
 const NoteId = z.object({ id: z.uuid() });
+const NoteText = z.string().trim().min(1).max(10000);
 const GroupNote = z.object({ id: z.uuid(), body: z.string(), createdAt: z.date(), author: z.string() });
 const Org = z.object({ id: z.uuid(), name: z.string() });
 const OrgId = z.object({ organization: z.uuid() });
 const TeamId = z.object({ team: z.uuid() });
-const Level = z.enum(["read", "create", "write", "delete", "manage"]);
+const Level = z.enum(LEVELS);
 // Who a grant is for, as the permissions panel names it.
 const To = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("email"), value: z.email() }),
@@ -79,7 +82,7 @@ const bookmarksFile = (userId: string) => `bookmarks/${userId}.json`;
 const Bookmark = z.object({ url: z.url(), title: z.string().min(1).max(200), stars: z.number().int().min(0).max(5).optional(), tags: z.array(z.string().max(40)).max(10).optional() });
 
 // Notes in an organization or a team, newest first, only those the caller can read.
-async function groupNotes(app: App<typeof schema>, where: ReturnType<typeof eq>) {
+async function groupNotes(app: App<typeof schema>, where: SQL) {
   return app.db
     .select(groupColumns)
     .from(notes)
@@ -87,6 +90,13 @@ async function groupNotes(app: App<typeof schema>, where: ReturnType<typeof eq>)
     .where(and(where, await app.access.readable(notes.id)))
     .orderBy(desc(notes.createdAt))
     .limit(100);
+}
+
+// The organization a team belongs to; a team that does not exist is not found.
+async function teamOrganization(app: App<typeof schema>, teamId: string): Promise<string> {
+  const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, teamId));
+  if (!row) throw new EndpointError(404, "not found");
+  return row.organizationId;
 }
 
 // A new note under a group's point, inheriting from it, announced to the group's room.
@@ -157,12 +167,7 @@ export default defineApp(
       return files.response(`${noteFolder(note.userId, note.id)}/${note.attachmentName}`);
     }
 
-    const user = await requireUser();
-
-    if (url.pathname === "/api/notes" && request.method === "GET") {
-      const mine = and(eq(notes.userId, user.id), isNull(notes.organizationId));
-      return Response.json(await db.select(columns).from(notes).where(mine).orderBy(desc(notes.createdAt)).limit(100));
-    }
+    await requireUser();
 
     return new Response("not found", { status: 404 });
   },
@@ -178,13 +183,18 @@ export default defineApp(
         async (_, app) => ({ level: await app.access.check("about") }),
       ),
 
+      // The caller's own personal notes, newest first.
+      listNotes: endpoint({ method: "GET", path: "/api/notes", input: z.object({}), output: z.array(Note), access: { level: "read" } }, async (_, app) => {
+        const user = await app.requireUser();
+        return app.db.select(columns).from(notes).where(and(eq(notes.userId, user.id), isNull(notes.organizationId))).orderBy(desc(notes.createdAt)).limit(100);
+      }),
       // A personal note with an optional attachment of up to 10 MB, sent as multipart by `call`.
       addNote: endpoint(
         {
           method: "POST",
           path: "/api/notes",
-          input: z.object({ body: z.string().trim().min(1).max(10000), file: upload().optional() }),
-          output: SharedNote.omit({ author: true, level: true }),
+          input: z.object({ body: NoteText, file: upload().optional() }),
+          output: Note,
           access: { level: "create" },
           invalidates: ["/stats"],
         },
@@ -225,7 +235,7 @@ export default defineApp(
         {
           method: "PUT",
           path: "/api/public/notes/:id",
-          input: NoteId.extend({ body: z.string().trim().min(1).max(10000) }),
+          input: NoteId.extend({ body: NoteText }),
           output: SharedNote,
           access: { point: "id", level: "write" },
           invalidates: ({ id }) => [`/print/${id}`],
@@ -256,10 +266,8 @@ export default defineApp(
             parent = organizationPoint(to.id);
             place = { organizationId: to.id, teamId: null };
           } else if (to.kind === "team") {
-            const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, to.id));
-            if (!row) throw new EndpointError(404, "not found");
             parent = teamPoint(to.id);
-            place = { organizationId: row.organizationId, teamId: to.id };
+            place = { organizationId: await teamOrganization(app, to.id), teamId: to.id };
           }
           await app.db.transaction(async (tx) => {
             const access = app.access.in(tx);
@@ -291,6 +299,7 @@ export default defineApp(
           return { level, parent: point.parent, inherits: point.inherits, grants: grants.map(({ kind, value, name, level: l }) => ({ kind, value, name, level: l })), links };
         },
       ),
+      // To a person, an email address, a team, an organization or Everyone; a person or an address is emailed.
       grantNote: endpoint(
         { method: "POST", path: "/api/notes/:id/grants", input: NoteId.extend({ to: To, level: Level }), output: z.object({}), access: { point: "id", level: "manage" } },
         async ({ id, to, level }, app) => {
@@ -309,19 +318,6 @@ export default defineApp(
         { method: "PUT", path: "/api/notes/:id/inherit", input: NoteId.extend({ inherit: z.boolean() }), output: z.object({}), access: { point: "id", level: "manage" } },
         async ({ id, inherit }, app) => {
           await app.access.inherit(id, inherit);
-          return {};
-        },
-      ),
-      shareNote: endpoint(
-        {
-          method: "POST",
-          path: "/api/notes/:id/shares",
-          input: NoteId.extend({ email: z.email(), level: z.enum(["read", "write"]) }),
-          output: z.object({}),
-          access: { point: "id", level: "manage" },
-        },
-        async ({ id, email, level }, app) => {
-          await app.access.grant(id, { email }, level, { email: { path: `/#/notes/${id}` } });
           return {};
         },
       ),
@@ -399,7 +395,7 @@ export default defineApp(
           method: "POST",
           path: "/api/organizations/:organization/notes",
           description: "Add a note to an organization the signed-in user belongs to; its open pages see it live",
-          input: OrgId.extend({ body: z.string().trim().min(1).max(10000) }),
+          input: OrgId.extend({ body: NoteText }),
           output: GroupNote,
           access: { point: ({ organization }) => organizationPoint(organization), level: "create" },
           invalidates: ["/stats"],
@@ -424,14 +420,13 @@ export default defineApp(
           method: "POST",
           path: "/api/teams/:team/notes",
           description: "Add a note to a team the signed-in user can add to; the team's open pages see it live",
-          input: TeamId.extend({ body: z.string().trim().min(1).max(10000) }),
+          input: TeamId.extend({ body: NoteText }),
           output: GroupNote,
           access: { point: ({ team: id }) => teamPoint(id), level: "create" },
           invalidates: ["/stats"],
         },
         async ({ team: id, body }, app) => {
-          const [row] = await app.db.select({ organizationId: team.organizationId }).from(team).where(eq(team.id, id));
-          return addGroupNote(app, { organizationId: row!.organizationId, teamId: id }, teamPoint(id), body);
+          return addGroupNote(app, { organizationId: await teamOrganization(app, id), teamId: id }, teamPoint(id), body);
         },
       ),
     },
