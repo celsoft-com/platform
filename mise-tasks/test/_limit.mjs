@@ -1,5 +1,6 @@
 // Sends one throwaway API token past the app's per-caller limit on the real Cloudflare binding and
-// prints how many requests it took to get a 429, and that 429's wait.
+// prints how many requests it took to get a 429, and that 429's wait. Reported, never failed: the
+// binding has not answered 429 on previews, tracked in tmp/issues/rate-limit-no-429.md.
 const [base, token, limit = "1200"] = process.argv.slice(2);
 if (!base || !token) throw new Error("usage: _limit.mjs <preview url> <token> [limit]");
 

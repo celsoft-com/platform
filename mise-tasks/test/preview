@@ -5,37 +5,47 @@ base=${1:?usage: mise run test:preview -- <preview url> <pr>}
 pr=${2:?usage: mise run test:preview -- <preview url> <pr>}
 jar=$(mktemp)
 email="owner-$RANDOM@example.com"
-check() { printf '%-44s %s\n' "$1" "$2"; }
+# Each check prints its label and the answer, and fails the run unless the answer matches the
+# expected pattern, an extended regular expression matched whole.
+failed=0
+check() {
+  if [[ "$3" =~ ^($2)$ ]]; then
+    printf '%-44s %s\n' "$1" "$3"
+  else
+    printf '%-44s %s   FAILED, expected %s\n' "$1" "$3" "$2"
+    failed=$((failed + 1))
+  fi
+}
 
-check "GET / " "$(curl -s -o /dev/null -w '%{http_code}' "$base/")"
+check "GET / " '200' "$(curl -s -o /dev/null -w '%{http_code}' "$base/")"
 first=$(curl -s -D - "$base/stats" | tr -d '\r')
 again=$(curl -s -D - "$base/stats" | tr -d '\r')
-check "public page cached (miss then hit)" "$(echo "$first" | awk 'tolower($1) == "platform-cache:" { print $2 }') $(echo "$again" | awk 'tolower($1) == "platform-cache:" { print $2 }')"
-check "cached copy is the same page" "$([ "$(echo "$first" | grep -o 'Rendered at [^;]*')" = "$(echo "$again" | grep -o 'Rendered at [^;]*')" ] && echo same || echo different)"
-check "unknown path is the one 404 page" "$(curl -s -o /dev/null -w '%{http_code}' "$base/no-such-page") $(curl -s "$base/no-such-page" | grep -c 'There is nothing here.')"
-check "GET /login has title" "$(curl -s "$base/login" | grep -c 'platform-title">Sign in')"
-check "GET /api/notes signed out" "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/notes")"
-check "cross-site form post" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/x-www-form-urlencoded' -H 'origin: https://evil.example' -d a=1 "$base/api/notes")"
+check "public page cached (miss then hit)" 'miss hit' "$(echo "$first" | awk 'tolower($1) == "platform-cache:" { print $2 }') $(echo "$again" | awk 'tolower($1) == "platform-cache:" { print $2 }')"
+check "cached copy is the same page" 'same' "$([ "$(echo "$first" | grep -o 'Rendered at [^;]*')" = "$(echo "$again" | grep -o 'Rendered at [^;]*')" ] && echo same || echo different)"
+check "unknown path is the one 404 page" '404 1' "$(curl -s -o /dev/null -w '%{http_code}' "$base/no-such-page") $(curl -s "$base/no-such-page" | grep -c 'There is nothing here.')"
+check "GET /login has title" '1' "$(curl -s "$base/login" | grep -c 'platform-title">Sign in')"
+check "GET /api/notes signed out" '401' "$(curl -s -o /dev/null -w '%{http_code}' "$base/api/notes")"
+check "cross-site form post" '403' "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/x-www-form-urlencoded' -H 'origin: https://evil.example' -d a=1 "$base/api/notes")"
 
 # Sign-up is invite-only and the preview's database is a copy of prod, which has its owner: the
 # test owner's invitation goes straight into the preview's database, and `owner reset` makes it
 # the owner, which invites everyone else the test signs up.
 body='{"name":"Owner","email":"'$email'","password":"first-password-1"}'
-check "uninvited sign-up refused (403)" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")"
+check "uninvited sign-up refused (403)" '403' "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")"
 invite_sql=$(mktemp)
 printf "insert into signup_invite (email, expires_at) values ('%s', now() + interval '1 day') on conflict (email) do nothing;\n" "$email" > "$invite_sql"
 mise run platform -- db run "$invite_sql" --pr "$pr" >/dev/null 2>&1
 signup=$(curl -s -c "$jar" -H 'content-type: application/json' -H "origin: $base" -d "$body" "$base/api/auth/sign-up/email")
-check "invited sign-up returns a session token" "$(echo "$signup" | grep -c '"token":"')"
-check "test owner made the owner" "$(printf 'first-password-1\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
+check "invited sign-up returns a session token" '1' "$(echo "$signup" | grep -c '"token":"')"
+check "test owner made the owner" '1' "$(printf 'first-password-1\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
 curl -s -c "$jar" -H 'content-type: application/json' -H "origin: $base" -d '{"email":"'$email'","password":"first-password-1"}' "$base/api/auth/sign-in/email" >/dev/null
 attachment=$(mktemp)
 printf 'hello' > "$attachment"
 note=$(curl -s -b "$jar" -H "origin: $base" -F body="first note" -F "file=@$attachment;type=text/plain" "$base/api/notes")
 id=$(echo "$note" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-check "create note with attachment" "$([ -n "$id" ] && echo "id $id" || echo "$note")"
-check "list notes" "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
-check "download attachment" "$(curl -s -b "$jar" "$base/api/public/notes/$id/attachment")"
+check "create note with attachment" 'id [0-9a-f-]{36}' "$([ -n "$id" ] && echo "id $id" || echo "$note")"
+check "list notes" '1' "$(curl -s -b "$jar" "$base/api/notes" | grep -c 'first note')"
+check "download attachment" 'hello' "$(curl -s -b "$jar" "$base/api/public/notes/$id/attachment")"
 
 # Access: the note is a control point its author manages, shared and linked through the demo's endpoints.
 json() { curl -s -H 'content-type: application/json' -H "origin: $base" "$@"; }
@@ -43,116 +53,132 @@ status() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/
 level() { sed -n 's/.*"level":"\([a-z]*\)".*/\1/p'; }
 note_url="$base/api/public/notes/$id"
 sleep 2
-check "a new note invalidates /stats (miss)" "$(curl -s -D - -o /dev/null "$base/stats" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }')"
-check "owner's level on own note" "$(json -b "$jar" "$note_url" | level)"
+check "a new note invalidates /stats (miss)" 'miss' "$(curl -s -D - -o /dev/null "$base/stats" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }')"
+check "owner's level on own note" 'manage' "$(json -b "$jar" "$note_url" | level)"
 etag=$(curl -s -D - -o /dev/null -b "$jar" "$note_url" | tr -d '\r' | awk 'tolower($1) == "etag:" { print $2 }')
-check "unchanged read answers 304" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
+check "unchanged read answers 304" '304' "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" -H "if-none-match: $etag" "$note_url")"
 jar2=$(mktemp)
 friend="friend-$RANDOM@example.com"
-check "owner invites a friend (201)" "$(status -b "$jar" -d '{"email":"'$friend'"}' "$base/api/platform/invites")"
-check "invitations screen served" "$(curl -s "$base/invites" | grep -c 'Invitations</h1>')"
+check "owner invites a friend (201)" '201' "$(status -b "$jar" -d '{"email":"'$friend'"}' "$base/api/platform/invites")"
+check "invitations screen served" '1' "$(curl -s "$base/invites" | grep -c 'Invitations</h1>')"
 json -c "$jar2" -d '{"name":"Friend","email":"'$friend'","password":"friend-password-1"}' "$base/api/auth/sign-up/email" >/dev/null
-check "friend cannot invite (403)" "$(status -b "$jar2" -d '{"email":"x-'$RANDOM'@example.com"}' "$base/api/platform/invites")"
-check "someone else's note refused (404)" "$(status -b "$jar2" "$note_url")"
-check "someone else's attachment refused (404)" "$(status -b "$jar2" "$base/api/public/notes/$id/attachment")"
-check "attachment refused signed out (404)" "$(status "$base/api/public/notes/$id/attachment")"
-check "share by email" "$(status -b "$jar" -d '{"email":"'$friend'","level":"write"}' "$base/api/notes/$id/shares")"
-check "unconfirmed address still refused (404)" "$(status -b "$jar2" "$note_url")"
-check "nothing shared with them yet" "$(json -b "$jar2" "$base/api/shared-notes")"
-check "making a link needs manage (404)" "$(status -b "$jar2" -d '{"level":"read"}' "$base/api/notes/$id/links")"
+check "friend cannot invite (403)" '403' "$(status -b "$jar2" -d '{"email":"x-'$RANDOM'@example.com"}' "$base/api/platform/invites")"
+check "someone else's note refused (404)" '404' "$(status -b "$jar2" "$note_url")"
+check "someone else's attachment refused (404)" '404' "$(status -b "$jar2" "$base/api/public/notes/$id/attachment")"
+check "attachment refused signed out (404)" '404' "$(status "$base/api/public/notes/$id/attachment")"
+check "share by email" '200' "$(status -b "$jar" -d '{"email":"'$friend'","level":"write"}' "$base/api/notes/$id/shares")"
+check "unconfirmed address still refused (404)" '404' "$(status -b "$jar2" "$note_url")"
+check "nothing shared with them yet" '\[\]' "$(json -b "$jar2" "$base/api/shared-notes")"
+check "making a link needs manage (404)" '404' "$(status -b "$jar2" -d '{"level":"read"}' "$base/api/notes/$id/links")"
 read_token=$(json -b "$jar" -d '{"level":"read"}' "$base/api/notes/$id/links" | sed -n 's/.*link=\([^"]*\)".*/\1/p')
 write_token=$(json -b "$jar" -d '{"level":"write"}' "$base/api/notes/$id/links" | sed -n 's/.*link=\([^"]*\)".*/\1/p')
-check "read link opens it signed out" "$(json -H "x-access-link: $read_token" "$note_url" | level)"
-check "read link cannot edit (404)" "$(status -X PUT -H "x-access-link: $read_token" -d '{"body":"by a reader"}' "$note_url")"
-check "write link edits signed out" "$(json -X PUT -H "x-access-link: $write_token" -d '{"body":"edited by link"}' "$note_url" | grep -c 'edited by link')"
-check "altered link refused (404)" "$(status -H "x-access-link: x$write_token" "$note_url")"
-check "no link, no note (404)" "$(status "$note_url")"
+check "read link opens it signed out" 'read' "$(json -H "x-access-link: $read_token" "$note_url" | level)"
+check "read link cannot edit (404)" '404' "$(status -X PUT -H "x-access-link: $read_token" -d '{"body":"by a reader"}' "$note_url")"
+check "write link edits signed out" '1' "$(json -X PUT -H "x-access-link: $write_token" -d '{"body":"edited by link"}' "$note_url" | grep -c 'edited by link')"
+check "altered link refused (404)" '404' "$(status -H "x-access-link: x$write_token" "$note_url")"
+check "no link, no note (404)" '404' "$(status "$note_url")"
 # Bookmarks: one JSON file per person in app.files, searched with JSONPath over a GET.
-check "save bookmarks" "$(json -b "$jar" -X PUT -d '{"bookmarks":[{"url":"https://a.example","title":"A","stars":4},{"url":"https://b.example","title":"B","stars":5}]}' "$base/api/bookmarks")"
-check "JSONPath search keeps types (total 1)" "$(json -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%3D%204%5D" | grep -o '"total":[0-9]*')"
-check "bad JSONPath refused (400)" "$(status -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%204%5D")"
-check "permissions panel for the owner" "$(json -b "$jar" "$base/api/notes/$id/access" | grep -c '"inherits":false')"
-check "permissions panel refused to others (404)" "$(status -b "$jar2" "$base/api/notes/$id/access")"
-check "grant Everyone read" "$(status -b "$jar" -d '{"to":{"kind":"everyone"},"level":"read"}' "$base/api/notes/$id/grants")"
-check "Everyone reads it signed out" "$(json "$note_url" | level)"
-check "revoke Everyone" "$(status -b "$jar" -d '{"to":{"kind":"everyone"}}' "$base/api/notes/$id/grants/revoke")"
-check "static point readable by everyone" "$(json "$base/api/public/about" | level)"
-check "owner manages the static point" "$(json -b "$jar" "$base/api/public/about" | level)"
-check "others only read it" "$(json -b "$jar2" "$base/api/public/about" | level)"
+check "save bookmarks" '\{"saved":2\}' "$(json -b "$jar" -X PUT -d '{"bookmarks":[{"url":"https://a.example","title":"A","stars":4},{"url":"https://b.example","title":"B","stars":5}]}' "$base/api/bookmarks")"
+check "JSONPath search keeps types (total 1)" '"total":1' "$(json -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%3D%204%5D" | grep -o '"total":[0-9]*')"
+check "bad JSONPath refused (400)" '400' "$(status -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%204%5D")"
+check "permissions panel for the owner" '1' "$(json -b "$jar" "$base/api/notes/$id/access" | grep -c '"inherits":false')"
+check "permissions panel refused to others (404)" '404' "$(status -b "$jar2" "$base/api/notes/$id/access")"
+check "grant Everyone read" '200' "$(status -b "$jar" -d '{"to":{"kind":"everyone"},"level":"read"}' "$base/api/notes/$id/grants")"
+check "Everyone reads it signed out" 'read' "$(json "$note_url" | level)"
+check "revoke Everyone" '200' "$(status -b "$jar" -d '{"to":{"kind":"everyone"}}' "$base/api/notes/$id/grants/revoke")"
+check "static point readable by everyone" 'read' "$(json "$base/api/public/about" | level)"
+check "owner manages the static point" 'manage' "$(json -b "$jar" "$base/api/public/about" | level)"
+check "others only read it" 'read' "$(json -b "$jar2" "$base/api/public/about" | level)"
 
 # Server pages: /stats is claimed by the Worker, and every visitor gets the same page.
 page() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
-check "signed in gets the shared copy (hit)" "$(curl -s -D - -o /dev/null -b "$jar" "$base/stats" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }')"
-check "page path not routed (404)" "$(page -b "$jar" "$base/stats/more")"
-check "page only reads (405)" "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/stats")"
-check "unclaimed path still the app (200)" "$(page "$base/statistics")"
+check "signed in gets the shared copy (hit)" 'hit' "$(curl -s -D - -o /dev/null -b "$jar" "$base/stats" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }')"
+check "page path not routed (404)" '404' "$(page -b "$jar" "$base/stats/more")"
+check "page only reads (405)" '405' "$(page -b "$jar" -X POST -H "origin: $base" -H 'content-type: application/json' -d '{}' "$base/stats")"
+check "unclaimed path is the one 404 page (404)" '404' "$(page "$base/statistics")"
 
 # Gated pages: /print/<id> lets in whoever may read the note, and they share one kept copy.
 cache_state() { curl -s -D - -o /dev/null "$@" | tr -d '\r' | awk 'tolower($1) == "platform-cache:" { print $2 }'; }
-check "page shows a note I can read" "$(curl -s -b "$jar" "$base/print/$id" | grep -c 'edited by link')"
-check "next reader gets the kept copy (hit)" "$(cache_state -b "$jar" "$base/print/$id")"
-check "page refuses someone else (404)" "$(page -b "$jar2" "$base/print/$id")"
-check "refused signed in, no sign-in offer" "$(curl -s -b "$jar2" "$base/print/$id" | grep -c '/login')"
-check "page refuses a signed-out visitor (404)" "$(page "$base/print/$id")"
-check "refused signed out offers sign-in and sign-up" "$(curl -s "$base/print/$id" | grep -c "/login?next=%2Fprint%2F$id\|/signup?next=%2Fprint%2F$id")"
-check "missing note looks the same (404)" "$(page "$base/print/00000000-0000-4000-8000-000000000000")"
-check "page path not routed (404)" "$(page -b "$jar" "$base/print/$id/more")"
+check "page shows a note I can read" '1' "$(curl -s -b "$jar" "$base/print/$id" | grep -c 'edited by link')"
+check "next reader gets the kept copy (hit)" 'hit' "$(cache_state -b "$jar" "$base/print/$id")"
+check "page refuses someone else (404)" '404' "$(page -b "$jar2" "$base/print/$id")"
+check "refused signed in, no sign-in offer" '0' "$(curl -s -b "$jar2" "$base/print/$id" | grep -c '/login')"
+check "page refuses a signed-out visitor (404)" '404' "$(page "$base/print/$id")"
+check "refused signed out offers sign-in and sign-up" '1' "$(curl -s "$base/print/$id" | grep -c "/login?next=%2Fprint%2F$id\|/signup?next=%2Fprint%2F$id")"
+check "missing note looks the same (404)" '404' "$(page "$base/print/00000000-0000-4000-8000-000000000000")"
+check "page path not routed (404)" '404' "$(page -b "$jar" "$base/print/$id/more")"
 jar3=$(mktemp)
-check "link kept as a cookie" "$(status -c "$jar3" -d '{"link":"'$read_token'"}' "$base/api/platform/link")"
-check "altered link not kept (404)" "$(status -d '{"link":"x'$read_token'"}' "$base/api/platform/link")"
-check "link cookie opens the page signed out" "$(curl -s -b "$jar3" "$base/print/$id" | grep -c 'edited by link')"
-check "link cookie downloads the attachment" "$(curl -s -b "$jar3" "$base/api/public/notes/$id/attachment")"
+check "link kept as a cookie" '200' "$(status -c "$jar3" -d '{"link":"'$read_token'"}' "$base/api/platform/link")"
+check "altered link not kept (404)" '404' "$(status -d '{"link":"x'$read_token'"}' "$base/api/platform/link")"
+check "link cookie opens the page signed out" '1' "$(curl -s -b "$jar3" "$base/print/$id" | grep -c 'edited by link')"
+check "link cookie downloads the attachment" 'hello' "$(curl -s -b "$jar3" "$base/api/public/notes/$id/attachment")"
 
 # API tokens: made with the cookie, sent as Authorization: Bearer, capped at their level.
 key() { sed -n 's/.*"key":"\([^"]*\)".*/\1/p'; }
-check "tokens screen served" "$(curl -s "$base/tokens" | grep -c 'API tokens</h1>')"
+check "tokens screen served" '1' "$(curl -s "$base/tokens" | grep -c 'API tokens</h1>')"
 read_key=$(json -b "$jar" -d '{"name":"smoke read","metadata":{"cap":"read"}}' "$base/api/auth/api-key/create" | key)
 write_key=$(json -b "$jar" -d '{"name":"smoke write","metadata":{"cap":"write"}}' "$base/api/auth/api-key/create" | key)
-check "token made" "$(echo "$write_key" | grep -c '^pat_')"
-check "token lists my notes" "$(curl -s -H "authorization: Bearer $write_key" "$base/api/notes" | grep -c "\"id\":\"$id\"")"
-check "token's level is its cap" "$(json -H "authorization: Bearer $write_key" "$note_url" | level)"
-check "write token cannot manage (404)" "$(status -H "authorization: Bearer $write_key" -d '{"level":"read"}' "$base/api/notes/$id/links")"
-check "read token cannot write (403)" "$(status -X PUT -H "authorization: Bearer $read_key" -d '{"body":"by token"}' "$note_url")"
-check "token ignored on auth routes" "$(json -H "authorization: Bearer $write_key" "$base/api/auth/get-session")"
-check "token cannot make tokens (401)" "$(status -H "authorization: Bearer $write_key" -d '{"name":"more"}' "$base/api/auth/api-key/create")"
-check "altered token refused (401)" "$(status -H "authorization: Bearer ${write_key}x" "$base/api/notes")"
-check "token reads a gated page" "$(curl -s -H "authorization: Bearer $read_key" "$base/print/$id" | grep -c 'edited by link')"
-check "unlimited token refused (400)" "$(status -b "$jar" -d '{"name":"forever","expiresIn":"never"}' "$base/api/auth/api-key/create")"
+check "token made" '1' "$(echo "$write_key" | grep -c '^pat_')"
+check "token lists my notes" '1' "$(curl -s -H "authorization: Bearer $write_key" "$base/api/notes" | grep -c "\"id\":\"$id\"")"
+check "token's level is its cap" 'write' "$(json -H "authorization: Bearer $write_key" "$note_url" | level)"
+check "write token cannot manage (404)" '404' "$(status -H "authorization: Bearer $write_key" -d '{"level":"read"}' "$base/api/notes/$id/links")"
+check "read token cannot write (403)" '403' "$(status -X PUT -H "authorization: Bearer $read_key" -d '{"body":"by token"}' "$note_url")"
+check "token ignored on auth routes" 'null' "$(json -H "authorization: Bearer $write_key" "$base/api/auth/get-session")"
+check "token cannot make tokens (401)" '401' "$(status -H "authorization: Bearer $write_key" -d '{"name":"more"}' "$base/api/auth/api-key/create")"
+check "altered token refused (401)" '401' "$(status -H "authorization: Bearer ${write_key}x" "$base/api/notes")"
+check "token reads a gated page" '1' "$(curl -s -H "authorization: Bearer $read_key" "$base/print/$id" | grep -c 'edited by link')"
+check "unlimited token refused (400)" '400' "$(status -b "$jar" -d '{"name":"forever","expiresIn":"never"}' "$base/api/auth/api-key/create")"
 write_id=$(json -b "$jar" "$base/api/auth/api-key/list" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log((JSON.parse(s).apiKeys.find(k=>k.name==="smoke write")||{}).id||""))')
-check "read token reads a page" "$(page -H "authorization: Bearer $read_key" "$base/print/$id")"
-check "altered token refused on a page (401)" "$(page -H "authorization: Bearer ${read_key}x" "$base/print/$id")"
-check "revoke token" "$(status -b "$jar" -d '{"keyId":"'$write_id'"}' "$base/api/auth/api-key/delete")"
-check "revoked token refused (401)" "$(status -H "authorization: Bearer $write_key" "$base/api/notes")"
+check "read token reads a page" '200' "$(page -H "authorization: Bearer $read_key" "$base/print/$id")"
+check "altered token refused on a page (401)" '401' "$(page -H "authorization: Bearer ${read_key}x" "$base/print/$id")"
+check "revoke token" '200' "$(status -b "$jar" -d '{"keyId":"'$write_id'"}' "$base/api/auth/api-key/delete")"
+check "revoked token refused (401)" '401' "$(status -H "authorization: Bearer $write_key" "$base/api/notes")"
 
 # Organizations: the platform's own, with the creator as its first admin; members add notes.
 org_id=$(json -b "$jar" -d '{"name":"Smoke"}' "$base/api/organizations" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-check "create organization" "$([ -n "$org_id" ] && echo "id $org_id" || echo "none")"
-check "creator is an admin" "$(json -b "$jar" "$base/api/platform/organizations/$org_id/members" | grep -c '"admin":true')"
-check "Admins team exists" "$(json -b "$jar" "$base/api/platform/organizations/$org_id/teams" | grep -c '"name":"Admins"')"
-check "outsider cannot see it (404)" "$(status -b "$jar2" "$base/api/platform/organizations/$org_id")"
-check "outsider cannot invite (404)" "$(status -b "$jar2" -d '{"email":"x@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
-check "outsider cannot read its notes (404)" "$(status -b "$jar2" "$base/api/organizations/$org_id/notes")"
-check "outsider cannot add notes (404)" "$(status -b "$jar2" -d '{"body":"sneaky"}' "$base/api/organizations/$org_id/notes")"
-check "admin invites (201)" "$(status -b "$jar" -d '{"email":"invitee@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
-check "last admin cannot leave (409)" "$(status -b "$jar" -X DELETE "$base/api/platform/organizations/$org_id/members/$(json -b "$jar" "$base/api/auth/get-session" | sed -n 's/.*"user":{[^}]*"id":"\([^"]*\)".*/\1/p')")"
+check "create organization" 'id [0-9a-f-]{36}' "$([ -n "$org_id" ] && echo "id $org_id" || echo "none")"
+check "creator is an admin" '1' "$(json -b "$jar" "$base/api/platform/organizations/$org_id/members" | grep -c '"admin":true')"
+check "Admins team exists" '1' "$(json -b "$jar" "$base/api/platform/organizations/$org_id/teams" | grep -c '"name":"Admins"')"
+check "outsider cannot see it (404)" '404' "$(status -b "$jar2" "$base/api/platform/organizations/$org_id")"
+check "outsider cannot invite (404)" '404' "$(status -b "$jar2" -d '{"email":"x@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
+check "outsider cannot read its notes (404)" '404' "$(status -b "$jar2" "$base/api/organizations/$org_id/notes")"
+check "outsider cannot add notes (404)" '404' "$(status -b "$jar2" -d '{"body":"sneaky"}' "$base/api/organizations/$org_id/notes")"
+check "admin invites (201)" '201' "$(status -b "$jar" -d '{"email":"invitee@example.com"}' "$base/api/platform/organizations/$org_id/invitations")"
+check "last admin cannot leave (409)" '409' "$(status -b "$jar" -X DELETE "$base/api/platform/organizations/$org_id/members/$(json -b "$jar" "$base/api/auth/get-session" | sed -n 's/.*"user":{[^}]*"id":"\([^"]*\)".*/\1/p')")"
 team_id=$(json -b "$jar" -d '{"name":"Crew"}' "$base/api/platform/organizations/$org_id/teams" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-check "create team" "$([ -n "$team_id" ] && echo "id $team_id" || echo "none")"
-check "team note by an admin" "$(json -b "$jar" -d '{"body":"crew"}' "$base/api/teams/$team_id/notes" | grep -c '"body":"crew"')"
-check "outsider cannot read team notes (404)" "$(status -b "$jar2" "$base/api/teams/$team_id/notes")"
-check "move the note into the team" "$(status -b "$jar" -d '{"to":{"kind":"team","id":"'$team_id'"}}' "$base/api/notes/$id/move")"
-check "move it back" "$(status -b "$jar" -d '{"to":{"kind":"personal"}}' "$base/api/notes/$id/move")"
-check "Better Auth's organization routes are gone (404)" "$(status -b "$jar" -d '{"name":"x","slug":"x-'$RANDOM'"}' "$base/api/auth/organization/create")"
+check "create team" 'id [0-9a-f-]{36}' "$([ -n "$team_id" ] && echo "id $team_id" || echo "none")"
+check "team note by an admin" '1' "$(json -b "$jar" -d '{"body":"crew"}' "$base/api/teams/$team_id/notes" | grep -c '"body":"crew"')"
+check "outsider cannot read team notes (404)" '404' "$(status -b "$jar2" "$base/api/teams/$team_id/notes")"
+check "move the note into the team" '200' "$(status -b "$jar" -d '{"to":{"kind":"team","id":"'$team_id'"}}' "$base/api/notes/$id/move")"
+check "move it back" '200' "$(status -b "$jar" -d '{"to":{"kind":"personal"}}' "$base/api/notes/$id/move")"
+check "Better Auth's organization routes are gone (404)" '404' "$(status -b "$jar" -d '{"name":"x","slug":"x-'$RANDOM'"}' "$base/api/auth/organization/create")"
 
 cookie=$(awk '{ sub(/^#HttpOnly_/, "") } !/^#/ && NF >= 7 { printf "%s=%s; ", $6, $7 }' "$jar")
-node "$(dirname "$0")/_live.mjs" "$base" "$cookie"
-node "$(dirname "$0")/_mcp.mjs" "$base" "$email" "first-password-1"
-node "$(dirname "$0")/_budget.mjs" "$base" "$cookie" "$id"
+node "$(dirname "$0")/_live.mjs" "$base" "$cookie" || failed=$((failed + 1))
+node "$(dirname "$0")/_mcp.mjs" "$base" "$email" "first-password-1" || failed=$((failed + 1))
+node "$(dirname "$0")/_budget.mjs" "$base" "$cookie" "$id" || failed=$((failed + 1))
 limit_key=$(json -b "$jar" -d '{"name":"smoke limit","metadata":{"cap":"read"}}' "$base/api/auth/api-key/create" | key)
 node "$(dirname "$0")/_limit.mjs" "$base" "$limit_key"
 
 signin='{"email":"'$email'","password":"second-password-2"}'
-check "owner reset from the CLI" "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
-check "old session (cached up to 1 minute)" "$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")"
-check "sign in with the new password" "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
-check "no recovery screen (expect 0)" "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
+check "owner reset from the CLI" '1' "$(printf 'second-password-2\n' | mise run platform -- owner reset "$email" --pr "$pr" 2>&1 | grep -c 'is the owner')"
+# The session's cached copy lasts up to a minute, so the old session may answer until then.
+old_session() {
+  local code
+  for _ in $(seq 1 14); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" "$base/api/notes")
+    [ "$code" = 401 ] && break
+    sleep 5
+  done
+  echo "$code"
+}
+check "old session ends within a minute (401)" '401' "$(old_session)"
+check "sign in with the new password" '200' "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "origin: $base" -d "$signin" "$base/api/auth/sign-in/email")"
+check "no recovery screen (expect 0)" '0' "$(curl -s "$base/recover" | grep -c 'Recover the owner')"
 rm -f "$jar" "$jar2" "$jar3" "$attachment" "$invite_sql"
+
+if [ "$failed" -gt 0 ]; then
+  echo "$failed check(s) failed"
+  exit 1
+fi
+echo "every check passed"
