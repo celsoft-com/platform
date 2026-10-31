@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { EndpointError } from "./endpoint-error.js";
 import { runEndpoint, type Endpoint } from "./endpoints.js";
 import { servesMcp } from "./mcp.js";
+import { filesFromMcp, mcpInput } from "./upload.js";
 
 // Loaded only when /mcp is called, so the MCP SDK never costs a Worker's startup otherwise.
 
@@ -15,9 +16,9 @@ export async function serveMcp<App>(request: Request, app: App, name: string, en
     if (!servesMcp(e)) continue;
     // The SDK's types expect its own Zod shape; the app's Zod 4 object schema is what it validates against.
     const register = server.registerTool.bind(server) as (name: string, config: object, handler: (args: unknown) => Promise<object>) => void;
-    register(tool, { description: e.description ?? tool, inputSchema: e.input }, async (args) => {
+    register(tool, { description: e.description ?? tool, inputSchema: mcpInput(e.input) }, async (args) => {
       try {
-        const output = e.output.parse(await runEndpoint(e, args, app));
+        const output = e.output.parse(await runEndpoint(e, filesFromMcp(e.input, args as Record<string, unknown>), app));
         return { content: [{ type: "text" as const, text: JSON.stringify(output) }] };
       } catch (error) {
         return { isError: true, content: [{ type: "text" as const, text: await toolError(tool, error) }] };

@@ -33,6 +33,7 @@ export { page, route, type Page, type PageHandler, type PageResult, type PageRou
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
 export { jsonPath, query } from "./jsonpath.js";
+export { upload, type UploadOptions } from "./upload.js";
 export type { QueryOptions, QueryResult } from "./jsonpath.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";

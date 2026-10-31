@@ -110,12 +110,13 @@ flowchart LR
 4. **Checks:** bad input is a 400 with `{ error }`; an output that does not match its schema is a 500, logged.
 5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`, and the generated client throws `EndpointError` with the same status and message.
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
-7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
-8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
-9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.
-10. **Link checks:** `app.routes.serves("/about")` says what answers a GET of a path: `"platform"`, `"page"`, `"endpoint"`, `"file"`, `"fallback"` (index.html, with `spa`) or `null` for a 404; it sends no request.
-10. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
-11. **Forms:** cross-site form posts are refused before the handler runs.
+7. **Handler:** optional; it takes every request no endpoint answers, for downloads, streaming and webhooks.
+8. **Uploads:** an input field `upload({ maxBytes, types })` takes a file, sent as multipart by `call` and as `{ name, type, base64 }` (up to 5 MB) over MCP; the handler gets a checked `File`.
+9. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
+10. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.
+11. **Link checks:** `app.routes.serves("/about")` says what answers a GET of a path: `"platform"`, `"page"`, `"endpoint"`, `"file"`, `"fallback"` (index.html, with `spa`) or `null` for a 404; it sends no request.
+12. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
+13. **Forms:** cross-site form posts are refused before the handler runs.
 
 ### Tables and migrations
 

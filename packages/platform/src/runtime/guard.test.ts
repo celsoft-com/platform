@@ -13,6 +13,11 @@ describe("cross-site forms", () => {
     expect(form("/api/notes", "https://app.test")).toBe(false);
   });
 
+  it("lets a script with an API token post a form, such as an upload, with no origin", () => {
+    const request = new Request("https://app.test/api/upload", { method: "POST", headers: { "content-type": "multipart/form-data; boundary=x", authorization: "Bearer t" }, body: "" });
+    expect(isCrossSiteForm(request, new URL(request.url))).toBe(false);
+  });
+
   it("lets AI clients post to the OAuth token endpoints, which never use cookies", () => {
     expect(form("/api/auth/oauth2/token")).toBe(false);
     expect(form("/api/auth/oauth2/revoke")).toBe(false);

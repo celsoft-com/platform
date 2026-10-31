@@ -14,7 +14,7 @@ export function noteRow(note, { author } = {}) {
   );
 }
 
-export async function notesPage() {
+export async function notesPage(call) {
   const list = el("ul", { className: "list" });
   const load = async () => {
     const notes = await request("/api/notes");
@@ -31,8 +31,8 @@ export async function notesPage() {
     "submit",
     attempt(async (event) => {
       event.preventDefault();
-      const response = await fetch("/api/notes", { method: "POST", body: new FormData(create) });
-      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "could not save the note");
+      const { body, file } = Object.fromEntries(new FormData(create));
+      await call("addNote", { body, ...(file.size > 0 && { file }) });
       create.reset();
       flash("Saved.");
       await load();

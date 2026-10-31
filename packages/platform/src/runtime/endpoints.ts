@@ -4,6 +4,7 @@ import { experimental_ZodSmartCoercionPlugin } from "@orpc/zod/zod4";
 import type { z } from "zod";
 import { rank, type Access, type Level } from "./access.js";
 import type { Cache } from "./cache.js";
+import { bodyLimit, uploadFields } from "./upload.js";
 import { EndpointError } from "./endpoint-error.js";
 import type { AppContext } from "./index.js";
 
@@ -174,12 +175,14 @@ export function apiRoutes(endpoints: Record<string, Omit<Endpoint, "handler">>):
   return routes;
 }
 
+// A route's path as a pattern matching the paths it answers, each {name} one segment.
+const pathPattern = (path: string) => new RegExp(`^${path.split("/").map((segment) => (/^\{.+\}$/.test(segment) ? "[^/]+" : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("/")}$`);
+
 // Whether a GET endpoint served over the API answers a path, before its input is checked.
 export function getMatcher(endpoints: Record<string, Omit<Endpoint, "handler">>): (pathname: string) => boolean {
-  const literal = (segment: string) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const patterns = Object.values(apiRoutes(endpoints))
     .filter((route) => route.method === "GET")
-    .map((route) => new RegExp(`^${route.path.split("/").map((segment) => (/^\{.+\}$/.test(segment) ? "[^/]+" : literal(segment))).join("/")}$`));
+    .map((route) => pathPattern(route.path));
   return (pathname) => patterns.some((pattern) => pattern.test(pathname));
 }
 
@@ -193,6 +196,11 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
   const routes = apiRoutes(endpoints);
   const names = Object.keys(routes);
   if (names.length === 0) return undefined;
+  // Endpoints taking files refuse a body over their files' limits before reading it.
+  const limits = names.flatMap((name) => {
+    const fields = uploadFields(endpoints[name]!.input);
+    return Object.keys(fields).length === 0 ? [] : [{ method: routes[name]!.method, pattern: pathPattern(routes[name]!.path), bytes: bodyLimit(fields) }];
+  });
 
   const base = os.$context<{ app: App }>();
   const router: Router<any, { app: App }> = Object.fromEntries(
@@ -234,6 +242,10 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
 
   return {
     async handle(request, app) {
+      const length = Number(request.headers.get("content-length") ?? 0);
+      const pathname = new URL(request.url).pathname;
+      const limit = limits.find((l) => l.method === request.method && l.pattern.test(pathname));
+      if (limit && length > limit.bytes) return Response.json({ error: `the request is ${length} bytes; this endpoint takes at most ${limit.bytes}` }, { status: 413 });
       const { matched, response } = await handler.handle(request, { context: { app } });
       if (!matched || !response) return undefined;
       if (response.ok) return response;

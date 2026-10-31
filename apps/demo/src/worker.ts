@@ -1,11 +1,10 @@
-import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, type App, type Grantee } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, upload, type App, type Grantee } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
 import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "./schema";
 
 const { notes } = schema;
-const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const columns = { id: notes.id, body: notes.body, attachmentName: notes.attachmentName, createdAt: notes.createdAt, organizationId: notes.organizationId, teamId: notes.teamId };
 const groupColumns = { id: notes.id, body: notes.body, createdAt: notes.createdAt, author: users.name };
 const ROOM = /^(organization|team):[0-9a-f-]{36}$/;
@@ -163,31 +162,6 @@ export default defineApp(
       return Response.json(await db.select(columns).from(notes).where(mine).orderBy(desc(notes.createdAt)).limit(100));
     }
 
-    if (url.pathname === "/api/notes" && request.method === "POST") {
-      const form = await request.formData();
-      const body = form.get("body");
-      const file = form.get("file");
-      if (typeof body !== "string" || body.trim() === "" || body.length > 10000) {
-        return Response.json({ error: "body must be 1 to 10000 characters" }, { status: 400 });
-      }
-      const attachment = file instanceof File && file.size > 0 ? file : undefined;
-      if (attachment && attachment.size > MAX_ATTACHMENT) {
-        return Response.json({ error: "attachments are limited to 10 MB" }, { status: 400 });
-      }
-
-      const note = await db.transaction(async (tx) => {
-        const [inserted] = await tx
-          .insert(notes)
-          .values({ body: body.trim(), userId: user.id, attachmentName: attachment?.name ?? null, attachmentType: attachment?.type || null })
-          .returning(columns);
-        await app.access.in(tx).create(inserted!.id);
-        return inserted;
-      });
-      if (attachment) await files.put(`${noteFolder(user.id, note!.id)}/${attachment.name}`, attachment, attachment.type || undefined);
-      await app.cache.invalidate("/stats");
-      return Response.json(note, { status: 201 });
-    }
-
     return new Response("not found", { status: 404 });
   },
   {
@@ -200,6 +174,28 @@ export default defineApp(
       about: endpoint(
         { method: "GET", path: "/api/public/about", input: z.object({}), output: z.object({ level: z.string() }), access: { point: () => "about", level: "read" } },
         async (_, app) => ({ level: await app.access.check("about") }),
+      ),
+
+      // A personal note with an optional attachment of up to 10 MB, sent as multipart by `call`.
+      addNote: endpoint(
+        {
+          method: "POST",
+          path: "/api/notes",
+          input: z.object({ body: z.string().trim().min(1).max(10000), file: upload().optional() }),
+          output: SharedNote.omit({ author: true, level: true }),
+          access: { level: "create" },
+          invalidates: ["/stats"],
+        },
+        async ({ body, file }, app) => {
+          const user = await app.requireUser();
+          const note = await app.db.transaction(async (tx) => {
+            const [inserted] = await tx.insert(notes).values({ body, userId: user.id, attachmentName: file?.name ?? null, attachmentType: file?.type || null }).returning(columns);
+            await app.access.in(tx).create(inserted!.id);
+            return inserted!;
+          });
+          if (file) await app.files.put(`${noteFolder(user.id, note.id)}/${file.name}`, file, file.type || undefined);
+          return note;
+        },
       ),
 
       saveBookmarks: endpoint(

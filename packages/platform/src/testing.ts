@@ -95,7 +95,7 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     call: createCall<App>(routes, { url: TEST_URL, link: () => null, fetch: (request) => send(withHeaders(request, headers)), headers }),
     fetch: (path, init = {}) => send(withHeaders(new Request(new URL(path, TEST_URL), init), headers)),
   });
-  const anonymous = acting({});
+  const anonymous = acting({ origin: TEST_URL });
 
   return {
     ...anonymous,
@@ -117,7 +117,8 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
       const cookie = response.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
       return { id: body.user.id, email, cookie };
     },
-    as: (who) => acting("token" in who ? { authorization: `Bearer ${who.token}` } : { cookie: who.cookie }),
+    // A browser sends its page's origin with every form it posts, such as an upload.
+    as: (who) => acting("token" in who ? { authorization: `Bearer ${who.token}` } : { cookie: who.cookie, origin: TEST_URL }),
     async close() {
       await pool?.end();
     },

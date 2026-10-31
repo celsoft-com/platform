@@ -64,7 +64,11 @@ export default defineApp(undefined, {
    - **A list of points:** the function, sync or async, may return several ids; the first that exists is checked, and only that one, so a point that refuses never falls through to the next: ``point: ({ path }) => [`path:${path}`, ...foldersAbove(path), "site"]``. A function returning anything but ids throws.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints; a refusal throws `EndpointError` with the server's `status` and `message`, and failed validation names each field, such as `body: Too small`.
-7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
+7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for downloads, streaming and webhooks.
+8. **Uploads:** an input field `upload({ maxBytes: 5_000_000, types: ["image/*"] })` takes a file; the handler gets a `File` (`name`, `type`, `size`, bytes), checked before it runs. `maxBytes` is 10 MB by default, at most 100 MB, and a larger body is a 413 unread. Upload fields are top-level input fields, optional with `.optional()`.
+   - **Browser and tests:** pass a `File` to `call("addNote", { body, file })`; it goes as multipart. Never build an upload route by hand, or send base64 in JSON.
+   - **Scripts:** `curl -H "Authorization: Bearer <token>" -F body=hi -F file=@a.png`; other fields arrive as strings and are converted to the schema's types.
+   - **MCP:** an AI client sends `{ name, type, base64 }`, up to 5 MB whatever `maxBytes` says.
 
 ## Server pages
 
