@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { build } from "esbuild";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { Client } from "pg";
 import type { Config } from "../config.js";
@@ -143,6 +144,15 @@ export class DrizzleMigrator implements Migrator {
     } finally {
       await client.end();
     }
+  }
+
+  // Every file of the app's own the schemas are built from: the schema files and what they import,
+  // packages aside, read by esbuild in milliseconds, so a change anywhere in them is seen.
+  async schemaSources(): Promise<string[]> {
+    const schema = await this.schemaFiles();
+    if (schema.length === 0) return [];
+    const { metafile } = await build({ entryPoints: schema, absWorkingDir: this.appDir, bundle: true, write: false, metafile: true, outdir: "out", format: "esm", platform: "node", packages: "external", logLevel: "silent" });
+    return Object.keys(metafile.inputs).map((input) => join(this.appDir, input)).sort();
   }
 
   private async schemaFiles(): Promise<string[]> {
