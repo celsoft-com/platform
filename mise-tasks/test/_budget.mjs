@@ -43,5 +43,6 @@ for (const [name, queries, ms, call] of budgets) {
   const most = Math.max(...runs.map((r) => r.queries));
   const median = runs.map((r) => r.total).sort((a, b) => a - b)[2];
   const ok = most <= queries && median <= ms;
-  console.log(`${pad(`budget: ${name}`)}${ok ? "within" : `over: ${most} queries (budget ${queries}), ${Math.round(median)}ms (budget ${ms}ms)`}`);
+  console.log(`${pad(`budget: ${name}`)}${ok ? "within" : `over: ${most} queries (budget ${queries}), ${Math.round(median)}ms (budget ${ms}ms)   FAILED`}`);
+  if (!ok) process.exitCode = 1;
 }
