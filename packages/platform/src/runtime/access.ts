@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { Mail } from "./email.js";
 import { EndpointError } from "./endpoint-error.js";
 import { LINK_HEADER } from "./link-header.js";
 
@@ -350,8 +351,8 @@ async function checkSameOrganization(on: Db, point: PointRow, g: GranteeColumns)
 }
 
 export interface AccessOptions {
-  // Announces a new grant to a person, after the answer.
-  notify?: (notice: ShareNotice) => Promise<void>;
+  // Emails a person a new grant gives access, after the answer.
+  mail?: Mail;
   // The caller's levels already found in this request, by point; any change to access clears it.
   // Pass one to clear it from outside, as organization changes do.
   memo?: Map<string, number>;
@@ -372,7 +373,7 @@ export async function forgetting<T>(memo: Map<string, number> | undefined, write
 const WRITES = ["create", "move", "remove", "inherit", "grant", "revoke", "link", "revokeLink"] as const;
 
 export function createAccess(db: Db, caller: () => Promise<Caller>, options: AccessOptions = {}): Access {
-  const { notify } = options;
+  const { mail } = options;
   const memo = options.memo ?? new Map<string, number>();
   let human: Promise<Who> | undefined;
   const person = () =>
@@ -545,8 +546,9 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
         await checkSameOrganization(on, row, g);
         const { userId } = await me();
         const [inserted] = await insertGrant(on, point, g, n, userParam(userId));
-        if (!notify || email === false || !inserted?.inserted || !inserted.recipient || !(g.user || g.email)) return;
-        await notify({ to: inserted.recipient, sharedBy: inserted.shared_by, level, path: email.path ?? "/", subject: email.subject, text: email.text });
+        if (!mail || email === false || !inserted?.inserted || !inserted.recipient || !(g.user || g.email)) return;
+        const notice = { to: inserted.recipient, sharedBy: inserted.shared_by, level, path: email.path ?? "/", subject: email.subject, text: email.text };
+        mail.waitUntil(mail.email.send(shareMessage(notice, mail.appName, mail.origin)).catch((error) => console.error("sharing email failed", error)));
       },
 
       async revoke(point, to) {

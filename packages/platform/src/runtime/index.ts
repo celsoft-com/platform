@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, type Access, type Level, type StaticPoint } from "./access.js";
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
-import { createEmail, type Email, type EmailBindings } from "./email.js";
+import { createEmail, type Email, type EmailBindings, type Mail } from "./email.js";
 import { apiHandler, getMatcher, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
 import type { AppContext, Session, User } from "./types.js";
 import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
@@ -376,6 +376,14 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
   const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
   const db = () => resources.db as unknown as NodePgDatabase<Record<string, unknown>>;
+  const mail: Mail = {
+    get email() {
+      return resources.email;
+    },
+    origin,
+    appName,
+    waitUntil: (promise) => resources.waitUntil(promise),
+  };
 
   const app: AppContext<Env, Schema> = {
     env,
@@ -409,26 +417,14 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
       const links = [request.headers.get(LINK_HEADER), ...linkCookies(request)].filter((t): t is string => t !== null);
       return (access ??= createAccess(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: links, cap }), {
-        // Sent after the answer, so a slow or failing email never fails the grant itself.
-        notify: async (notice) => app.waitUntil(resources.email.send(shareMessage(notice, appName, origin)).catch((error) => console.error("sharing email failed", error))),
+        mail,
         // Once per Worker instance; a failure is retried by the next request.
         memo: levels,
       }));
     },
     get organizations() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      return (organizations ??= createOrganizations(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
-        app.waitUntil(
-          resources.email
-            .send({
-              to: notice.to,
-              subject: `Join ${notice.organization} on ${appName}`,
-              text: `${notice.invitedBy ?? "Someone"} invited you to join ${notice.organization}:\n\n${new URL(`/login?invitation=${notice.invitationId}`, origin)}\n`,
-            })
-            .catch((error) => console.error("invitation email failed", error)),
-        ),
-        levels,
-      ));
+      return (organizations ??= createOrganizations(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), mail, levels));
     },
     session() {
       const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? resources.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));

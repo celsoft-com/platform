@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createAccess, forgetting, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
+import type { EmailMessage, Mail } from "./email.js";
 import { EndpointError, refusal } from "./endpoint-error.js";
 
 // The platform's own organizations, teams, members and invitations; see docs/design.md, Auth
@@ -122,7 +123,16 @@ function email(value: unknown): string {
 // forgets `memo`, the request's remembered levels, before and after, as access's own writes do.
 const WRITES = ["create", "rename", "remove", "removeMember", "invite", "revokeInvitation", "accept", "decline", "createTeam", "renameTeam", "removeTeam", "addToTeam", "removeFromTeam"] as const;
 
-export function createOrganizations(db: Db, caller: () => Promise<Caller>, notify?: (notice: InvitationNotice) => Promise<void>, memo?: Map<string, number>): Organizations {
+// The email inviting someone to an organization, with the link that accepts it.
+export function invitationMessage(notice: InvitationNotice, appName: string, origin: string): EmailMessage {
+  return {
+    to: notice.to,
+    subject: `Join ${notice.organization} on ${appName}`,
+    text: `${notice.invitedBy ?? "Someone"} invited you to join ${notice.organization}:\n\n${new URL(`/login?invitation=${notice.invitationId}`, origin)}\n`,
+  };
+}
+
+export function createOrganizations(db: Db, caller: () => Promise<Caller>, mail?: Mail, memo?: Map<string, number>): Organizations {
   const access: Access = createAccess(db, caller);
 
   async function me(): Promise<string> {
@@ -264,7 +274,10 @@ export function createOrganizations(db: Db, caller: () => Promise<Caller>, notif
             on conflict on constraint invitation_once do update set team_id = excluded.team_id, expires_at = excluded.expires_at, inviter_id = excluded.inviter_id, updated_at = now()
             returning id, expires_at, (select name from "user" where id = ${inviter}::uuid) as inviter, (select name from organization where id = ${orgId}::uuid) as org`,
       );
-      await notify?.({ to, organization: row!.org, invitedBy: row!.inviter, invitationId: row!.id });
+      if (mail) {
+        const message = invitationMessage({ to, organization: row!.org, invitedBy: row!.inviter, invitationId: row!.id }, mail.appName, mail.origin);
+        mail.waitUntil(mail.email.send(message).catch((error) => console.error("invitation email failed", error)));
+      }
       return { id: row!.id, email: to, teamId, expiresAt: new Date(row!.expires_at) };
     },
 
