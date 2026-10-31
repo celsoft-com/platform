@@ -80,32 +80,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
     placement = placementRegion(await ports.neon.region(project));
-    const prod = await ports.neon.defaultBranch(project);
-
-    let copied = false;
-    const branch =
-      target.kind === "prod"
-        ? prod
-        : await run.ensure<Branch>(
-            `Neon branch ${n.neonBranch}`,
-            () => ports.neon.findBranch(project, n.neonBranch!),
-            () => ((copied = true), ports.neon.createBranch(project, n.neonBranch!, prod.id, true)),
-            { id: "(new)", name: n.neonBranch! },
-          );
-
-    if (target.kind === "prod") await backup(ctx, project, prod);
-
-    const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
-
-    if (uri) {
-      await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
-      await prepareAccessOn(ctx, uri, branch.name);
-      await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri!), undefined);
-      if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
-    } else {
-      run.note(`would run migrations on ${branch.name}`);
-    }
-
+    const { uri } = await prepareBranch(ctx, project, target.kind === "prod" ? undefined : n.neonBranch!, { forgetKeys: Boolean(generated.BETTER_AUTH_SECRET) });
     hyperdriveId = await ensureHyperdrive(ctx, n.hyperdrive, uri);
   }
 
@@ -239,20 +214,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   if (config.database) {
     const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
-    const prod = await ports.neon.defaultBranch(project);
-    let copied = false;
-    const branch = await run.ensure<Branch>(
-      `Neon branch ${DEV_BRANCH}`,
-      () => ports.neon.findBranch(project, DEV_BRANCH),
-      () => ((copied = true), ports.neon.createBranch(project, DEV_BRANCH, prod.id, true)),
-      { id: "(new)", name: DEV_BRANCH },
-    );
-    uri = await ports.neon.connectionUri(project, branch.id);
-    await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
-    await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
-    await prepareAccessOn(ctx, uri, DEV_BRANCH);
-    await run.mutate(`write page cache tables on ${DEV_BRANCH}`, () => ports.migrator.prepareCache(uri!), undefined);
-    if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
+    ({ uri } = await prepareBranch(ctx, project, DEV_BRANCH, { forgetKeys: false, generate: true }));
   }
 
   const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
@@ -270,6 +232,39 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${appUrl}; email is captured to this terminal`);
   await ports.wrangler.dev(local, devSecrets, uri);
+}
+
+// A database branch made ready for the code being shipped: `name` is a branch copied from prod
+// when it is missing, or undefined for prod itself, which is backed up first. Then migrations, the
+// access triggers and static points, and the page cache tables, once; and when the branch is a new
+// copy, or `forgetKeys` says the auth secret is new, the signing keys it cannot decrypt are
+// forgotten. `generate` writes migrations from the schema first, as `dev` does. A dry run that
+// would make the branch has no address yet, so it only notes the migrations.
+async function prepareBranch(ctx: Context, project: string, name: string | undefined, options: { forgetKeys: boolean; generate?: boolean }): Promise<{ branch: Branch; uri: string | undefined }> {
+  const { config, ports, run } = ctx;
+  const prod = await ports.neon.defaultBranch(project);
+  let copied = false;
+  const branch =
+    name === undefined
+      ? prod
+      : await run.ensure<Branch>(
+          `Neon branch ${name}`,
+          () => ports.neon.findBranch(project, name),
+          () => ((copied = true), ports.neon.createBranch(project, name, prod.id, true)),
+          { id: "(new)", name },
+        );
+  if (name === undefined) await backup(ctx, project, prod);
+  const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
+  if (!uri) {
+    run.note(`would run migrations on ${branch.name}`);
+    return { branch, uri };
+  }
+  if (options.generate) await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
+  await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
+  await prepareAccessOn(ctx, uri, branch.name);
+  await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri), undefined);
+  if (config.auth && (copied || options.forgetKeys)) await forgetSigningKeys(ctx, uri, branch.name);
+  return { branch, uri };
 }
 
 // The access tables exist whenever auth is on; their triggers and the app's static points change
