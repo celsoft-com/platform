@@ -56,8 +56,6 @@ const SEGMENT = /^[A-Za-z0-9._~-]+$/;
 const PARAM = /^:([A-Za-z_][A-Za-z0-9_]*)$/;
 const REST = /^\*([A-Za-z_][A-Za-z0-9_]*)$/;
 
-// Claimed by the platform itself; a page under one would never be reached, or would hide it.
-
 // One route with typed, checked parameters, an access gate, or cached; plain functions in
 // `routes` get their parameters as strings and declare no access.
 export function route<Schema extends z.ZodType, App = AnyApp>(definition: { params: Schema; access?: EndpointAccess<z.output<Schema>>; cache?: PageCacheOption }, handler: PageHandler<z.output<Schema>, App>): PageRoute<z.output<Schema>, App>;

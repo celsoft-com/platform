@@ -128,7 +128,7 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   pool?: (connectionString: string) => Pool;
 }
 
-// What one Worker instance does once: applying the app's static points before the first check.
+// What one Worker instance works out once: Better Auth, and which path answers to what.
 interface Once {
   // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
   auth?: Map<string, Auth>;
