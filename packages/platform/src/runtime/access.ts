@@ -93,11 +93,16 @@ export interface Access {
   // can read, or has `level` on.
   readable(column: unknown): Promise<SQL>;
   allows(level: Level, column: unknown): Promise<SQL>;
+  // The ids the caller has `level` on, in their order, in one query; an id no point has is left out.
+  filter(points: readonly string[], level: Level): Promise<string[]>;
   // The same calls inside the app's transaction, so a change and its access commit together.
   in(tx: unknown): Access;
   // The app acting as itself: every check passes and nobody is the creator. For work no user
   // asked for, never for a request's own data.
   asApp(): Access;
+  // Anyone signed out with no link: only Everyone's grants count, so its answers are the same for
+  // every visitor; the one part of app.access a page handler may use. It only reads.
+  asEveryone(): Access;
 }
 
 export interface Caller {
@@ -362,6 +367,7 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
   const person = () =>
     (human ??= caller().then(async ({ userId, link, cap }) => ({ userId, linkHashes: await Promise.all(linkTokens(link).map(hashToken)), app: false, cap: cap ? rank(cap) : null })));
   const asApp: () => Promise<Who> = async () => ({ userId: null, linkHashes: [], app: true, cap: null });
+  const everyone: () => Promise<Who> = async () => ({ userId: null, linkHashes: [], app: false, cap: null });
 
   function bound(on: Db, me: () => Promise<Who>): Access {
     // A request asks about one point once; inside a transaction or as the app, it always asks.
@@ -584,13 +590,21 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
 
       readable: async (column) => sql`(${levelSql(sql`(${column})::text`, await me())} >= ${READ})`,
       allows: async (level, column) => sql`(${levelSql(sql`(${column})::text`, await me())} >= ${rank(level)})`,
+      async filter(points, level) {
+        const ids = [...new Set(points.filter((p) => typeof p === "string" && p.length > 0 && p.length <= 200))];
+        if (ids.length === 0) return [];
+        const allowed = new Set((await rows<{ id: string }>(on, sql`select id from jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) as id where ${levelSql(sql`id`, await me())} >= ${rank(level)}`)).map((r) => r.id));
+        return points.filter((p) => allowed.has(p));
+      },
 
       in: (tx) => bound(tx as Db, me),
       asApp: () => bound(on, asApp),
+      asEveryone: () => bound(on, everyone),
     };
     for (const name of WRITES) {
       const write = api[name] as (...args: unknown[]) => Promise<unknown>;
       (api as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => {
+        if (me === everyone) throw new Error(`app.access.asEveryone() only reads; ${name} needs the caller's own app.access`);
         memo.clear();
         try {
           return await write(...args);

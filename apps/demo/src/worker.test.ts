@@ -30,6 +30,15 @@ describe("demo", () => {
     expect((tooBig as EndpointError).status).toBe(400);
   });
 
+  it("counts on /stats the notes everyone can read, the same for every visitor", async () => {
+    const writer = await t.signUp("sharer@example.com");
+    const stats = async () => /(\d+) of them readable by everyone/.exec(await (await t.fetch("/stats")).text())![1];
+    const before = Number(await stats());
+    const note = await t.as(writer).call("addNote", { body: "for all" });
+    await t.as(writer).call("grantNote", { id: note.id, to: { kind: "everyone" }, level: "read" });
+    expect(Number(await stats())).toBe(before + 1);
+  });
+
   it("keeps one person's organization from another", async () => {
     const owner = await t.signUp("first@example.com");
     const stranger = await t.signUp("stranger@example.com");

@@ -278,15 +278,22 @@ function matches(segments: Segment[], parts: string[]): boolean {
 }
 
 // What who is looking would tell a page, refused, so everyone who passes the gate gets the same
-// answer and a kept copy can be shown to any of them.
+// answer and a kept copy can be shown to any of them. app.access answers only as everyone.
 const WHO = ["session", "requireUser", "access"];
 
 function anonymous(app: AnyApp, name: string): AnyApp {
+  const refuse = (what: string) =>
+    new Error(`page ${name} asked ${what}, but a page renders only what is identical for everyone it lets in; gate it with access, use app.access.asEveryone() to leave out what not everyone may read, and render anything that depends on who is looking in the browser, from an endpoint`);
+  const access = new Proxy({} as AnyApp["access"], {
+    get(_, key) {
+      if (key === "asEveryone") return () => app.access.asEveryone();
+      throw refuse(`app.access.${String(key)}`);
+    },
+  });
   return new Proxy(app, {
     get(target, key) {
-      if (typeof key === "string" && WHO.includes(key)) {
-        throw new Error(`page ${name} asked app.${key}, but a page renders only what is identical for everyone it lets in; gate it with access, and render anything that depends on who is looking in the browser, from an endpoint`);
-      }
+      if (key === "access") return access;
+      if (typeof key === "string" && WHO.includes(key)) throw refuse(`app.${key}`);
       return Reflect.get(target, key);
     },
   });

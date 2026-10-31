@@ -132,7 +132,9 @@ const stats = page({
   routes: {
     "/": route({ access: "anon", cache: true }, async (_, app: App<typeof schema>) => {
       const [row] = await app.db.select({ total: count() }).from(notes);
-      return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p>`);
+      // Everyone's view is the same for every visitor, so the page can still be kept at the edge.
+      const [open] = await app.db.select({ total: count() }).from(notes).where(await app.access.asEveryone().readable(notes.id));
+      return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far, ${open!.total} of them readable by everyone.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p>`);
     }),
   },
 });
