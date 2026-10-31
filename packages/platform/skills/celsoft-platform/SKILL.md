@@ -99,7 +99,7 @@ const notesPage = page({
 export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 ```
 
-1. **Paths:** plain segments, never a parameter, a trailing slash, or under `/api`, `/mcp`, `/.well-known`, the sign-in screens or `/tokens`; two claims never overlap. Every path not claimed is still a static file.
+1. **Paths:** plain segments, never a parameter, a trailing slash, or under a path the platform answers: `/api`, `/login`, `/signup`, `/forgot`, `/reset`, `/consent`, `/invites`, `/tokens`, `/mcp` or `/.well-known`; two claims never overlap. Every path not claimed is still a static file.
    - **Root page:** `page({ path: "/", routes: { "/": handler } })` answers `/` alone, never the paths below it; it wins over a static `index.html` at `/`, which still serves every other unmatched path.
 2. **Routes:** `"/"` is the claimed path itself; a path matching no route under the claim gets the 404 page. A plain function gets its `:name` segments as decoded strings.
    - **Any depth:** a last `*name` segment, such as `"/*path"` or `"/:owner/*path"`, matches one or more segments and gets them joined by `/`, so `/trip/2026/italy/day1` gives `path` = `2026/italy/day1`; use it when paths are made after the deploy, never a route per depth. Text routes win over `:name`, which wins over `*name`; `*name` is only ever last, so split anything after it in the handler. Gate it with a function, `access: { point: ({ path }) => pointFor(path), level: "read" }`.
@@ -133,9 +133,11 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 ## `app`
 
-Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `session()`, `requireUser()`,
+Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `routes`, `session()`, `requireUser()`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
 `access` (with `access` on), `organizations` (with organizations on), `env` and `waitUntil`. Each is created on first use.
+
+`app.routes.serves(path)` says what answers a GET of a path, for checking links: `"platform"` (a screen or platform API that is on), `"page"` (a page route matches), `"endpoint"` (a GET endpoint's path matches), `"file"` (a frontend file, `/about` for `about.html` or `about/index.html`), `"fallback"` (nothing else, and `spa` gives `index.html`), or `null` for a 404. It is free: lists built into the Worker, no request. A query or `#fragment` is ignored, and hand-written handler paths are unknown, so a link to one reads `null`.
 
 Code outside the handlers takes `app` as a parameter typed `App`, so `app.db` knows the app's tables:
 
@@ -255,6 +257,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
+9. **`frontend`:** `{ "dir": "public" }` serves that folder's files free, before the Worker; a path with no file is a 404, unless `"spa": true` gives it `index.html` for browser routing. A bare `"frontend": "public"` is the older shape: `upgrade` rewrites it to `{ "dir": "public", "spa": true }`; drop `spa` unless the app routes in the browser.
 
 ## Testing
 

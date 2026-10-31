@@ -15,6 +15,7 @@ import type { LiveNamespace } from "./runtime/live.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 import { createFiles, memoryBucket, type Files } from "./runtime/files.js";
 import { loadVars } from "./secrets.js";
+import { listStaticFiles } from "./static-files.js";
 import { featureVars } from "./wrangler-config.js";
 
 // Runs an app's real runtime for its tests: routing, access checks, token caps, validation and
@@ -27,6 +28,7 @@ export const TEST_URL = "http://localhost";
 interface TestableApp {
   endpoints: Record<string, Endpoint<any, any, any>>;
   staticPoints: Record<string, StaticPoint>;
+  staticFiles: readonly string[];
   fetch(request: Request, env: never, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<Response>;
 }
 
@@ -68,6 +70,8 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
   const bucket = memoryBucket();
   const emails: EmailMessage[] = [];
   const published: { room: string; message: unknown }[] = [];
+  // As the deploy's entry module does, so app.routes knows the frontend's files.
+  if (config.frontend) app.staticFiles = await listStaticFiles(join(dir, config.frontend.dir));
   const env = {
     ...featureVars(config),
     APP_URL: TEST_URL,

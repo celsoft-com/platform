@@ -189,7 +189,7 @@ describe("live routes", () => {
 });
 
 describe("entryModule", () => {
-  it("exports the app's handler and its room class", () => {
-    expect(entryModule("src/worker.ts")).toContain('import app from "../src/worker.ts";\nexport default app;\nexport const LiveRoom = app.LiveRoom;');
+  it("exports the app's handler and its room class, and hands it the frontend's files", () => {
+    expect(entryModule("src/worker.ts", ["index.html"])).toContain('import app from "../src/worker.ts";\napp.staticFiles = ["index.html"];\nexport default app;\nexport const LiveRoom = app.LiveRoom;');
   });
 });

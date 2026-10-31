@@ -7,7 +7,8 @@ import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, sh
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
-import { apiHandler, requireDeclaredAccess, tokenCaps, withInvalidates, type Endpoint } from "./endpoints.js";
+import { apiHandler, getMatcher, requireDeclaredAccess, tokenCaps, withInvalidates, type Endpoint } from "./endpoints.js";
+import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
 import type { z } from "zod";
@@ -35,6 +36,7 @@ export { jsonPath, query } from "./jsonpath.js";
 export type { QueryOptions, QueryResult } from "./jsonpath.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
+export type { Routes, Served } from "./routes.js";
 export type { Invite, Invites } from "./invites.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
 
@@ -55,6 +57,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   ACCESS?: string;
   // The deployed version, which keys cached pages so every deploy starts with none.
   CF_VERSION_METADATA?: { id: string };
+  // "spa" when unknown paths get the frontend's index.html, "files" when they are 404s; absent without a frontend.
+  FRONTEND?: string;
   // "on" on previews and in local dev: every response says where its time went, in Server-Timing;
   // "sample" in prod: one request in SAMPLE_EVERY logs it instead.
   TRACE?: string;
@@ -78,6 +82,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly organizations: Organizations;
   readonly cache: Cache;
   readonly invites: Invites;
+  readonly routes: Routes;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -126,6 +131,11 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
 interface Once {
   // Better Auth, built once per Worker instance: building it runs its plugins' setup queries.
   auth?: Map<string, Auth>;
+  // What answers which path, for app.routes: the pages and GET endpoints, and the frontend's files,
+  // which the deploy's entry module sets.
+  page: (pathname: string) => boolean;
+  endpoint: (pathname: string) => boolean;
+  files: ReadonlySet<string>;
 }
 
 type Db = NodePgDatabase<Record<string, unknown>>;
@@ -171,8 +181,8 @@ export function defineApp<
   const handle = handler ?? (notFound as Handler<Env, Schema>);
   const endpoints = withInvalidates(options.endpoints ?? {}, options.invalidates);
   const api = apiHandler(endpoints);
-  const once: Once = {};
   const pages = pageServer(options.pages ?? []);
+  const once: Once = { page: (pathname) => Boolean(pages?.routes(pathname)), endpoint: getMatcher(endpoints), files: new Set() };
   requireDeclaredAccess(endpoints);
   const undeclared = pages?.undeclared ?? [];
 
@@ -245,6 +255,10 @@ export function defineApp<
     pages: pages?.claims ?? [],
     // Read by the deploy, which writes them after migrations; requests never do.
     staticPoints: options.access?.points ?? {},
+    // The frontend folder's files, relative to it, set by the deploy's entry module and by testApp.
+    set staticFiles(files: readonly string[]) {
+      once.files = new Set(servedFiles(files));
+    },
 
     async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
       // Prod times one request in SAMPLE_EVERY into its logs, never into the response.
@@ -302,6 +316,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
   let organizations: Organizations | undefined;
   let cache: Cache | undefined;
   let invites: Invites | undefined;
+  let routes: Routes | undefined;
   const levels = new Map<string, number>();
   let session: Promise<Session | null> | undefined;
 
@@ -338,6 +353,9 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const origin = env.APP_URL ?? new URL(request.url).origin;
       return (invites ??= createInvites(app.db as unknown as NodePgDatabase<Record<string, unknown>>, () => app.requireUser(), app.email, origin, env.APP_NAME ?? new URL(origin).hostname));
+    },
+    get routes() {
+      return (routes ??= createRoutes({ features: features(env), frontend: env.FRONTEND, files: once.files, page: once.page, endpoint: once.endpoint }));
     },
     get cache() {
       if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");

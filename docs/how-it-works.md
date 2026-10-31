@@ -47,7 +47,7 @@ my-app/
 ```mermaid
 flowchart TD
   R[Request] --> A{Path starts with /api/ or is a sign-in screen?}
-  A -- no --> S[File from the frontend folder, or index.html when none matches]
+  A -- no --> S[File from the frontend folder; else a 404, or index.html with spa]
   A -- yes --> L{/api/live/?}
   L -- yes --> LR[Platform: live room, if the app's canJoin agrees]
   L -- no --> P{Sign-in screen or /api/auth/?}
@@ -85,9 +85,9 @@ flowchart LR
 
 ### Pages and assets
 
-1. **Folder:** `frontend` in `platform.jsonc` names it: plain files, or a build's output such as `dist` in the demo.
+1. **Folder:** `"frontend": { "dir": "public" }` in `platform.jsonc` names it: plain files, or a build's output such as `dist` in the demo.
 2. **Served free:** files come straight from Cloudflare's asset store and never run the Worker.
-3. **Single-page apps:** a path with no matching file gets `index.html`, so client-side routing works.
+3. **Unknown paths:** a path with no matching file is a 404, so a broken link shows as one; `"spa": true` gives it `index.html` instead, so client-side routing works.
 4. **Build:** when `package.json` has a `build` script, every deploy runs it first; a failed build stops the deploy.
 5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
@@ -112,7 +112,8 @@ flowchart LR
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
 7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
 8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
-9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `env` and `waitUntil`, each created on first use.
+9. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.
+10. **Link checks:** `app.routes.serves("/about")` says what answers a GET of a path: `"platform"`, `"page"`, `"endpoint"`, `"file"`, `"fallback"` (index.html, with `spa`) or `null` for a 404; it sends no request.
 10. **Errors:** a thrown `Response`, such as `requireUser()`'s 401, is sent as the answer.
 11. **Forms:** cross-site form posts are refused before the handler runs.
 

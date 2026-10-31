@@ -9,7 +9,7 @@ const config: Config = parseConfig(`{
   "hostname": "demo.example.com",
   "worker": "src/worker.ts",
   "compatibilityDate": "2026-10-01",
-  "frontend": "dist",
+  "frontend": { "dir": "dist" },
   "database": true,
   "secrets": ["SESSION_SECRET"]
 }`);
@@ -188,6 +188,7 @@ describe("auth and email", () => {
       TRACE: "sample",
       APP_NAME: "demo",
       LIVE_ROOMS: "off",
+      FRONTEND: "files",
       AUTH_ORGANIZATIONS: "off",
       AUTH_API_TOKENS: "off",
       AUTH_SIGNUP: "invite",

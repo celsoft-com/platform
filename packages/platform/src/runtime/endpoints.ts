@@ -174,6 +174,15 @@ export function apiRoutes(endpoints: Record<string, Omit<Endpoint, "handler">>):
   return routes;
 }
 
+// Whether a GET endpoint served over the API answers a path, before its input is checked.
+export function getMatcher(endpoints: Record<string, Omit<Endpoint, "handler">>): (pathname: string) => boolean {
+  const literal = (segment: string) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = Object.values(apiRoutes(endpoints))
+    .filter((route) => route.method === "GET")
+    .map((route) => new RegExp(`^${route.path.split("/").map((segment) => (/^\{.+\}$/.test(segment) ? "[^/]+" : literal(segment))).join("/")}$`));
+  return (pathname) => patterns.some((pattern) => pattern.test(pathname));
+}
+
 export interface ApiHandler<App> {
   handle(request: Request, app: App): Promise<Response | undefined>;
 }

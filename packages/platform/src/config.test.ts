@@ -57,6 +57,13 @@ describe("parseConfig", () => {
     expect(upgradeConfigText(text).changes).toEqual([]);
   });
 
+  it("upgrades a bare frontend folder to { dir, spa: true }, keeping what it served", () => {
+    const { text, changes } = upgradeConfigText(`{\n  "name": "x",\n  "frontend": "dist"\n}\n`);
+    expect(changes).toEqual(["frontend is now { dir, spa }; spa: true keeps index.html for unknown paths, and removing it makes them 404s"]);
+    expect(JSON.parse(text).frontend).toEqual({ dir: "dist", spa: true });
+    expect(() => parseConfig(`{ "frontend": "dist" }`)).toThrow(/older shape \(frontend\)/);
+  });
+
   it("rejects unknown keys", () => {
     expect(() => parseConfig(valid.replace(`"name": "demo",`, `"name": "demo", "extra": true,`))).toThrow(/extra/);
   });

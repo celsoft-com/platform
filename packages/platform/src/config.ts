@@ -20,7 +20,14 @@ export const configSchema = z
     hostname,
     worker: z.string().min(1).describe("Path to the Worker's entry module, relative to platform.jsonc"),
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be a date such as 2026-10-01"),
-    frontend: z.string().min(1).optional().describe("Directory holding the built static files"),
+    frontend: z
+      .object({
+        dir: z.string().min(1).describe("Directory holding the built static files"),
+        spa: z.boolean().default(false).describe("Answer every unknown path with the folder's index.html, for browser routing; otherwise it is a 404, so broken links show"),
+      })
+      .strict()
+      .optional()
+      .describe("Static files the app serves, free, before the Worker"),
     database: z.boolean().default(false).describe("A Neon Postgres 18 database, in the project NEON_PROJECT_ID names in .env.secrets; the app's tables live in src/schema.ts"),
     email: z.boolean().default(false).describe("Send email through Resend from noreply@ the app's own hostname; the app only sends"),
     auth: z
@@ -107,7 +114,9 @@ export function parseConfig(text: string, source = CONFIG_FILE, vars: Record<str
 const RETIRED: string[][] = [["version"], ["database", "migrate"], ["database", "neonProject"]];
 
 function olderShape(raw: unknown): string[][] {
-  return RETIRED.filter((path) => path.reduce<unknown>((node, key) => (isObject(node) ? node[key] : undefined), raw) !== undefined);
+  const retired = RETIRED.filter((path) => path.reduce<unknown>((node, key) => (isObject(node) ? node[key] : undefined), raw) !== undefined);
+  // A bare folder name is the shape before `spa`, when every frontend answered unknown paths with index.html.
+  return isObject(raw) && typeof raw.frontend === "string" ? [["frontend"], ...retired] : retired;
 }
 
 // Rewrites an older file to the current shape, keeping its comments and layout. A Neon project id
@@ -117,7 +126,10 @@ export function upgradeConfigText(text: string): { text: string; changes: string
   const raw = parse(text, [], { allowTrailingComma: true }) as { database?: { neonProject?: string } };
   const formattingOptions = { insertSpaces: true, tabSize: 2 };
   for (const path of olderShape(raw)) {
-    if (path.join(".") === "database.neonProject") {
+    if (path.join(".") === "frontend") {
+      text = applyEdits(text, modify(text, ["frontend"], { dir: (raw as { frontend: string }).frontend, spa: true }, { formattingOptions }));
+      changes.push("frontend is now { dir, spa }; spa: true keeps index.html for unknown paths, and removing it makes them 404s");
+    } else if (path.join(".") === "database.neonProject") {
       text = applyEdits(text, modify(text, ["database"], true, { formattingOptions }));
       changes.push("database is now true, its project id moving to NEON_PROJECT_ID");
     } else {
