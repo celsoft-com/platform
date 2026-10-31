@@ -4,7 +4,7 @@ import type { StaticPoint } from "./runtime/access.js";
 import { LEGACY_BUCKET_MARKER, LEGACY_DNS_COMMENT, legacyNames } from "./legacy.js";
 import type { Branch, Hyperdrive, MailDomain, Ports, Repo, Zone } from "./ports.js";
 import type { Run } from "./run.js";
-import { names, originOf, previewHostname, previewPattern, type Target } from "./target.js";
+import { names, originOf, previewHostname, previewPattern, type Names, type Target } from "./target.js";
 import { placementRegion, wranglerConfig } from "./wrangler-config.js";
 
 export interface Context {
@@ -84,7 +84,29 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     hyperdriveId = await ensureHyperdrive(ctx, n.hyperdrive, uri);
   }
 
-  const sending = config.email && target.kind === "prod";
+  const email = await ensureSending(ctx, target, hostname, zone, existingSecrets);
+  Object.assign(generated, email.generated);
+
+  if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
+  const finishBucketMove = await migrateLegacyBucket(ctx, target, n);
+
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample", ...email.vars };
+  if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
+
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
+  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
+  await finishBucketMove();
+  return { hostname };
+}
+
+// How the deploy sends email, as the Worker's vars, and a sending key it made, if any. Prod sends
+// from its own hostname's verified domain; a preview emails only the addresses platform.jsonc
+// lists, from prod's domain, with a key of its own that cleanup deletes; everything else captures.
+async function ensureSending(ctx: Context, target: Target, hostname: string, zone: Zone, existingSecrets: string[]): Promise<{ vars: Record<string, string>; generated: Record<string, string> }> {
+  const { config, ports, run } = ctx;
+  const generated: Record<string, string> = {};
+  if (!config.email) return { vars: {}, generated };
+  const sending = target.kind === "prod";
   if (sending) {
     const domain = await ensureMailDomain(ctx, hostname, zone);
     if (!existingSecrets.includes("EMAIL_API_KEY")) {
@@ -92,9 +114,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
       if (key) generated.EMAIL_API_KEY = key;
     }
   }
-  // A preview emails only the addresses platform.jsonc lists, from prod's verified domain, with a
-  // key of its own that cleanup deletes.
-  const allowed = config.email && target.kind === "preview" ? config.previews.sendEmailTo : [];
+  const allowed = target.kind === "preview" ? config.previews.sendEmailTo : [];
   let previewSending = false;
   if (allowed.length > 0) {
     const domain = await ports.mail.findDomain(config.hostname);
@@ -107,31 +127,27 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
       }
     }
   }
+  const vars: Record<string, string> = { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` };
+  if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
+  return { vars, generated };
+}
 
-  if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
+// Moves prod's files from a bucket an older version named: copies them now, and returns the step
+// to run once the new Worker is live, which copies what the old Worker added meanwhile and deletes
+// the old bucket. Nothing to do returns a step that does nothing.
+async function migrateLegacyBucket(ctx: Context, target: Target, n: Names): Promise<() => Promise<void>> {
+  const { config, ports, run } = ctx;
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
-  if (oldBucket) await copyFiles(ctx, oldBucket, n.bucket, false);
-
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample" };
-  if (config.email) {
-    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
-    if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
-  }
-  if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
-
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
-  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
-
-  // The old Worker kept writing to the old bucket until now, so what it added is copied before the old bucket goes.
-  if (oldBucket && run.dryRun) run.note(`would copy files added since, then delete ${oldBucket}`);
-  if (oldBucket && !run.dryRun) {
+  if (!oldBucket) return async () => {};
+  await copyFiles(ctx, oldBucket, n.bucket, false);
+  return async () => {
+    if (run.dryRun) return run.note(`would copy files added since, then delete ${oldBucket}`);
     await copyFiles(ctx, oldBucket, n.bucket, true);
     await run.mutate(`delete R2 bucket ${oldBucket}, now copied to ${n.bucket}`, async () => {
       await ports.cloudflare.deleteObjects(oldBucket, "");
       await ports.cloudflare.deleteBucket(oldBucket);
     }, undefined);
-  }
-  return { hostname };
+  };
 }
 
 // The app's name belongs to one repo per Cloudflare account; the first deploy claims it.
