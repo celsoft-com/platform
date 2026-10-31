@@ -24,7 +24,7 @@ describe("defineApp", () => {
     const { ctx, settle } = fakeCtx();
     const app = defineApp((_req, app) => (void app.db, ok()), { pool: () => pool });
 
-    expect(await (await app.fetch(new Request("https://x/"), env, ctx)).text()).toBe("ok");
+    expect(await (await app.fetch(new Request("https://x/api/x"), env, ctx)).text()).toBe("ok");
     await settle();
     expect(calls).toEqual(["end"]);
   });
@@ -32,7 +32,7 @@ describe("defineApp", () => {
   it("never connects when the handler skips the database", async () => {
     let opened = 0;
     const app = defineApp(ok, { pool: () => (opened++, fakePool().pool) });
-    await app.fetch(new Request("https://x/"), env, fakeCtx().ctx);
+    await app.fetch(new Request("https://x/api/x"), env, fakeCtx().ctx);
     expect(opened).toBe(0);
   });
 
@@ -44,21 +44,21 @@ describe("defineApp", () => {
       throw new Error("boom");
     }, { pool: () => pool });
 
-    await expect(app.fetch(new Request("https://x/"), env, ctx)).rejects.toThrow("boom");
+    await expect(app.fetch(new Request("https://x/api/x"), env, ctx)).rejects.toThrow("boom");
     await settle();
     expect(calls).toEqual(["end"]);
   });
 
   it("explains a missing database", async () => {
     const app = defineApp((_req, app) => (void app.db, ok()));
-    await expect(app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).rejects.toThrow(/platform\.jsonc/);
+    await expect(app.fetch(new Request("https://x/api/x"), {}, fakeCtx().ctx)).rejects.toThrow(/platform\.jsonc/);
   });
 
   it("sends a thrown Response as the answer", async () => {
     const app = defineApp(() => {
       throw new Response("nope", { status: 418 });
     });
-    expect((await app.fetch(new Request("https://x/"), {}, fakeCtx().ctx)).status).toBe(418);
+    expect((await app.fetch(new Request("https://x/api/x"), {}, fakeCtx().ctx)).status).toBe(418);
   });
 
   it("answers a thrown EndpointError with its status, as endpoints do", async () => {
@@ -87,7 +87,9 @@ describe("with auth", () => {
   it("asks for sign-in on private API routes and lets public ones through", async () => {
     expect((await call("/api/notes")).status).toBe(401);
     expect((await call("/api/public/status")).status).toBe(200);
-    expect((await call("/about")).status).toBe(200);
+    const missing = await call("/about");
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toContain('href="/login?next=%2Fabout"');
   });
 
   it("serves the sign-in screens with the app's stylesheet after the default", async () => {
@@ -128,22 +130,22 @@ describe("tracing", () => {
   }, { pool: () => pool });
 
   it("with TRACE on, says where the time went in Server-Timing, each query by its verb and tables", async () => {
-    const timing = (await app.fetch(new Request("https://x/"), { ...env, TRACE: "on" }, fakeCtx().ctx)).headers.get("server-timing");
+    const timing = (await app.fetch(new Request("https://x/api/x"), { ...env, TRACE: "on" }, fakeCtx().ctx)).headers.get("server-timing");
     expect(timing).toMatch(/^total;dur=[\d.]+, db-all;dur=[\d.]+;desc="1 queries", db-1;dur=[\d.]+;desc="select access_point,access_grant"$/);
   });
 
   it("without it, sends no timing", async () => {
-    expect((await app.fetch(new Request("https://x/"), env, fakeCtx().ctx)).headers.get("server-timing")).toBeNull();
+    expect((await app.fetch(new Request("https://x/api/x"), env, fakeCtx().ctx)).headers.get("server-timing")).toBeNull();
   });
 
   it("sampled in prod, logs one request in a hundred and never sends the timing", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => {});
     const random = vi.spyOn(Math, "random").mockReturnValue(0.001);
-    const response = await app.fetch(new Request("https://x/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
+    const response = await app.fetch(new Request("https://x/api/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
     expect(response.headers.get("server-timing")).toBeNull();
-    expect(JSON.parse(logged.mock.calls[0]![0] as string)).toMatchObject({ method: "GET", path: "/notes", status: 200, timing: expect.stringMatching(/^total;dur=/) });
+    expect(JSON.parse(logged.mock.calls[0]![0] as string)).toMatchObject({ method: "GET", path: "/api/notes", status: 200, timing: expect.stringMatching(/^total;dur=/) });
     random.mockReturnValue(0.5);
-    await app.fetch(new Request("https://x/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
+    await app.fetch(new Request("https://x/api/notes"), { ...env, TRACE: "sample" }, fakeCtx().ctx);
     expect(logged).toHaveBeenCalledTimes(1);
     logged.mockRestore();
     random.mockRestore();
@@ -168,7 +170,7 @@ describe("rate limit", () => {
   it("never counts static paths, and lets callers under the limit through", async () => {
     const { keys, API_LIMIT } = limiter(() => true);
     expect((await app.fetch(new Request("https://x/api/things"), { API_LIMIT }, fakeCtx().ctx)).status).toBe(200);
-    expect((await app.fetch(new Request("https://x/about.html"), { API_LIMIT: limiter(() => false).API_LIMIT }, fakeCtx().ctx)).status).toBe(200);
+    expect((await app.fetch(new Request("https://x/about.html"), { API_LIMIT: limiter(() => false).API_LIMIT }, fakeCtx().ctx)).status).toBe(404);
     expect(keys).toHaveLength(1);
   });
 

@@ -16,7 +16,7 @@ import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH,
 import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
-import { pageServer, type Page, type PageCache } from "./pages.js";
+import { notFoundPage, pageServer, type Page, type PageCache } from "./pages.js";
 import { EndpointError } from "./endpoint-error.js";
 import { createInvites, INVITE_ONLY, INVITES_API, INVITES_PATH, serveInvites, signupAllowed, type Invites } from "./invites.js";
 import { isScreen, renderInvitesScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
@@ -165,7 +165,8 @@ const notFound: Handler<unknown, Record<string, unknown>> = () => json({ error: 
 
 // `Secrets` names the app's secrets, such as `defineApp<{ SESSION_SECRET: string }>`; the
 // platform's own bindings are added to it. Pass the app's tables as `schema` for a typed `app.db`.
-// Endpoints are answered first; the handler, when given, takes every other request. A handler or
+// Endpoints are answered first; the handler, when given, takes every other /api/ request, and any
+// other path gets the one 404 page. A handler or
 // endpoint may throw a Response, as `requireUser` does, and it is sent as the answer.
 export function defineApp<
   Secrets extends object = object,
@@ -237,6 +238,9 @@ export function defineApp<
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
+      // Hand-written routes live under /api/; any other path no file, page or platform route
+      // answers gets the one 404 page, so a broken link is a 404 and app.routes agrees.
+      if (!url.pathname.startsWith("/api/")) return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
       return await handle(request, current);
     } catch (thrown) {
       if (thrown instanceof Response) return thrown;

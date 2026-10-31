@@ -47,7 +47,7 @@ my-app/
 ```mermaid
 flowchart TD
   R[Request] --> A{Path starts with /api/ or is a sign-in screen?}
-  A -- no --> S[File from the frontend folder; else a 404, or index.html with spa]
+  A -- no --> S[File from the frontend folder; else index.html with spa, a server page, or the one 404 page]
   A -- yes --> L{/api/live/?}
   L -- yes --> LR[Platform: live room, if the app's canJoin agrees]
   L -- no --> P{Sign-in screen or /api/auth/?}
@@ -110,7 +110,7 @@ flowchart LR
 4. **Checks:** bad input is a 400 with `{ error }`; an output that does not match its schema is a 500, logged.
 5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`, and the generated client throws `EndpointError` with the same status and message.
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
-7. **Handler:** optional; it takes every request no endpoint answers, for downloads, streaming and webhooks.
+7. **Handler:** optional; it takes every `/api/` request no endpoint answers, for downloads, streaming and webhooks; any other path nothing answers gets the one 404 page.
 8. **Uploads:** an input field `upload({ maxBytes, types })` takes a file, sent as multipart by `call` and as `{ name, type, base64 }` (up to 5 MB) over MCP; the handler gets a checked `File`.
 9. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
 10. **`app`:** `db`, `auth`, `session()`, `requireUser()`, `files`, `email`, `live`, `cache`, `routes`, `env` and `waitUntil`, each created on first use.

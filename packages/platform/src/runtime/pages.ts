@@ -313,6 +313,9 @@ function errorPage(status: number, message: string, extra = ""): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
 }
 
+// The one 404 page, for any path outside /api/ that nothing answers, as for a missing page.
+export const notFoundPage = (url: URL, signedOut: boolean) => html(refusedPage(url, signedOut), 404);
+
 // The one answer for a page that is missing or refused. A signed-out visitor is offered sign-in
 // and sign-up, which return here, and is never sent anywhere unasked. Its script takes a `link=`
 // token from the fragment, which never reaches the server, drops it from the address so a refused
