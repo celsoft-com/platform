@@ -1,4 +1,4 @@
-import { defineApp, endpoint, EndpointError, organizationPoint, page, route, teamPoint, type App, type Grantee } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, type App, type Grantee } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
 import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -75,6 +75,9 @@ async function inRoom(room: string, _user: unknown, app: App<typeof schema>): Pr
 }
 
 const noteFolder = (userId: string, noteId: string) => `notes/${userId}/${noteId}`;
+// Each person's bookmarks are one JSON file, searched with JSONPath.
+const bookmarksFile = (userId: string) => `bookmarks/${userId}.json`;
+const Bookmark = z.object({ url: z.url(), title: z.string().min(1).max(200), stars: z.number().int().min(0).max(5).optional(), tags: z.array(z.string().max(40)).max(10).optional() });
 
 // Notes in an organization or a team, newest first, only those the caller can read.
 async function groupNotes(app: App<typeof schema>, where: ReturnType<typeof eq>) {
@@ -198,6 +201,25 @@ export default defineApp(
       about: endpoint(
         { method: "GET", path: "/api/public/about", input: z.object({}), output: z.object({ level: z.string() }), access: { point: () => "about", level: "read" } },
         async (_, app) => ({ level: await app.access.check("about") }),
+      ),
+
+      saveBookmarks: endpoint(
+        { method: "PUT", path: "/api/bookmarks", input: z.object({ bookmarks: z.array(Bookmark).max(500) }), output: z.object({ saved: z.number() }), access: { level: "write" } },
+        async ({ bookmarks }, app) => {
+          await app.files.putJson(bookmarksFile((await app.requireUser()).id), bookmarks);
+          return { saved: bookmarks.length };
+        },
+      ),
+      // A GET, so a read-capped API token can search; `where` is JSONPath, such as $[?@.stars >= 4].
+      searchBookmarks: endpoint(
+        {
+          method: "GET",
+          path: "/api/bookmarks",
+          input: z.object({ where: jsonPath().default("$[*]"), limit: z.number().int().min(0).max(100).default(20), offset: z.number().int().min(0).default(0) }),
+          output: z.object({ items: z.array(z.object({ path: z.string(), value: z.unknown() })), total: z.number() }),
+          access: { level: "read" },
+        },
+        async ({ where, limit, offset }, app) => (await app.files.query(bookmarksFile((await app.requireUser()).id), where, { limit, offset })) ?? { items: [], total: 0 },
       ),
 
       // Public paths, so a signed-out visitor holding a link can read or edit the note it opens.

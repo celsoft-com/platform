@@ -63,7 +63,7 @@ export default defineApp(undefined, {
    - **`{ point: "id", level: "write" }`:** with `access` on, the caller needs that level on the control point named by the input field, or by a function of the input, or gets a 404.
    - **A list of points:** the function, sync or async, may return several ids; the first that exists is checked, and only that one, so a point that refuses never falls through to the next: ``point: ({ path }) => [`path:${path}`, ...foldersAbove(path), "site"]``. A function returning anything but ids throws.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
-6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
+6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints; a refusal throws `EndpointError` with the server's `status` and `message`, and failed validation names each field, such as `body: Too small`.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
 
 ## Server pages
@@ -114,13 +114,18 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
    - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler; fetch anything personal in the browser from an endpoint.
 7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status; a 404 is the same 404 page the gate answers, its message only in the logs, so a missing page and a refused one look alike.
 8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
-9. **Caching:** any page may opt in:
+9. **Caching:** a page renders on every request unless its route opts in:
     `route({ cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
-    1. **Same for everyone who passes:** the gate runs first, then everyone who passes gets the kept copy, and the cache key is the path and query only, so a page's HTML must never depend on anything else about the request, such as cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
-    2. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
-    3. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
-    4. **Deploys:** every deploy starts empty.
-    5. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
+    1. **Where:** the platform keeps copies only in Cloudflare's Cache API, which the Worker reads and writes in each data center; every page answer it builds goes out with `cache-control: no-store`, so browsers and anything between keep none.
+    2. **What:** a GET answered 200 without `Set-Cookie`; never a HEAD, an error page, a refused 404, the API, or a hand-written handler's answer.
+    3. **Key:** the deploy, the page's version, which `invalidate` and `clear` bump, the path and the whole query string, so `/p` and `/p?preview` are separate copies.
+    4. **Same for everyone who passes:** the gate runs on every request, hit or miss, before the cache; everyone who passes gets the kept copy, so a page's HTML must depend only on the URL and the data, never on cookies, `accept-language` or location. After a write, invalidate every page showing it, such as `/print/${id}`.
+    5. **Drafts and per-person content:** the handler is blind and a query string picks a copy, never who may see it, so `/p?preview` renders for anyone `/p`'s gate lets in, cached or not. Content only some may see, such as drafts, gets its own route gated to them, such as `/preview/*path` with `{ point, level: "write" }`; anything that depends on who is looking is rendered in the browser from an endpoint.
+    6. **Uncached answers:** an HTML string goes out `no-store`; a `Response` the handler returns keeps its own headers, so never give it `cache-control: public`.
+    7. **Emptying it:** after a write commits, `await app.cache.invalidate("/stats")` empties that page (every query string of it), and `await app.cache.clear()` empties every page; both reach every data center within a second, need a database, and cost one tiny query.
+    8. **Which to use:** `invalidate` for ordinary writes, from endpoints, handlers, live messages and jobs alike; `clear` only for rare, sweeping changes, since it makes every page render again, and the logs warn when it runs twice in a minute; if you cannot tell what a write affects, rely on `seconds`.
+    9. **Deploys:** every deploy starts empty.
+    10. **Seeing it:** the `platform-cache` header is `hit` or `miss`; a hit runs no handler and no query of yours.
 
 ## `app`
 
@@ -155,14 +160,23 @@ file?.metadata.name;                                     // "Logo.PNG"
 await app.files.putJson("collections/products/42.json", { title: "Hat" });
 await app.files.getJson<{ title: string }>("collections/products/42.json");
 return app.files.response("assets/7f3a.png");            // streams it, with its content type; 404 when missing
+await app.files.query("collections/books.json", "$[?@.stars == 4]", { limit: 50 });
+// { items: [{ path: "$[1]", value: { title: "Emma", stars: 4 } }], total: 1 }; null when missing
 ```
 
 1. **`put(path, body, options?)`:** `body` is a string, `ArrayBuffer`, `Blob` or `ReadableStream`, such as `request.body`; `options` is a content type string, or `{ contentType, metadata }` with up to 2 KB of string names and values.
 2. **`get(path)`:** `{ body, size, httpMetadata: { contentType }, metadata, text() }`, or `null`; `body` is a stream, read once.
 3. **`list(folder, { cursor, limit })`:** one page, at most `limit` entries, 1,000 by default and at most: `{ files: [{ path, size, uploaded }], folders: ["a/b/"], cursor }`; pass `cursor` back for the next page, and it is missing on the last. Loop for a whole folder; page an endpoint's own answer straight from it.
 4. **`delete(path)`:** removes one file; deleting a missing one is not an error.
-5. **Metadata or a table:** metadata goes with the file and is deleted with it, but cannot be searched; anything to query or sort across files belongs in `app.db`, keyed by the path.
-6. **Limits:** an upload through the Worker is at most 100 MB; paths with `..` are refused; previews share one bucket under their PR's folder, which `app.files` adds and hides.
+5. **`query(path, expression, { limit, offset })`:** runs a JSONPath (RFC 9535) expression over one JSON file and returns `{ items: [{ path, value }], total }`, or `null` when the file is missing.
+   - **Paging:** `limit` is 100 by default, 0 to 1,000, with 0 returning only `total`; `offset` skips that many matches; `total` counts them all.
+   - **Typed values:** they live in the expression, so `@.stars == 4` and `@.stars == '4'` differ, and a GET query string carries them exactly.
+   - **Refused with a 400:** an expression that does not parse, or is over 1,000 characters, or a `match()` or `search()` pattern over 100.
+   - **Other refusals:** a file that is not JSON (422) or over 25 MB (413), since each query reads and parses the whole file.
+   - **Endpoint input:** `input: z.object({ where: jsonPath() })`, with `jsonPath` from `@celsoft/platform`, refuses a bad expression before the handler, naming where it fails.
+   - **JSON already in hand:** `query(data, expression, options)` from `@celsoft/platform` does the same.
+6. **Metadata or a table:** metadata goes with the file and is deleted with it, but cannot be searched; anything to query or sort across files belongs in `app.db`, keyed by the path.
+7. **Limits:** an upload through the Worker is at most 100 MB; paths with `..` are refused; previews share one bucket under their PR's folder, which `app.files` adds and hides.
 
 ## Access
 
@@ -260,7 +274,7 @@ it("lists items to the signed-in person", async () => {
 
 1. **Database:** each `testApp` gets a database of its own, copied from one migrated with `drizzle/`, static points included; call it in `beforeEach` for a clean database per test. It stops when `src/schema.ts` has changes with no migration.
 2. **Postgres:** from the app's `embedded-postgres` dev dependency, which `new` and `upgrade` add and npm installs for each machine, or else Postgres 18 or later on the `PATH`. With pnpm, allow its binaries' install script under `allowBuilds` in `pnpm-workspace.yaml`. One server starts per test process, in about a second, and stops within a second of that process ending.
-3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status`. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
+3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status` and the server's `message`, so `rejects.toThrow("only the owner may publish")` checks what it says. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
 4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
 5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.
 6. **Running:** `npm test`, which runs `vitest run`.

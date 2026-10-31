@@ -1,3 +1,6 @@
+import { EndpointError } from "./endpoint-error.js";
+import { query, type QueryOptions, type QueryResult } from "./jsonpath.js";
+
 // The subset of Cloudflare's R2Bucket binding the helper uses, so the runtime needs no Workers types.
 export interface FilesBucket {
   put(key: string, value: ReadableStream | ArrayBuffer | string | Blob, options?: { httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string> }): Promise<unknown>;
@@ -43,6 +46,8 @@ export interface StoredFile extends StoredObject {
 }
 
 export const LIST_LIMIT = 1000;
+// A query reads and parses the whole file each time, so a larger one belongs in app.db.
+export const QUERY_FILE_LIMIT = 25 * 1024 * 1024;
 
 export interface Files {
   put(path: string, body: ReadableStream | ArrayBuffer | string | Blob, options?: string | PutOptions): Promise<void>;
@@ -50,6 +55,8 @@ export interface Files {
   getJson<T = unknown>(path: string): Promise<T | null>;
   putJson(path: string, value: unknown): Promise<void>;
   list(folder?: string, options?: { cursor?: string; limit?: number }): Promise<Folder>;
+  // A JSONPath (RFC 9535) query over one JSON file; null when the file is missing.
+  query(path: string, expression: string, options?: QueryOptions): Promise<QueryResult | null>;
   delete(path: string): Promise<void>;
   response(path: string): Promise<Response>;
 }
@@ -88,6 +95,21 @@ export function createFiles(env: FilesBindings): Files {
         folders: page.delimitedPrefixes.map((p) => p.slice(prefix.length)),
         ...(page.truncated && page.cursor && { cursor: page.cursor }),
       };
+    },
+    async query(path, expression, options) {
+      const object = await files.get(path);
+      if (!object) return null;
+      if (object.size > QUERY_FILE_LIMIT) {
+        await object.body.cancel();
+        throw new EndpointError(413, `${path} is ${object.size} bytes; a query reads files of at most ${QUERY_FILE_LIMIT}`);
+      }
+      let data: unknown;
+      try {
+        data = JSON.parse(await object.text());
+      } catch {
+        throw new EndpointError(422, `${path} is not JSON`);
+      }
+      return query(data, expression, options);
     },
     delete: (path) => bucket().delete(key(path)),
     async response(path) {

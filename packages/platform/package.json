@@ -53,6 +53,7 @@
     "cloudflare": "^7.3.0",
     "drizzle-kit": "0.31.11",
     "esbuild": "^0.28.2",
+    "json-p3": "3.0.1",
     "jsonc-parser": "^3.3.1",
     "pg": "^8.23.1",
     "wrangler": "^4.152.0",

@@ -12,7 +12,7 @@ What the platform gives an app, what the app writes itself, and how the two fit 
 | **Database** | Postgres per environment, auth tables, migration runner | Its tables in `src/schema.ts` |
 | **Migrations** | `db generate`, and applying them at deploy | Commits the generated `drizzle/` folder |
 | **Auth** | Accounts, sessions, email, teams, `/login` and friends | Nothing, or a stylesheet to restyle the screens |
-| **Files, email, live** | `app.files`, `app.email`, `app.live` | Calls them from its handler |
+| **Files, email, live** | `app.files`, with JSONPath queries over JSON files, `app.email`, `app.live` | Calls them from its handler |
 | **Deploys** | Prod on push to main, a preview per PR, cleanup | Nothing |
 | **Tests** | `@celsoft/platform/testing`: the real runtime on a local Postgres, files in memory and captured email | Its tests, calling endpoints as people it signs up |
 
@@ -93,7 +93,7 @@ flowchart LR
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.
 8. **What the server renders:** only content identical for everyone allowed to see it; anything that depends on who is looking or what they have done (sign-in state, saved choices, checkmarks, drafts, admin screens) is added by the browser after the page loads. A page can mix both, such as a checklist rendered with every box unchecked whose visitor's own ticks the browser fills in. A page's access gate decides who gets it, never what it says, so one kept copy serves everyone who passes.
-9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor then shares a copy the edge keeps for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `{ level }` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
+9. **Server pages:** `pages: [page({ path: "/print", routes: { "/:id": ... } })]` in `defineApp` claims `/print` and everything below it, a last `*name` segment such as `"/*path"` matches any depth below it, and `page({ path: "/", routes: { "/": ... } })` claims the root alone; each route returns HTML, and every other path is still a static file. A route may add `cache: true`, and every visitor who passes its gate then shares a copy the Worker keeps in Cloudflare's Cache API, per data center, keyed by the path and whole query string, for 60 seconds, or `seconds`, until `app.cache.invalidate(path)` or `app.cache.clear()` empties it within a second; the API is never cached. A route declares who may read it, `access: { point, level }`, `{ level }` or `"anon"`, checked before the handler and the cache; refused and missing pages get one 404 that offers sign-in when signed out, share links and API tokens count, and the handler cannot ask who is looking: `app.session()`, `app.requireUser()` and `app.access` throw on a page.
 
 ### Sign-in screens
 
@@ -108,7 +108,7 @@ flowchart LR
 2. **Types:** the input and output are Zod schemas, the only types an app writes.
 3. **Inputs:** `:name` in the path, the query, and a JSON body merge into one input object, with URL strings converted to the schema's types.
 4. **Checks:** bad input is a 400 with `{ error }`; an output that does not match its schema is a 500, logged.
-5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`.
+5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`, and the generated client throws `EndpointError` with the same status and message.
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
 7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
 8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.

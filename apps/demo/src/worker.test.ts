@@ -36,6 +36,22 @@ describe("demo", () => {
     expect(await t.as(someone).call("about", {})).toEqual({ level: "read" });
   });
 
+  it("searches a person's bookmarks with JSONPath, by value and type", async () => {
+    const reader = await t.signUp("reader@example.com");
+    const bookmarks = [
+      { url: "https://a.example", title: "A", stars: 4, tags: ["news"] },
+      { url: "https://b.example", title: "B", stars: 5 },
+      { url: "https://c.example", title: "C", stars: 4 },
+    ];
+    expect(await t.as(reader).call("saveBookmarks", { bookmarks })).toEqual({ saved: 3 });
+    expect(await t.as(reader).call("searchBookmarks", { where: "$[?@.stars == 4].title" })).toEqual({ items: [{ path: "$[0]['title']", value: "A" }, { path: "$[2]['title']", value: "C" }], total: 2 });
+    expect(await t.as(reader).call("searchBookmarks", { where: "$[?@.stars == '4']" })).toEqual({ items: [], total: 0 });
+    expect(await t.as(reader).call("searchBookmarks", { where: "$[*]", limit: 1, offset: 1 })).toEqual({ items: [{ path: "$[1]", value: bookmarks[1] }], total: 3 });
+    expect(await t.as(await t.signUp("other@example.com")).call("searchBookmarks", {})).toEqual({ items: [], total: 0 });
+    const refused = await t.as(reader).call("searchBookmarks", { where: "$[?@.stars = 4]" }).catch((e: unknown) => e);
+    expect((refused as EndpointError).status).toBe(400);
+  });
+
   it("holds an API token to its cap", async () => {
     const person = await t.signUp("scripter@example.com");
     const made = await t.as(person).fetch("/api/auth/api-key/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "script", metadata: { cap: "read" } }) });
@@ -43,5 +59,8 @@ describe("demo", () => {
     expect(await t.as({ token: key }).call("listMyOrganizations", {})).toEqual([]);
     const refused = await t.as({ token: key }).call("createOrganization", { name: "Nope" }).catch((e: unknown) => e);
     expect((refused as EndpointError).status).toBe(403);
+    expect(await t.as({ token: key }).call("searchBookmarks", {})).toEqual({ items: [], total: 0 });
+    const save = await t.as({ token: key }).call("saveBookmarks", { bookmarks: [] }).catch((e: unknown) => e);
+    expect((save as EndpointError).status).toBe(403);
   });
 });

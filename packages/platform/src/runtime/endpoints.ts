@@ -192,9 +192,12 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
       const { matched, response } = await handler.handle(request, { context: { app } });
       if (!matched || !response) return undefined;
       if (response.ok) return response;
-      // oRPC's error body, with the `error` every platform API error carries.
-      const body = (await response.json().catch(() => ({}))) as { message?: string };
-      return Response.json({ error: body.message ?? response.statusText, ...body }, { status: response.status });
+      // oRPC's error body, with the `error` every platform API error carries; failed validation
+      // names each field, such as "where: unexpected '=' at 12".
+      const body = (await response.json().catch(() => ({}))) as { message?: string; data?: { issues?: { path?: (string | number)[]; message: string }[] } };
+      const issues = body.data?.issues;
+      const error = Array.isArray(issues) && issues.length > 0 ? issues.map((i) => (i.path?.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ") : (body.message ?? response.statusText);
+      return Response.json({ error, ...body }, { status: response.status });
     },
   };
 }
