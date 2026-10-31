@@ -196,8 +196,8 @@ export function defineApp<
       console.error(`${undeclared.join(", ")} declare no access; add access: { point, level }, { level } or "anon"`);
       return json({ error: "this app is misconfigured; see its logs" }, 500);
     }
-    const { app, close } = createContext(request, env, ctx, options, once, undefined, undefined, trace);
-    let closeToken: (() => void) | undefined;
+    const resources = requestResources(request, env, ctx, options, once, trace);
+    const app = asCaller(resources);
     try {
       if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
       // A request with an API token runs as the token's owner, capped at the token's level.
@@ -217,9 +217,7 @@ export function defineApp<
           return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
         }
         if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
-        const made = createContext(request, env, ctx, options, once, async () => holder.session, holder.cap, trace);
-        current = made.app;
-        closeToken = made.close;
+        current = asCaller(resources, async () => holder.session, holder.cap);
       } else if (limited) {
         const caller = (await current.session().catch(() => null))?.user.id ?? address;
         if (!(await limited.limit({ key: caller })).success) return tooMany();
@@ -227,7 +225,7 @@ export function defineApp<
       const live = await liveRoute(request, url, env, current, options);
       if (live) return live;
       if (env.MCP === "on" && env.BETTER_AUTH_SECRET) {
-        const answered = await mcpRoute(request, url, env, ctx, app, options, once);
+        const answered = await mcpRoute(url, resources, app);
         if (answered) return answered;
       }
       if (env.BETTER_AUTH_SECRET) {
@@ -248,8 +246,7 @@ export function defineApp<
       if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
       throw thrown;
     } finally {
-      closeToken?.();
-      close();
+      resources.close();
     }
   }
 
@@ -284,49 +281,69 @@ export function defineApp<
       const env = rawEnv as Env;
       return async (room, message, from) => {
         const pending: Promise<unknown>[] = [];
-        const { app, close } = createContext(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options, once);
+        const resources = requestResources(new Request(env.APP_URL ?? "https://app.invalid/"), env, { waitUntil: (p) => void pending.push(p) }, options, once);
+        const app = asCaller(resources);
         try {
           await dbSlot.run({}, async () => {
             await onMessage(room, message as z.output<Message>, from, app);
             await Promise.allSettled(pending);
           });
         } finally {
-          close();
+          resources.close();
         }
       };
     }, check),
   };
 }
 
-function createContext<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
+// What one request holds whoever is asking: its database pool, email, files, auth, live rooms and
+// cache, and the app's origin and name, each made once on first use and shared by every caller
+// view of the request, so acting as a token's owner or an MCP client opens no second pool.
+interface RequestResources<Env extends PlatformBindings, Schema extends Record<string, unknown>> {
+  request: Request;
+  env: Env;
+  options: AppOptions<Env, Schema>;
+  trace: Trace | undefined;
+  origin: string;
+  appName: string;
+  readonly db: NodePgDatabase<Schema>;
+  readonly email: Email;
+  readonly files: Files;
+  readonly auth: Auth;
+  readonly live: Live;
+  readonly cache: Cache;
+  readonly routes: Routes;
+  waitUntil(promise: Promise<unknown>): void;
+  // Ends the pool after the answer.
+  close(): void;
+}
+
+function requestResources<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
   options: AppOptions<Env, Schema>,
   once: Once,
-  // Set when the caller is already known, as for an MCP client signed in with a token.
-  knownSession?: () => Promise<Session | null>,
-  // The level an API token is capped at, when the request carries one.
-  cap?: Level,
   trace?: Trace,
-): { app: AppContext<Env, Schema>; close(): void } {
+): RequestResources<Env, Schema> {
   const openPool = options.pool ?? defaultPool;
+  const origin = env.APP_URL ?? new URL(request.url).origin;
   let pool: Pool | undefined;
   let db: NodePgDatabase<Schema> | undefined;
   let email: Email | undefined;
   let files: Files | undefined;
   let auth: Auth | undefined;
   let live: Live | undefined;
-  let access: Access | undefined;
-  let organizations: Organizations | undefined;
   let cache: Cache | undefined;
-  let invites: Invites | undefined;
   let routes: Routes | undefined;
-  const levels = new Map<string, number>();
-  let session: Promise<Session | null> | undefined;
 
-  const app: AppContext<Env, Schema> = {
+  const resources: RequestResources<Env, Schema> = {
+    request,
     env,
+    options,
+    trace,
+    origin,
+    appName: env.APP_NAME ?? new URL(origin).hostname,
     get db() {
       if (!env.DB) throw new Error("this app has no database; add `database` to platform.jsonc");
       return (db ??= drizzle((pool ??= trace ? trace.wrap(openPool(env.DB.connectionString)) : openPool(env.DB.connectionString)), { schema: options.schema ?? ({} as Schema) }));
@@ -340,54 +357,93 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
     get auth() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
       const slot = dbSlot.getStore();
-      if (slot && !slot.db) slot.db = () => app.db as Db;
-      const baseURL = env.APP_URL ?? new URL(request.url).origin;
+      if (slot && !slot.db) slot.db = () => resources.db as unknown as Db;
       const requireVerification = env.EMAIL_MODE === "send";
-      const key = `${env.BETTER_AUTH_SECRET}\n${baseURL}\n${requireVerification}`;
+      const key = `${env.BETTER_AUTH_SECRET}\n${origin}\n${requireVerification}`;
       const built = (once.auth ??= new Map());
       if (!auth) {
         auth = built.get(key);
         if (!auth) {
-          auth = createAuth({ db: slot ? requestDb : (app.db as Db), secret: env.BETTER_AUTH_SECRET, baseURL, email: app.email, requireVerification });
+          auth = createAuth({ db: slot ? requestDb : (resources.db as unknown as Db), secret: env.BETTER_AUTH_SECRET, baseURL: origin, email: resources.email, requireVerification });
           if (slot) built.set(key, auth);
         }
       }
       return auth;
     },
-    get invites() {
-      if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      const origin = env.APP_URL ?? new URL(request.url).origin;
-      return (invites ??= createInvites(app.db as unknown as NodePgDatabase<Record<string, unknown>>, () => app.requireUser(), app.email, origin, env.APP_NAME ?? new URL(origin).hostname));
+    get live() {
+      return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
+    },
+    get cache() {
+      if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
+      return (cache ??= createCache(() => resources.db as unknown as NodePgDatabase<Record<string, unknown>>));
     },
     get routes() {
       return (routes ??= createRoutes({ features: features(env), frontend: env.FRONTEND, files: once.files, page: once.page, endpoint: once.endpoint }));
     },
-    get cache() {
-      if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
-      return (cache ??= createCache(() => app.db as unknown as NodePgDatabase<Record<string, unknown>>));
+    waitUntil: (promise) => ctx.waitUntil(promise),
+    close: () => void (pool && ctx.waitUntil(pool.end())),
+  };
+  return resources;
+}
+
+// The `app` one caller gets: the request's shared resources, plus who is asking. `session` is
+// set when the caller is already known, as for an API token's owner or an MCP client; `cap` is
+// the level an API token is capped at.
+function asCaller<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
+  resources: RequestResources<Env, Schema>,
+  knownSession?: () => Promise<Session | null>,
+  cap?: Level,
+): AppContext<Env, Schema> {
+  const { request, env, trace, origin, appName } = resources;
+  let access: Access | undefined;
+  let organizations: Organizations | undefined;
+  let invites: Invites | undefined;
+  const levels = new Map<string, number>();
+  let session: Promise<Session | null> | undefined;
+  const db = () => resources.db as unknown as NodePgDatabase<Record<string, unknown>>;
+
+  const app: AppContext<Env, Schema> = {
+    env,
+    get db() {
+      return resources.db;
+    },
+    get email() {
+      return resources.email;
+    },
+    get files() {
+      return resources.files;
+    },
+    get auth() {
+      return resources.auth;
     },
     get live() {
-      return (live ??= createLive(env.LIVE, env.LIVE_ROOMS === "on", messageCheck(options.live?.message)));
+      return resources.live;
+    },
+    get cache() {
+      return resources.cache;
+    },
+    get routes() {
+      return resources.routes;
+    },
+    get invites() {
+      if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
+      return (invites ??= createInvites(db(), () => app.requireUser(), resources.email, origin, appName));
     },
     get access() {
       if (env.ACCESS !== "on") throw new Error("this app has no access; set `access: true` in platform.jsonc");
-      const origin = env.APP_URL ?? new URL(request.url).origin;
-      const db = app.db as NodePgDatabase<Record<string, unknown>>;
       const links = [request.headers.get(LINK_HEADER), ...linkCookies(request)].filter((t): t is string => t !== null);
-      return (access ??= createAccess(db, async () => ({ userId: (await app.session())?.user.id ?? null, link: links, cap }), {
+      return (access ??= createAccess(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: links, cap }), {
         // Sent after the answer, so a slow or failing email never fails the grant itself.
-        notify: async (notice) => app.waitUntil(app.email.send(shareMessage(notice, env.APP_NAME ?? new URL(origin).hostname, origin)).catch((error) => console.error("sharing email failed", error))),
+        notify: async (notice) => app.waitUntil(resources.email.send(shareMessage(notice, appName, origin)).catch((error) => console.error("sharing email failed", error))),
         // Once per Worker instance; a failure is retried by the next request.
         memo: levels,
       }));
     },
     get organizations() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");
-      const origin = env.APP_URL ?? new URL(request.url).origin;
-      const appName = env.APP_NAME ?? new URL(origin).hostname;
-      return (organizations ??= forgetLevelsOnChange(levels, createOrganizations(app.db as NodePgDatabase<Record<string, unknown>>, async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
+      return (organizations ??= forgetLevelsOnChange(levels, createOrganizations(db(), async () => ({ userId: (await app.session())?.user.id ?? null, link: null, cap }), async (notice) =>
         app.waitUntil(
-          app.email
+          resources.email
             .send({
               to: notice.to,
               subject: `Join ${notice.organization} on ${appName}`,
@@ -398,7 +454,7 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       )));
     },
     session() {
-      const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? app.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
+      const find = () => (knownSession ? knownSession() : env.BETTER_AUTH_SECRET ? resources.auth.api.getSession({ headers: request.headers }) : Promise.resolve(null));
       return (session ??= trace ? trace.time("session", "find the session", find) : find());
     },
     async requireUser() {
@@ -411,10 +467,10 @@ function createContext<Env extends PlatformBindings, Schema extends Record<strin
       }
       return current.user;
     },
-    waitUntil: (promise) => ctx.waitUntil(promise),
+    waitUntil: (promise) => resources.waitUntil(promise),
   };
   if (cap) tokenCaps.set(app, cap);
-  return { app, close: () => void (pool && ctx.waitUntil(pool.end())) };
+  return app;
 }
 
 // Organization calls that only read; every other call can change who belongs where, and so any
@@ -577,28 +633,19 @@ const MCP_AUTH_PATHS = ["/oauth2/", "/admin/oauth2/", "/jwks", "/.well-known/"];
 // MCP for AI clients: OAuth discovery under /.well-known/, and /mcp, where each call runs as the
 // user its token was issued to.
 async function mcpRoute<Env extends PlatformBindings, Schema extends Record<string, unknown>>(
-  request: Request,
   url: URL,
-  env: Env,
-  ctx: ExecutionContext,
+  resources: RequestResources<Env, Schema>,
   app: AppContext<Env, Schema>,
-  options: AppOptions<Env, Schema>,
-  once: Once,
 ): Promise<Response | undefined> {
-  if (url.pathname.startsWith(WELL_KNOWN)) return app.auth.handler(request);
+  const { request, origin, options } = resources;
+  if (url.pathname.startsWith(WELL_KNOWN)) return resources.auth.handler(request);
   if (url.pathname !== MCP_PATH) return undefined;
-  const origin = env.APP_URL ?? url.origin;
-  const userId = await mcpUserId(request, app.auth, `${origin}${MCP_PATH}`);
+  const userId = await mcpUserId(request, resources.auth, `${origin}${MCP_PATH}`);
   if (!userId) return mcpChallenge(origin);
-  const known = () => sessionAs(app, userId, "mcp");
-  const { app: asUser, close } = createContext(request, env, ctx, options, once, known);
-  try {
-    if (!(await asUser.session())) return mcpChallenge(origin);
-    const { serveMcp } = await import("./mcp-server.js");
-    return await serveMcp(request, asUser, env.APP_NAME ?? url.hostname, withInvalidates(options.endpoints ?? {}, options.invalidates));
-  } finally {
-    close();
-  }
+  const asUser = asCaller(resources, () => sessionAs(app, userId, "mcp"));
+  if (!(await asUser.session())) return mcpChallenge(origin);
+  const { serveMcp } = await import("./mcp-server.js");
+  return await serveMcp(request, asUser, resources.appName, withInvalidates(options.endpoints ?? {}, options.invalidates));
 }
 
 // Live rooms answer for themselves: the browser client, and joining a room once the app agrees.

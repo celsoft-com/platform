@@ -13,9 +13,10 @@ import { defineApp } from "./index.js";
 const { pool, url } = await freshDatabase();
 const uid = () => randomUUID();
 const ran: string[] = [];
+let poolsOpened = 0;
 
 const app = defineApp(undefined, {
-  pool: (connectionString) => new Pool({ connectionString, max: 2 }),
+  pool: (connectionString) => (poolsOpened++, new Pool({ connectionString, max: 2 })),
   endpoints: {
     whoAmI: endpoint({ method: "GET", path: "/api/me", input: z.object({}), output: z.object({ id: z.string() }), access: { level: "read" } }, async (_, a) => ({ id: (await a.requireUser()).id })),
     makeDoc: endpoint({ method: "POST", path: "/api/docs", input: z.object({ id: z.string() }), output: z.object({}), access: { level: "create" } }, async ({ id }, a) => {
@@ -96,6 +97,14 @@ describe("API tokens", () => {
     const p = await person();
     const { key } = await token(p.cookie);
     expect(await send("/api/me", { token: key })).toEqual({ status: 200, body: { id: p.id }, cookie: "" });
+  });
+
+  it("T2b: a token's request acts as its owner on the request's one database pool", async () => {
+    const p = await person();
+    const { key } = await token(p.cookie);
+    poolsOpened = 0;
+    expect((await send("/api/me", { token: key })).status).toBe(200);
+    expect(poolsOpened).toBe(1);
   });
 
   it("T3: a read token can only read: every other method is a 403 and nothing runs", async () => {
