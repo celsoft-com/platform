@@ -1,12 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Client, Pool } from "pg";
-import { DrizzleMigrator } from "./adapters/drizzle.js";
+import { DrizzleMigrator, MIGRATIONS_DIR } from "./adapters/drizzle.js";
 import { CONFIG_FILE, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
 import { createCall, type Call } from "./runtime/client.js";
@@ -20,7 +20,7 @@ import { featureVars } from "./wrangler-config.js";
 
 // Runs an app's real runtime for its tests: routing, access checks, token caps, validation and
 // auth are the platform's own code; only the cloud behind them is local. Postgres 18 for Neon,
-// from the app's embedded-postgres or else the PATH, started once per test process; a bucket in memory for R2; an outbox for Resend; and a list of
+// from the app's embedded-postgres or else the PATH, one server shared by all of the app's test processes; a bucket in memory for R2; an outbox for Resend; and a list of
 // what was published for live rooms, which take no WebSockets here.
 
 export const TEST_URL = "http://localhost";
@@ -154,12 +154,14 @@ async function loadConfig(dir: string): Promise<Config> {
   return parseConfig(text, join(dir, CONFIG_FILE), vars);
 }
 
-// One Postgres per test process, and one migrated template per app folder in it.
+// One Postgres for every test process of an app, started by the first, and one migrated template
+// per version of the app's migrations in it, made by the first that needs it; each process keeps
+// its own promise of both.
 let server: Promise<string> | undefined;
 const templates = new Map<string, Promise<string>>();
 
 async function freshDatabase(dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
-  const base = await (server ??= startPostgres(dir));
+  const base = await (server ??= sharedPostgres(dir));
   let template = templates.get(dir);
   if (!template) templates.set(dir, (template = migratedTemplate(base, dir, config, staticPoints)));
   const name = await template;
@@ -168,15 +170,30 @@ async function freshDatabase(dir: string, config: Config, staticPoints: Record<s
   return databaseUrl(base, fresh);
 }
 
+// Named by what it holds, so every process copies the same one; an advisory lock lets one migrate it.
 async function migratedTemplate(base: string, dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
   const migrator = new DrizzleMigrator(dir, config);
   if (!(await migrator.upToDate())) throw new Error("src/schema.ts has changes with no migration; run `npx @celsoft/platform db generate`, then test again");
-  const name = `template_${randomUUID().replace(/-/g, "")}`;
-  await withClient(base, (c) => c.query(`create database ${name}`));
-  const url = databaseUrl(base, name);
-  await migrator.migrate(url);
-  if (config.auth) await migrator.prepareAccess(url, staticPoints);
-  await migrator.prepareCache(url);
+  const hash = createHash("sha256").update(JSON.stringify({ auth: Boolean(config.auth), staticPoints }));
+  const migrations = join(dir, MIGRATIONS_DIR);
+  for (const file of await listStaticFiles(migrations)) hash.update(file).update(await readFile(join(migrations, file)));
+  const name = `template_${hash.digest("hex").slice(0, 32)}`;
+  await withClient(base, async (c) => {
+    await c.query("select pg_advisory_lock(hashtext($1))", [name]);
+    try {
+      if ((await c.query("select 1 from pg_database where datname = $1", [name])).rowCount) return;
+      const building = `${name}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+      await c.query(`create database ${building}`);
+      const url = databaseUrl(base, building);
+      await migrator.migrate(url);
+      if (config.auth) await migrator.prepareAccess(url, staticPoints);
+      await migrator.prepareCache(url);
+      // Renamed only once whole, so a template that exists is always complete.
+      await c.query(`alter database ${building} rename to ${name}`);
+    } finally {
+      await c.query("select pg_advisory_unlock(hashtext($1))", [name]);
+    }
+  });
   return name;
 }
 
@@ -192,35 +209,96 @@ function postgresBin(appDir: string): (program: string) => string {
   }
 }
 
-async function startPostgres(appDir: string): Promise<string> {
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+// The app's server, shared by its test processes through a folder named after the app: each
+// process registers its pid there, the first to take the lock starts the server and writes its
+// address, and the rest wait for that. The folder doubles as the socket directory, so its path
+// stays short enough for a Unix socket.
+async function sharedPostgres(appDir: string): Promise<string> {
+  const home = join(tmpdir(), `platform-pg-${createHash("sha256").update(resolve(appDir)).digest("hex").slice(0, 12)}`);
+  await mkdir(join(home, "pids"), { recursive: true });
+  await writeFile(join(home, "pids", String(process.pid)), "");
+  const lock = join(home, "lock");
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    const url = await readFile(join(home, "url"), "utf8").catch(() => undefined);
+    if (url && (await answers(url))) return url;
+    if (await mkdir(lock).then(() => true, () => false)) {
+      try {
+        // Checked again under the lock: another process may have just started one.
+        const again = await readFile(join(home, "url"), "utf8").catch(() => undefined);
+        if (again && (await answers(again))) return again;
+        return await startPostgres(appDir, home);
+      } finally {
+        await rm(lock, { recursive: true, force: true });
+      }
+    }
+    // A starter that died holding the lock leaves it behind; a minute is far longer than a start.
+    const held = await stat(lock).catch(() => undefined);
+    if (held && Date.now() - held.mtimeMs > 60_000) await rm(lock, { recursive: true, force: true });
+    await sleep(100);
+  }
+  throw new Error(`testApp waited two minutes for another test process to start Postgres in ${home}; remove that folder and test again`);
+}
+
+async function answers(url: string): Promise<boolean> {
+  return withClient(url, async () => true).catch(() => false);
+}
+
+async function startPostgres(appDir: string, home: string): Promise<string> {
   const bin = postgresBin(appDir);
   const version = tool(bin("postgres"), ["--version"], `testApp needs Postgres 18 or later: add embedded-postgres to the app's devDependencies, as \`new\` and \`upgrade\` do, or put Postgres 18 on the PATH`);
   const major = Number(/(\d+)\./.exec(version)?.[1]);
   if (!(major >= 18)) throw new Error(`testApp needs Postgres 18 or later, as Neon runs; found ${version.trim()}`);
-  const folder = await mkdtemp(join(tmpdir(), "platform-pg-"));
-  const data = join(folder, "data");
+  const data = join(home, `data-${randomUUID().slice(0, 8)}`);
   tool(bin("initdb"), ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
-  tool(bin("pg_ctl"), ["-D", data, "-l", join(folder, "log"), "-w", "-o", `-k ${folder} -c listen_addresses='' -c fsync=off -c max_connections=200`, "start"]);
+  tool(bin("pg_ctl"), ["-D", data, "-l", join(home, "log"), "-w", "-o", `-k ${home} -c listen_addresses='' -c fsync=off -c max_connections=500`, "start"]);
+  const url = `postgresql://postgres@localhost/postgres?host=${encodeURIComponent(home)}`;
+  // Written whole, so a waiting process never reads half an address.
+  await writeFile(join(home, "url.next"), url);
+  await rename(join(home, "url.next"), join(home, "url"));
   // vitest can end a test process without running its exit handlers, so a process of its own
-  // stops the server and removes its folder once this one is gone, however it ended.
-  spawn(process.execPath, ["-e", STOP_WHEN_GONE, String(process.pid), bin("pg_ctl"), data, folder], { detached: true, stdio: "ignore" }).unref();
-  return `postgresql://postgres@localhost/postgres?host=${encodeURIComponent(folder)}`;
+  // stops the server and removes its data once no registered process is left, however they ended.
+  spawn(process.execPath, ["-e", STOP_WHEN_GONE, bin("pg_ctl"), data, home], { detached: true, stdio: "ignore" }).unref();
+  return url;
 }
 
 const STOP_WHEN_GONE = `
 const { execFileSync } = require("node:child_process");
-const { rmSync } = require("node:fs");
-const [pid, pgCtl, data, folder] = process.argv.slice(1);
+const { readdirSync, renameSync, rmSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const [pgCtl, data, home] = process.argv.slice(1);
+const pids = join(home, "pids");
+const alive = () =>
+  readdirSync(pids).filter((pid) => {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      rmSync(join(pids, pid), { force: true });
+      return false;
+    }
+  }).length > 0;
 const timer = setInterval(() => {
+  if (alive()) return;
+  // The address goes first, so a process starting now starts a new server instead; one that
+  // registered in between keeps this one.
   try {
-    process.kill(Number(pid), 0);
-    return;
+    renameSync(join(home, "url"), join(home, "url.stopping"));
   } catch {}
+  if (alive()) {
+    try {
+      renameSync(join(home, "url.stopping"), join(home, "url"));
+    } catch {}
+    return;
+  }
   clearInterval(timer);
   try {
     execFileSync(pgCtl, ["-D", data, "-m", "immediate", "-w", "stop"], { stdio: "ignore" });
   } catch {}
-  rmSync(folder, { recursive: true, force: true });
+  rmSync(data, { recursive: true, force: true });
+  rmSync(join(home, "url.stopping"), { force: true });
 }, 500);
 `;
 
