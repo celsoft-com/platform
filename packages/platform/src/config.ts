@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 import { z } from "zod";
+import { loadVars } from "./secrets.js";
 
 export const CONFIG_FILE = "platform.jsonc";
 
@@ -149,8 +150,14 @@ export async function readConfigText(dir: string): Promise<string> {
   }
 }
 
-export async function loadConfig(dir: string, vars: Record<string, string> = {}): Promise<Config> {
-  return parseConfig(await readConfigText(dir), join(dir, CONFIG_FILE), vars);
+// The app's platform.jsonc with its ${NAME} variables filled from .env, and the variables used.
+// `fallback` stands in for a variable with no value, as tests, which reach no real hostname, do.
+export async function loadApp(dir: string, { fallback }: { fallback?: string } = {}): Promise<{ config: Config; variables: Record<string, string> }> {
+  const text = await readConfigText(dir);
+  const names = configVariables(text);
+  const vars = await loadVars(dir, names);
+  const variables = Object.fromEntries(names.flatMap((name) => (vars[name] ? [[name, vars[name]!]] : fallback !== undefined ? [[name, fallback]] : [])));
+  return { config: parseConfig(text, join(dir, CONFIG_FILE), variables), variables };
 }
 
 export function configJsonSchema(): object {

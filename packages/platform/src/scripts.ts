@@ -4,6 +4,12 @@ import { join } from "node:path";
 
 export type PackageManager = "pnpm" | "npm";
 
+// pnpm when the repo has a pnpm lockfile, else npm; read from the repo root, where a workspace's
+// lockfile sits, never from an app folder inside it.
+export async function packageManager(repoRoot: string): Promise<PackageManager> {
+  return (await readFile(join(repoRoot, "pnpm-lock.yaml"), "utf8").then(() => true, () => false)) ? "pnpm" : "npm";
+}
+
 // The app's own package.json scripts, which the platform runs by convention: `build` before a
 // deploy, `dev` beside the local Worker.
 export async function packageScripts(appDir: string): Promise<Record<string, string>> {

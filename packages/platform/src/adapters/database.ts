@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 
-async function withClient<T>(databaseUrl: string, work: (client: Client) => Promise<T>): Promise<T> {
+// One connection for `work`, closed after it however it ends.
+export async function withClient<T>(databaseUrl: string, work: (client: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
   try {
@@ -11,19 +12,25 @@ async function withClient<T>(databaseUrl: string, work: (client: Client) => Prom
   }
 }
 
-// Runs a file of SQL in one transaction, such as test data for a preview's load test.
-export async function runSqlFile(databaseUrl: string, path: string): Promise<void> {
-  const text = await readFile(path, "utf8");
-  await withClient(databaseUrl, async (client) => {
+// `work` in one transaction on its own connection: committed when it returns, rolled back when it throws.
+export async function withTransaction<T>(databaseUrl: string, work: (client: Client) => Promise<T>): Promise<T> {
+  return withClient(databaseUrl, async (client) => {
     await client.query("begin");
     try {
-      await client.query(text);
+      const result = await work(client);
       await client.query("commit");
+      return result;
     } catch (error) {
       await client.query("rollback").catch(() => {});
       throw error;
     }
   });
+}
+
+// Runs a file of SQL in one transaction, such as test data for a preview's load test.
+export async function runSqlFile(databaseUrl: string, path: string): Promise<void> {
+  const text = await readFile(path, "utf8");
+  await withTransaction(databaseUrl, (client) => client.query(text));
 }
 
 export interface QueryStat {

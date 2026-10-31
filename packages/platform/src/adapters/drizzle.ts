@@ -7,9 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { build } from "esbuild";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { Client } from "pg";
 import type { Config } from "../config.js";
 import type { Answers, GenerateOptions, Migrator } from "../ports.js";
+import { withClient } from "./database.js";
 import { applyStaticPoints as writeStaticPoints, type StaticPoint } from "../runtime/access.js";
 import { prepareAccess } from "../runtime/access-sql.js";
 import { prepareCache } from "../runtime/cache.js";
@@ -91,59 +91,39 @@ export class DrizzleMigrator implements Migrator {
   }
 
   async prepareCache(databaseUrl: string): Promise<void> {
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
+    await withClient(databaseUrl, async (client) => {
       await prepareCache(drizzle(client) as never);
-    } finally {
-      await client.end();
-    }
+    });
   }
 
   async prepareAccess(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void> {
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
+    await withClient(databaseUrl, async (client) => {
       const db = drizzle(client) as never;
       await prepareAccess(db);
       await writeStaticPoints(db, points);
-    } finally {
-      await client.end();
-    }
+    });
   }
 
   async migrate(databaseUrl: string): Promise<void> {
     const folder = join(this.appDir, MIGRATIONS_DIR);
     if (!(await exists(join(folder, "meta", "_journal.json")))) return;
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
+    await withClient(databaseUrl, async (client) => {
       // Two runs against one database wait their turn instead of applying the same file twice.
       await client.query("select pg_advisory_lock(hashtext('@celsoft/platform migrate'))");
       await migrate(drizzle(client), { migrationsFolder: folder });
-    } finally {
-      await client.end();
-    }
+    });
   }
 
   async dropAll(databaseUrl: string): Promise<void> {
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
+    await withClient(databaseUrl, async (client) => {
       await client.query("drop schema if exists drizzle cascade; drop schema public cascade; create schema public;");
-    } finally {
-      await client.end();
-    }
+    });
   }
 
   async forgetSigningKeys(databaseUrl: string): Promise<void> {
-    const client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    try {
+    await withClient(databaseUrl, async (client) => {
       await client.query("delete from jwks");
-    } finally {
-      await client.end();
-    }
+    });
   }
 
   // Every file of the app's own the schemas are built from: the schema files and what they import,

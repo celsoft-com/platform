@@ -5,16 +5,16 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Client, Pool } from "pg";
+import { Pool } from "pg";
+import { withClient } from "./adapters/database.js";
 import { DrizzleMigrator, MIGRATIONS_DIR } from "./adapters/drizzle.js";
-import { CONFIG_FILE, configVariables, parseConfig, readConfigText, type Config } from "./config.js";
+import { loadApp, type Config } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
 import { createCall, type Call } from "./runtime/client.js";
 import type { EmailMessage } from "./runtime/email.js";
 import type { LiveNamespace } from "./runtime/live.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 import { createFiles, memoryBucket, type Files } from "./runtime/files.js";
-import { loadVars } from "./secrets.js";
 import { listStaticFiles } from "./static-files.js";
 import { featureVars } from "./wrangler-config.js";
 
@@ -64,7 +64,8 @@ export interface TestApp<App> extends Acting<App> {
 // so every call gets a clean start. `dir` is the app's folder, holding platform.jsonc.
 export async function testApp<App extends TestableApp>(app: App, options: { dir?: string } = {}): Promise<TestApp<App>> {
   const dir = resolve(options.dir ?? process.cwd());
-  const config = await loadConfig(dir);
+  // A test reaches no real hostname, so a variable with no value, as in CI, gets a stand-in.
+  const { config } = await loadApp(dir, { fallback: "test.localhost" });
   const url = config.database ? await freshDatabase(dir, config, app.staticPoints) : undefined;
   const pool = url ? new Pool({ connectionString: url, max: 5 }) : undefined;
   const bucket = memoryBucket();
@@ -146,14 +147,6 @@ function withHeaders(request: Request, headers: Record<string, string>): Request
   merged.headers.set("origin", TEST_URL);
   for (const [name, value] of Object.entries(headers)) merged.headers.set(name, value);
   return merged;
-}
-
-async function loadConfig(dir: string): Promise<Config> {
-  const text = await readConfigText(dir);
-  const names = configVariables(text);
-  // A test reaches no real hostname, so a variable with no value, as in CI, gets a stand-in.
-  const vars = { ...Object.fromEntries(names.map((name) => [name, "test.localhost"])), ...(await loadVars(dir, names)) };
-  return parseConfig(text, join(dir, CONFIG_FILE), vars);
 }
 
 // One Postgres for every test process of an app, started by the first, and one migrated template
@@ -360,16 +353,6 @@ const timer = setInterval(() => {
 `;
 
 const databaseUrl = (base: string, name: string) => base.replace("/postgres?", `/${name}?`);
-
-async function withClient<T>(url: string, work: (client: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await work(client);
-  } finally {
-    await client.end();
-  }
-}
 
 function tool(command: string, args: string[], missing?: string): string {
   try {

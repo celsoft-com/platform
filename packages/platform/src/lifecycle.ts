@@ -4,7 +4,7 @@ import type { StaticPoint } from "./runtime/access.js";
 import { LEGACY_BUCKET_MARKER, LEGACY_DNS_COMMENT, legacyNames } from "./legacy.js";
 import type { Branch, Hyperdrive, MailDomain, Ports, Repo, Zone } from "./ports.js";
 import type { Run } from "./run.js";
-import { names, originOf, previewHostname, previewPattern, type Target } from "./target.js";
+import { names, originOf, previewHostname, previewPattern, type Names, type Target } from "./target.js";
 import { placementRegion, wranglerConfig } from "./wrangler-config.js";
 
 export interface Context {
@@ -80,36 +80,33 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
     const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
     placement = placementRegion(await ports.neon.region(project));
-    const prod = await ports.neon.defaultBranch(project);
-
-    let copied = false;
-    const branch =
-      target.kind === "prod"
-        ? prod
-        : await run.ensure<Branch>(
-            `Neon branch ${n.neonBranch}`,
-            () => ports.neon.findBranch(project, n.neonBranch!),
-            () => ((copied = true), ports.neon.createBranch(project, n.neonBranch!, prod.id, true)),
-            { id: "(new)", name: n.neonBranch! },
-          );
-
-    if (target.kind === "prod") await backup(ctx, project, prod);
-
-    const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
-
-    if (uri) {
-      await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
-      await prepareAccessOn(ctx, uri, branch.name);
-      await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri!), undefined);
-      if (config.auth && (copied || generated.BETTER_AUTH_SECRET)) await forgetSigningKeys(ctx, uri, branch.name);
-    } else {
-      run.note(`would run migrations on ${branch.name}`);
-    }
-
+    const { uri } = await prepareBranch(ctx, project, target.kind === "prod" ? undefined : n.neonBranch!, { forgetKeys: Boolean(generated.BETTER_AUTH_SECRET) });
     hyperdriveId = await ensureHyperdrive(ctx, n.hyperdrive, uri);
   }
 
-  const sending = config.email && target.kind === "prod";
+  const email = await ensureSending(ctx, target, hostname, zone, existingSecrets);
+  Object.assign(generated, email.generated);
+
+  if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
+  const finishBucketMove = await migrateLegacyBucket(ctx, target, n);
+
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample", ...email.vars };
+  if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
+
+  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
+  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
+  await finishBucketMove();
+  return { hostname };
+}
+
+// How the deploy sends email, as the Worker's vars, and a sending key it made, if any. Prod sends
+// from its own hostname's verified domain; a preview emails only the addresses platform.jsonc
+// lists, from prod's domain, with a key of its own that cleanup deletes; everything else captures.
+async function ensureSending(ctx: Context, target: Target, hostname: string, zone: Zone, existingSecrets: string[]): Promise<{ vars: Record<string, string>; generated: Record<string, string> }> {
+  const { config, ports, run } = ctx;
+  const generated: Record<string, string> = {};
+  if (!config.email) return { vars: {}, generated };
+  const sending = target.kind === "prod";
   if (sending) {
     const domain = await ensureMailDomain(ctx, hostname, zone);
     if (!existingSecrets.includes("EMAIL_API_KEY")) {
@@ -117,9 +114,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
       if (key) generated.EMAIL_API_KEY = key;
     }
   }
-  // A preview emails only the addresses platform.jsonc lists, from prod's verified domain, with a
-  // key of its own that cleanup deletes.
-  const allowed = config.email && target.kind === "preview" ? config.previews.sendEmailTo : [];
+  const allowed = target.kind === "preview" ? config.previews.sendEmailTo : [];
   let previewSending = false;
   if (allowed.length > 0) {
     const domain = await ports.mail.findDomain(config.hostname);
@@ -132,31 +127,27 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
       }
     }
   }
+  const vars: Record<string, string> = { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` };
+  if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
+  return { vars, generated };
+}
 
-  if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
+// Moves prod's files from a bucket an older version named: copies them now, and returns the step
+// to run once the new Worker is live, which copies what the old Worker added meanwhile and deletes
+// the old bucket. Nothing to do returns a step that does nothing.
+async function migrateLegacyBucket(ctx: Context, target: Target, n: Names): Promise<() => Promise<void>> {
+  const { config, ports, run } = ctx;
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
-  if (oldBucket) await copyFiles(ctx, oldBucket, n.bucket, false);
-
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample" };
-  if (config.email) {
-    Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
-    if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
-  }
-  if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
-
-  const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
-  await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
-
-  // The old Worker kept writing to the old bucket until now, so what it added is copied before the old bucket goes.
-  if (oldBucket && run.dryRun) run.note(`would copy files added since, then delete ${oldBucket}`);
-  if (oldBucket && !run.dryRun) {
+  if (!oldBucket) return async () => {};
+  await copyFiles(ctx, oldBucket, n.bucket, false);
+  return async () => {
+    if (run.dryRun) return run.note(`would copy files added since, then delete ${oldBucket}`);
     await copyFiles(ctx, oldBucket, n.bucket, true);
     await run.mutate(`delete R2 bucket ${oldBucket}, now copied to ${n.bucket}`, async () => {
       await ports.cloudflare.deleteObjects(oldBucket, "");
       await ports.cloudflare.deleteBucket(oldBucket);
     }, undefined);
-  }
-  return { hostname };
+  };
 }
 
 // The app's name belongs to one repo per Cloudflare account; the first deploy claims it.
@@ -239,20 +230,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   if (config.database) {
     const project = neonProject(ctx.secrets);
     await requirePostgres(ports.neon, project);
-    const prod = await ports.neon.defaultBranch(project);
-    let copied = false;
-    const branch = await run.ensure<Branch>(
-      `Neon branch ${DEV_BRANCH}`,
-      () => ports.neon.findBranch(project, DEV_BRANCH),
-      () => ((copied = true), ports.neon.createBranch(project, DEV_BRANCH, prod.id, true)),
-      { id: "(new)", name: DEV_BRANCH },
-    );
-    uri = await ports.neon.connectionUri(project, branch.id);
-    await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
-    await run.mutate(`run migrations on ${DEV_BRANCH}`, () => ports.migrator.migrate(uri!), undefined);
-    await prepareAccessOn(ctx, uri, DEV_BRANCH);
-    await run.mutate(`write page cache tables on ${DEV_BRANCH}`, () => ports.migrator.prepareCache(uri!), undefined);
-    if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
+    ({ uri } = await prepareBranch(ctx, project, DEV_BRANCH, { forgetKeys: false, generate: true }));
   }
 
   const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
@@ -270,6 +248,39 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
   const devSecrets = { ...secrets, ...(config.auth && { BETTER_AUTH_SECRET: "local-development-only" }) };
   run.note(`serving at ${appUrl}; email is captured to this terminal`);
   await ports.wrangler.dev(local, devSecrets, uri);
+}
+
+// A database branch made ready for the code being shipped: `name` is a branch copied from prod
+// when it is missing, or undefined for prod itself, which is backed up first. Then migrations, the
+// access triggers and static points, and the page cache tables, once; and when the branch is a new
+// copy, or `forgetKeys` says the auth secret is new, the signing keys it cannot decrypt are
+// forgotten. `generate` writes migrations from the schema first, as `dev` does. A dry run that
+// would make the branch has no address yet, so it only notes the migrations.
+async function prepareBranch(ctx: Context, project: string, name: string | undefined, options: { forgetKeys: boolean; generate?: boolean }): Promise<{ branch: Branch; uri: string | undefined }> {
+  const { config, ports, run } = ctx;
+  const prod = await ports.neon.defaultBranch(project);
+  let copied = false;
+  const branch =
+    name === undefined
+      ? prod
+      : await run.ensure<Branch>(
+          `Neon branch ${name}`,
+          () => ports.neon.findBranch(project, name),
+          () => ((copied = true), ports.neon.createBranch(project, name, prod.id, true)),
+          { id: "(new)", name },
+        );
+  if (name === undefined) await backup(ctx, project, prod);
+  const uri = run.dryRun && branch.id === "(new)" ? undefined : await ports.neon.connectionUri(project, branch.id);
+  if (!uri) {
+    run.note(`would run migrations on ${branch.name}`);
+    return { branch, uri };
+  }
+  if (options.generate) await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
+  await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
+  await prepareAccessOn(ctx, uri, branch.name);
+  await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri), undefined);
+  if (config.auth && (copied || options.forgetKeys)) await forgetSigningKeys(ctx, uri, branch.name);
+  return { branch, uri };
 }
 
 // The access tables exist whenever auth is on; their triggers and the app's static points change
