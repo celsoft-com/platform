@@ -108,7 +108,7 @@ flowchart LR
 2. **Types:** the input and output are Zod schemas, the only types an app writes.
 3. **Inputs:** `:name` in the path, the query, and a JSON body merge into one input object, with URL strings converted to the schema's types.
 4. **Checks:** bad input is a 400 with `{ error }`; an output that does not match its schema is a 500, logged.
-5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`.
+5. **Failing:** `throw new EndpointError(404, "not found")` sends that status with `{ error }`, and the generated client throws `EndpointError` with the same status and message.
 6. **Browser:** a bundled frontend imports `call` from `.platform/client.ts` and calls `call("listItems", {})`, typed from the endpoints.
 7. **Handler:** optional; it takes every request no endpoint answers, for uploads, downloads and streaming.
 8. **Private by default:** every `/api/*` path needs a signed-in user, except `/api/auth/`, `/api/public/` and `/api/live/`.
