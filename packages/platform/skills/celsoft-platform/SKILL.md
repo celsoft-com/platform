@@ -61,6 +61,7 @@ export default defineApp(undefined, {
 5. **Access:** every endpoint says who may call it, or the app stops at start naming it; the function never runs for anyone refused, over the API and MCP alike.
    - **`{ level: "read" }`:** anyone signed in; an API token capped below the level gets a 403. Use `read` for reads, and `create`, `write`, `delete` or `manage` for what the call changes. Never under `/api/public/`.
    - **`{ point: "id", level: "write" }`:** with `access` on, the caller needs that level on the control point named by the input field, or by a function of the input, or gets a 404.
+   - **A list of points:** the function, sync or async, may return several ids; the first that exists is checked, and only that one, so a point that refuses never falls through to the next: ``point: ({ path }) => [`path:${path}`, ...foldersAbove(path), "site"]``. A function returning anything but ids throws.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints.
 7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for uploads, downloads and streaming.
@@ -111,7 +112,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
    - **Share links:** `/print/7#link=<token>` opens a gated page; the 404 page swaps the token for a cookie and reloads, so put links after `#`, never in the query.
    - **API tokens:** count on page GET and HEAD, capped at their level.
    - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler; fetch anything personal in the browser from an endpoint.
-7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status.
+7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status; a 404 is the same 404 page the gate answers, its message only in the logs, so a missing page and a refused one look alike.
 8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
 9. **Caching:** any page may opt in:
     `route({ cache: true }, async (_, app) => html)` keeps it 60 seconds; `cache: { seconds: 300 }` sets up to 3,600.
@@ -175,7 +176,7 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 5. **Grants:** `app.access.grant(point, to, level, { email: { path: "/notes/7" } })`, `revoke`, `grants`, `inherit(point, true)`; all need `manage`. A new grant to a person emails them a link to `path` (`email: false` sends none). Points under an organization take only its own teams and organization, plus people and Everyone.
 6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
 7. **Endpoints:** every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }`, `access: { level: "write" }` or `access: "anon"`; see Endpoints above.
-8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes; `point(id)` returns its parent and whether it inherits.
+8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes, `require` also taking a list whose first existing point is checked; `point(id)` returns its parent and whether it inherits.
 9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
 10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
 11. **Static points:** `defineApp(handler, { access: { points: { site: { grants: [{ to: { owner: true }, level: "manage" }] } } } })`, written by every deploy and `dev`; their grants change only in code. A grant to `{ owner: true }` gives the app's owner a point with no organization and no address in code.
