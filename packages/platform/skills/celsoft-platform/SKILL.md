@@ -64,7 +64,7 @@ export default defineApp(undefined, {
    - **A list of points:** the function, sync or async, may return several ids; the first that exists is checked, and only that one, so a point that refuses never falls through to the next: ``point: ({ path }) => [`path:${path}`, ...foldersAbove(path), "site"]``. A function returning anything but ids throws.
    - **`"anon"`:** anyone, signed in or not; only under `/api/public/`.
 6. **Frontend calls:** a bundled frontend imports `call` from `.platform/client` and calls `call("getNote", { id })`, typed from the endpoints; a refusal throws `EndpointError` with the server's `status` and `message`, and failed validation names each field, such as `body: Too small`.
-7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every request no endpoint answers, for downloads, streaming and webhooks.
+7. **Hand-written routes:** the `handler` (first argument, or `undefined`) takes every `/api/` request no endpoint answers, for downloads, streaming and webhooks; put them under `/api/`, since any other path that no file, page or platform route answers gets the one 404 page.
 8. **Uploads:** an input field `upload({ maxBytes: 5_000_000, types: ["image/*"] })` takes a file; the handler gets a `File` (`name`, `type`, `size`, bytes), checked before it runs. `maxBytes` is 10 MB by default, at most 100 MB, and a larger body is a 413 unread. Upload fields are top-level input fields, optional with `.optional()`.
    - **Browser and tests:** pass a `File` to `call("addNote", { body, file })`; it goes as multipart. Never build an upload route by hand, or send base64 in JSON.
    - **Scripts:** `curl -H "Authorization: Bearer <token>" -F body=hi -F file=@a.png`; other fields arrive as strings and are converted to the schema's types.
@@ -263,7 +263,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
-9. **`frontend`:** `{ "dir": "public" }` serves that folder's files free, before the Worker; a path with no file is a 404, unless `"spa": true` gives it `index.html` for browser routing. A bare `"frontend": "public"` is the older shape: `upgrade` rewrites it to `{ "dir": "public", "spa": true }`; drop `spa` unless the app routes in the browser.
+9. **`frontend`:** `{ "dir": "public" }` serves that folder's files free, before the Worker; a path with no file is the one 404 page (signed out, it offers sign-in), unless `"spa": true` gives it `index.html` for browser routing. A bare `"frontend": "public"` is the older shape: `upgrade` rewrites it to `{ "dir": "public", "spa": true }`; drop `spa` unless the app routes in the browser.
 
 ## Testing
 

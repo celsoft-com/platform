@@ -9,7 +9,7 @@ const ALL_ON = { AUTH_SIGNUP: "invite", AUTH_API_TOKENS: "on", LIVE_ROOMS: "on",
 
 // app.routes as a handler sees it, for a request with these vars.
 async function routesOf(app: { fetch(r: Request, env: never, c: typeof ctx): Promise<Response> }, env: object) {
-  const response = await app.fetch(new Request("https://app.test/routes"), env as never, ctx);
+  const response = await app.fetch(new Request("https://app.test/api/routes"), env as never, ctx);
   return (await response.json()) as Record<string, string | null>;
 }
 
@@ -17,7 +17,7 @@ const probe = ["/login", "/invites", "/tokens", "/api/auth/get-session", "/api/l
 
 function testedApp() {
   const app = defineApp(
-    (request, a) => Response.json(new URL(request.url).pathname === "/routes" ? Object.fromEntries(probe.map((p) => [p, a.routes.serves(p)])) : null),
+    (request, a) => Response.json(new URL(request.url).pathname === "/api/routes" ? Object.fromEntries(probe.map((p) => [p, a.routes.serves(p)])) : null),
     {
       pages: [page({ path: "/notes", routes: { "/:id": () => "note" } })],
       endpoints: {
