@@ -1,9 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { and, eq, sql as drizzleSql } from "drizzle-orm";
-import { apikey, user } from "../schema.js";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { createAccess, hashToken, LEVELS, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
+import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, shareMessage, type Access, type Level, type StaticPoint } from "./access.js";
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings } from "./email.js";
@@ -11,6 +9,7 @@ import { apiHandler, getMatcher, requireDeclaredAccess, tokenCaps, withInvalidat
 import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
 import { isCrossSiteForm, needsSession, rateLimited, type RateLimiter } from "./guard.js";
+import { callerAddress, guardTokenRoutes, READ_METHODS, tokenCaller, tooMany } from "./api-tokens.js";
 import type { z } from "zod";
 import { anyMessage, CLIENT_PATH, clientScript, createLive, joinRoom, LIVE_PATH, liveRoom, type Live, type LiveNamespace, type MessageCheck } from "./live.js";
 import type { LivePeer } from "./live-client.js";
@@ -200,26 +199,17 @@ export function defineApp<
     const app = asCaller(resources);
     try {
       if (isCrossSiteForm(request, url)) return json({ error: "cross-site form submissions are refused" }, 403);
-      // A request with an API token runs as the token's owner, capped at the token's level.
-      let current = app;
-      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
-      const token = apiToken(request, url, env, onPage);
       // One caller cannot spend everyone's capacity: a token, a person, or else an address.
       const limited = env.API_LIMIT && (url.pathname.startsWith("/api/") || url.pathname === MCP_PATH || pages?.owns(url.pathname)) ? env.API_LIMIT : undefined;
-      const address = `address ${request.headers.get("cf-connecting-ip") ?? "unknown"}`;
-      if (token !== null) {
-        // A token's own allowance is spent before it is looked up, so a refused token costs no query.
-        if (limited && (badTokenSenders.blocked(address) || !(await limited.limit({ key: `token ${(await hashToken(token)).slice(0, 32)}` })).success)) return tooMany();
-        const holder = await tokenHolder(app, token);
-        if (!holder) {
-          // Fresh fake tokens would each get an allowance of their own, so a bad one spends its sender's.
-          if (limited && !(await limited.limit({ key: address })).success) badTokenSenders.block(address);
-          return json({ error: "that API token is not valid; it may have expired or been revoked" }, 401);
-        }
-        if (holder.cap === "read" && !READ_METHODS.includes(request.method)) return json({ error: "this API token can only read" }, 403);
-        current = asCaller(resources, async () => holder.session, holder.cap);
-      } else if (limited) {
-        const caller = (await current.session().catch(() => null))?.user.id ?? address;
+      // A request with an API token runs as the token's owner, capped at the token's level.
+      const onPage = Boolean(pages?.owns(url.pathname)) && (request.method === "GET" || request.method === "HEAD");
+      const tokens = env.AUTH_API_TOKENS === "on" && Boolean(env.BETTER_AUTH_SECRET);
+      const holder = await tokenCaller(request, () => resources.db as unknown as NodePgDatabase<Record<string, unknown>>, limited, { tokens, onPage });
+      if (holder instanceof Response) return holder;
+      let current = app;
+      if (holder) current = asCaller(resources, async () => holder.session, holder.cap);
+      else if (limited) {
+        const caller = (await current.session().catch(() => null))?.user.id ?? callerAddress(request);
         if (!(await limited.limit({ key: caller })).success) return tooMany();
       }
       const live = await liveRoute(request, url, env, current, options);
@@ -501,20 +491,8 @@ async function sessionAs<Env, Schema extends Record<string, unknown>>(app: AppCo
   return { user, session: { id, userId, token: "", expiresAt: new Date(Date.now() + 60_000), createdAt: new Date(), updatedAt: new Date() } } as unknown as Session;
 }
 
-const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
 
 const signInRedirect = (url: URL) => new Response(null, { status: 302, headers: { location: `/login?next=${encodeURIComponent(url.pathname + url.search)}`, "cache-control": "no-store" } });
-const TOKEN_ROUTES = ["create", "list", "delete", "get"];
-const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// The API token a request carries, when tokens are on: on /api/ outside /api/auth/, where a
-// token can never make more tokens or change the account, and on page reads.
-function apiToken(request: Request, url: URL, env: PlatformBindings, onPage: boolean): string | null {
-  if (env.AUTH_API_TOKENS !== "on" || !env.BETTER_AUTH_SECRET) return null;
-  const onApi = url.pathname.startsWith("/api/") && !url.pathname.startsWith(`${AUTH_PATH}/`);
-  if (!onApi && !onPage) return null;
-  return /^Bearer\s+(\S+)\s*$/i.exec(request.headers.get("authorization") ?? "")?.[1] ?? null;
-}
 
 const SAMPLE_EVERY = 100;
 
@@ -534,68 +512,6 @@ function pageCache<Env extends PlatformBindings, Schema extends Record<string, u
     match: (key) => edge.match(key),
     put: (key, response) => ctx.waitUntil(edge.put(key, response)),
   };
-}
-
-const tooMany = () => Response.json({ error: "too many requests; slow down" }, { status: 429, headers: { "retry-after": "60" } });
-
-// Addresses whose bad tokens spent their allowance, refused for a minute before any lookup; kept
-// per Worker instance, so the rate limit itself stays the authority.
-const badTokenSenders = (() => {
-  const until = new Map<string, number>();
-  return {
-    blocked: (address: string) => (until.get(address) ?? 0) > Date.now(),
-    block(address: string) {
-      if (until.size >= 10_000) until.clear();
-      until.set(address, Date.now() + 60_000);
-    },
-  };
-})();
-
-// How often a token's last use is written, at most; the tokens screen shows it to this accuracy.
-const TOKEN_USE_EVERY_MS = 60 * 60 * 1000;
-
-// The token's owner and cap, or null for a token that is unknown, disabled, expired, revoked,
-// capped at no known level, or whose owner is gone or banned. One query reads the key and its
-// owner together, where Better Auth's own check would read and write the key's row on every call;
-// the last use is written at most hourly.
-async function tokenHolder<Env, Schema extends Record<string, unknown>>(app: AppContext<Env, Schema>, token: string): Promise<{ session: Session; cap: Level } | null> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)));
-  const hashed = btoa(String.fromCharCode(...digest)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const db = app.db as unknown as NodePgDatabase<Record<string, unknown>>;
-  const [row] = await db
-    .select({ id: apikey.id, metadata: apikey.metadata, lastRequest: apikey.lastRequest, owner: user })
-    .from(apikey)
-    .innerJoin(user, eq(user.id, apikey.referenceId))
-    .where(
-      and(
-        eq(apikey.key, hashed),
-        drizzleSql`${apikey.enabled} is not false`,
-        drizzleSql`(${apikey.expiresAt} is null or ${apikey.expiresAt} > now())`,
-        drizzleSql`(${apikey.remaining} is null or ${apikey.remaining} > 0)`,
-        drizzleSql`(${user.banned} is not true or (${user.banExpires} is not null and ${user.banExpires} <= now()))`,
-      ),
-    );
-  if (!row) return null;
-  const cap = (JSON.parse(row.metadata ?? "null") as { cap?: unknown } | null)?.cap;
-  if (!LEVELS.includes(cap as Level)) return null;
-  if (!row.lastRequest || Date.now() - row.lastRequest.getTime() > TOKEN_USE_EVERY_MS) await db.update(apikey).set({ lastRequest: new Date() }).where(eq(apikey.id, row.id));
-  const now = new Date();
-  const session = { id: `api-token ${row.id}`, userId: row.owner.id, token: "", expiresAt: new Date(now.getTime() + 60_000), createdAt: now, updatedAt: now };
-  return { session: { user: row.owner, session } as unknown as Session, cap: cap as Level };
-}
-
-// What a person may send when making a token: a name, a lifetime and a cap, and nothing else,
-// so no token is made without an expiry or with Better Auth's server-only settings.
-async function tokenCreateRequest(request: Request): Promise<Request | Response> {
-  const body = (await request.json().catch(() => undefined)) as Record<string, unknown> | undefined;
-  if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "send a JSON object" }, 400);
-  const cap = (body.metadata as { cap?: unknown } | undefined)?.cap ?? "manage";
-  if (!LEVELS.includes(cap as Level)) return json({ error: `a token's cap is one of ${LEVELS.join(", ")}` }, 400);
-  if (body.expiresIn !== undefined && body.expiresIn !== null && typeof body.expiresIn !== "number") return json({ error: "expiresIn is a number of seconds" }, 400);
-  const clean = { name: body.name, ...(typeof body.expiresIn === "number" && { expiresIn: body.expiresIn }), metadata: { cap } };
-  const headers = new Headers(request.headers);
-  headers.delete("content-length");
-  return new Request(request.url, { method: "POST", headers, body: JSON.stringify(clean) });
 }
 
 const LINK_COOKIE = "platform_link_";
@@ -701,18 +617,9 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
     return serveOrganizations(request, path, app.organizations);
   }
   if (env.MCP !== "on" && MCP_AUTH_PATHS.some((p) => path.startsWith(`${AUTH_PATH}${p}`))) return json({ error: "not found" }, 404);
-  if (path.startsWith(`${AUTH_PATH}/api-key/`)) {
-    // Only the calls the tokens screen needs; updating could remove a token's expiry.
-    if (env.AUTH_API_TOKENS !== "on" || !TOKEN_ROUTES.includes(path.slice(`${AUTH_PATH}/api-key/`.length))) return json({ error: "not found" }, 404);
-    if (path === `${AUTH_PATH}/api-key/create`) {
-      const checked = await tokenCreateRequest(request);
-      return checked instanceof Response ? checked : app.auth.handler(checked);
-    }
-    // A token id that is not a UUID names nothing; Better Auth would fail on it instead.
-    const keyId = path.endsWith("/delete") ? ((await request.clone().json().catch(() => ({}))) as { keyId?: unknown }).keyId : path.endsWith("/get") ? url.searchParams.get("id") : undefined;
-    if (keyId !== undefined && (typeof keyId !== "string" || !UUID_TEXT.test(keyId))) return json({ error: "not found" }, 404);
-  }
-  if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(request);
+  const guarded = await guardTokenRoutes(request, path, env.AUTH_API_TOKENS === "on");
+  if (guarded instanceof Response) return guarded;
+  if (path.startsWith(`${AUTH_PATH}/`)) return app.auth.handler(guarded ?? request);
 
   if (needsSession(path)) await app.requireUser();
   return undefined;
