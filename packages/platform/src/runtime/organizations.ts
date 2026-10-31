@@ -1,5 +1,5 @@
+import { conflict, notFound, readJsonBody, rows, UUID, type Db } from "./shared.js";
 import { sql, type SQL } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createAccess, forgetting, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
 import type { EmailMessage, Mail } from "./email.js";
 import { EndpointError, refusal } from "./endpoint-error.js";
@@ -89,13 +89,8 @@ export interface Organizations {
   removeFromTeam(teamId: string, userId: string): Promise<void>;
 }
 
-type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute" | "transaction">;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const notFound = () => new EndpointError(404, "not found");
-const conflict = (message: string) => new EndpointError(409, message);
 const invalid = (message: string) => new EndpointError(400, message);
-const rows = async <T>(db: Db, query: SQL): Promise<T[]> => (await db.execute(query)).rows as T[];
 
 // Ids come from URLs and bodies; anything that is not a UUID names nothing.
 function uuid(value: unknown): string {
@@ -441,7 +436,7 @@ export async function serveOrganizations(request: Request, path: string, orgs: O
     if (!match || request.method !== method) continue;
     let body: Record<string, unknown> = {};
     if (method === "POST" || method === "PATCH") {
-      const parsed = await request.json().catch(() => undefined);
+      const parsed = await readJsonBody<unknown>(request);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return Response.json({ error: "send a JSON object" }, { status: 400 });
       body = parsed as Record<string, unknown>;
     }

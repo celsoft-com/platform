@@ -1,3 +1,4 @@
+import { readJsonBody, type Db } from "./shared.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
@@ -121,7 +122,6 @@ interface Once {
   files: ReadonlySet<string>;
 }
 
-type Db = NodePgDatabase<Record<string, unknown>>;
 
 // The database the request being served uses. Better Auth is built once per Worker instance, so
 // it reaches the database through requestDb, which hands each call to that request's own
@@ -493,7 +493,7 @@ function linkCookies(request: Request): string[] {
 // opens nothing is a 404, the same as any missing point.
 async function exchangeLink(request: Request, url: URL, db: NodePgDatabase<Record<string, unknown>>): Promise<Response> {
   if (request.method !== "POST") return json({ error: "not found" }, 404);
-  const body = (await request.json().catch(() => undefined)) as { link?: unknown } | undefined;
+  const body = await readJsonBody<{ link?: unknown }>(request);
   const token = body?.link;
   const target = typeof token === "string" ? await linkTarget(db, token) : null;
   if (!target) return json({ error: "not found" }, 404);
@@ -569,7 +569,7 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   // Checked here, before Better Auth makes the account, with the same answer for every refused
   // address, so it never tells who already has an account.
   if (path === `${AUTH_PATH}/sign-up/email` && request.method === "POST" && env.AUTH_SIGNUP !== "open") {
-    const address = ((await request.clone().json().catch(() => ({}))) as { email?: unknown }).email;
+    const address = (await readJsonBody<{ email?: unknown }>(request, { clone: true }))?.email;
     if (typeof address !== "string" || !(await signupAllowed(app.db as unknown as NodePgDatabase<Record<string, unknown>>, address))) return Response.json({ message: INVITE_ONLY, code: "INVITE_ONLY" }, { status: 403 });
   }
   if (path.startsWith(PLATFORM_API)) {

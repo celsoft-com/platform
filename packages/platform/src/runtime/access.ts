@@ -1,5 +1,5 @@
+import { conflict, notFound, rows, UUID, type Db } from "./shared.js";
 import { sql, type SQL } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Mail } from "./email.js";
 import { EndpointError } from "./endpoint-error.js";
 import { LINK_HEADER } from "./link-header.js";
@@ -123,7 +123,6 @@ export const teamPoint = (teamId: string) => `team:${teamId}`;
 const RESERVED = /^(organization|team):/;
 export const [READ, CREATE, WRITE, DELETE, MANAGE] = [1, 2, 3, 4, 5];
 
-type Db = Pick<NodePgDatabase<Record<string, unknown>>, "execute" | "transaction">;
 
 export function rank(level: Level): number {
   const n = LEVELS.indexOf(level);
@@ -137,8 +136,6 @@ export function checkPointId(id: unknown): asserts id is string {
   if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new Error(`a control point id must be 1 to 200 characters; got ${JSON.stringify(id)}`);
 }
 
-const notFound = () => new EndpointError(404, "not found");
-const conflict = (message: string) => new EndpointError(409, message);
 
 export function shareMessage(notice: ShareNotice, appName: string, origin: string): { to: string; subject: string; text: string } {
   const who = notice.sharedBy || "Someone";
@@ -185,7 +182,6 @@ interface Who {
   cap: number | null;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // A user id that is not a UUID can match nobody, so it is treated as no user at all.
 const userParam = (userId: string | null) => (userId && UUID.test(userId) ? userId : null);
 
@@ -221,7 +217,6 @@ function uncappedLevelSql(point: SQL, who: Who): SQL {
   )`;
 }
 
-const rows = async <T>(db: Db, query: SQL): Promise<T[]> => (await db.execute(query)).rows as T[];
 
 interface GranteeColumns {
   user: string | null;

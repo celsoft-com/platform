@@ -1,5 +1,5 @@
+import { readJsonBody, UUID, type Db } from "./shared.js";
 import { and, eq, sql as drizzleSql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { apikey, user } from "../schema.js";
 import { hashToken, LEVELS, type Level } from "./access.js";
 import { AUTH_PATH } from "./auth.js";
@@ -9,7 +9,6 @@ import type { Session } from "./types.js";
 // Personal API tokens: who a token proves, the rate limit it spends, and the token routes the
 // tokens screen may call.
 
-type Db = NodePgDatabase<Record<string, unknown>>;
 
 export const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
 
@@ -90,7 +89,6 @@ async function tokenHolder(db: Db, token: string): Promise<{ session: Session; c
 }
 
 const TOKEN_ROUTES = ["create", "list", "delete", "get"];
-const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The request to hand Better Auth for a token route, a refusal, or undefined for any other path.
 // Only the calls the tokens screen needs; updating could remove a token's expiry.
@@ -100,15 +98,15 @@ export async function guardTokenRoutes(request: Request, path: string, tokens: b
   if (!tokens || !TOKEN_ROUTES.includes(path.slice(`${AUTH_PATH}/api-key/`.length))) return notFound();
   if (path === `${AUTH_PATH}/api-key/create`) return tokenCreateRequest(request);
   // A token id that is not a UUID names nothing; Better Auth would fail on it instead.
-  const keyId = path.endsWith("/delete") ? ((await request.clone().json().catch(() => ({}))) as { keyId?: unknown }).keyId : path.endsWith("/get") ? new URL(request.url).searchParams.get("id") : undefined;
-  if (keyId !== undefined && (typeof keyId !== "string" || !UUID_TEXT.test(keyId))) return notFound();
+  const keyId = path.endsWith("/delete") ? (await readJsonBody<{ keyId?: unknown }>(request, { clone: true }))?.keyId : path.endsWith("/get") ? new URL(request.url).searchParams.get("id") : undefined;
+  if (keyId !== undefined && (typeof keyId !== "string" || !UUID.test(keyId))) return notFound();
   return request;
 }
 
 // What a person may send when making a token: a name, a lifetime and a cap, and nothing else,
 // so no token is made without an expiry or with Better Auth's server-only settings.
 async function tokenCreateRequest(request: Request): Promise<Request | Response> {
-  const body = (await request.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+  const body = await readJsonBody(request);
   if (!body || typeof body !== "object" || Array.isArray(body)) return Response.json({ error: "send a JSON object" }, { status: 400 });
   const cap = (body.metadata as { cap?: unknown } | undefined)?.cap ?? "manage";
   if (!LEVELS.includes(cap as Level)) return Response.json({ error: `a token's cap is one of ${LEVELS.join(", ")}` }, { status: 400 });
