@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { createAccess, organizationPoint, teamPoint, type Access, type Caller } from "./access.js";
-import { EndpointError } from "./endpoint-error.js";
+import { EndpointError, refusal } from "./endpoint-error.js";
 
 // The platform's own organizations, teams, members and invitations; see docs/design.md, Auth
 // behavior, Organizations. Members carry no roles: who may do what is decided by control points,
@@ -433,7 +433,8 @@ export async function serveOrganizations(request: Request, path: string, orgs: O
       const result = await run(orgs, params, body);
       return Response.json(result ?? {}, { status: method === "POST" && !rest.endsWith("/accept") ? 201 : 200 });
     } catch (error) {
-      if (error instanceof EndpointError) return Response.json({ error: error.message }, { status: error.status });
+      const refused = error instanceof Response ? undefined : await refusal(error);
+      if (refused) return Response.json({ error: refused.message }, { status: refused.status });
       throw error;
     }
   }

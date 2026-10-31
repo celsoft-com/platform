@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Email } from "./email.js";
-import { EndpointError } from "./endpoint-error.js";
+import { EndpointError, refusal } from "./endpoint-error.js";
 
 // Invite-only sign-up: once an app has its first account, a new address may sign up only with an
 // invitation from the owner or an admin, an open organization invitation, or a share to that
@@ -109,7 +109,8 @@ export async function serveInvites(request: Request, path: string, invites: Invi
     }
     return Response.json({ error: "not found" }, { status: 404 });
   } catch (thrown) {
-    if (thrown instanceof EndpointError) return Response.json({ error: thrown.message }, { status: thrown.status });
+    const refused = thrown instanceof Response ? undefined : await refusal(thrown);
+    if (refused) return Response.json({ error: refused.message }, { status: refused.status });
     throw thrown;
   }
 }

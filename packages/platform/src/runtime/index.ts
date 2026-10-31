@@ -16,7 +16,7 @@ import type { LivePeer } from "./live-client.js";
 import { MCP_PATH, mcpChallenge, mcpUserId, WELL_KNOWN } from "./mcp.js";
 import { createOrganizations, PLATFORM_API, serveOrganizations, type Organizations } from "./organizations.js";
 import { notFoundPage, pageServer, type Page, type PageCache } from "./pages.js";
-import { EndpointError } from "./endpoint-error.js";
+import { refusal } from "./endpoint-error.js";
 import { createInvites, INVITE_ONLY, INVITES_API, INVITES_PATH, serveInvites, signupAllowed, type Invites } from "./invites.js";
 import { isScreen, renderInvitesScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
 import { createCache, pageVersion, type Cache } from "./cache.js";
@@ -231,9 +231,11 @@ export function defineApp<
       if (!url.pathname.startsWith("/api/")) return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
       return await handle(request, current);
     } catch (thrown) {
+      // A thrown Response, such as requireUser's sign-in redirect, is the answer as it stands.
       if (thrown instanceof Response) return thrown;
       // A refusal from app.access or app.organizations in a hand-written route answers like an endpoint's.
-      if (thrown instanceof EndpointError) return json({ error: thrown.message }, thrown.status);
+      const refused = await refusal(thrown);
+      if (refused) return json({ error: refused.message }, refused.status);
       throw thrown;
     } finally {
       resources.close();

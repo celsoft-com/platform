@@ -5,7 +5,7 @@ import type { z } from "zod";
 import { rank, type Access, type Level } from "./access.js";
 import type { Cache } from "./cache.js";
 import { bodyLimit, uploadFields } from "./upload.js";
-import { EndpointError } from "./endpoint-error.js";
+import { EndpointError, refusal } from "./endpoint-error.js";
 import type { AppContext } from "./index.js";
 
 // What a handler gets as `app`; an app wanting its own secrets and tables typed annotates the
@@ -214,12 +214,8 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
           try {
             return await runEndpoint(e, input, context.app);
           } catch (error) {
-            if (error instanceof EndpointError) throw new ORPCError("ENDPOINT_ERROR", { status: error.status, message: error.message });
-            // A thrown Response, as requireUser throws, keeps its status and message.
-            if (error instanceof Response) {
-              const { error: message } = (await error.json().catch(() => ({}))) as { error?: string };
-              throw new ORPCError("ENDPOINT_ERROR", { status: error.status, message: message ?? error.statusText });
-            }
+            const refused = await refusal(error);
+            if (refused) throw new ORPCError("ENDPOINT_ERROR", refused);
             throw error;
           }
         });

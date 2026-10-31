@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { z } from "zod";
-import { EndpointError } from "./endpoint-error.js";
+import { refusal } from "./endpoint-error.js";
 import { runEndpoint, type Endpoint } from "./endpoints.js";
 import { servesMcp } from "./mcp.js";
 import { filesFromMcp, mcpInput } from "./upload.js";
@@ -31,8 +31,8 @@ export async function serveMcp<App>(request: Request, app: App, name: string, en
 }
 
 async function toolError(tool: string, error: unknown): Promise<string> {
-  if (error instanceof EndpointError) return error.message;
-  if (error instanceof Response) return ((await error.json().catch(() => ({}))) as { error?: string }).error ?? error.statusText;
+  const refused = await refusal(error);
+  if (refused) return refused.message;
   console.error(`MCP tool ${tool} failed`, error);
   return "the tool failed; see the app's logs";
 }
