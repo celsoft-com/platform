@@ -115,7 +115,8 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
    - **Refused:** a refused visitor, a missing point and an unmatched path get one 404 page; signed out, it offers Sign in and Sign up, which return to the page. Never build a redirect for it.
    - **Share links:** `/print/7#link=<token>` opens a gated page; the 404 page swaps the token for a cookie and reloads, so put links after `#`, never in the query.
    - **API tokens:** count on page GET and HEAD, capped at their level.
-   - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler; fetch anything personal in the browser from an endpoint.
+   - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler, except `app.access.asEveryone()`; fetch anything personal in the browser from an endpoint.
+   - **Site-wide listings:** a contents page leaves out what not everyone may read with `await app.access.asEveryone().filter(paths, "read")`, so it stays one copy for every visitor.
 7. **Errors:** throw `EndpointError(status, message)` for an HTML error page with that status; a 404 is the same 404 page the gate answers, its message only in the logs, so a missing page and a refused one look alike.
 8. **Deploy:** claims are read from the Worker's code at deploy and `dev`; there is nothing to configure.
 9. **Caching:** a page renders on every request unless its route opts in:
@@ -201,11 +202,12 @@ With `"access": true`, the platform keeps who may do what to the app's resources
 6. **Links:** `app.access.link(point, level, { expires })` returns a token, at most `write`, good on that one point only; build addresses such as `/#note=7&link=<token>`, and `call()` sends the `#link=` token as the `x-access-link` header and keeps it as a cookie, so plain `<a href>` downloads count it too. Endpoints a signed-out link holder uses go under `/api/public/`.
 7. **Endpoints:** every endpoint declares `access: { point: "id", level: "read" }`, `access: { point: (input) => organizationPoint(input.org), level: "create" }`, `access: { level: "write" }` or `access: "anon"`; see Endpoints above.
 8. **Check:** `app.access.check(point)` returns the level or throws a 404 below `read`; `require(point, level)` and `can(point, level)` in hand-written routes, `require` also taking a list whose first existing point is checked; `point(id)` returns its parent and whether it inherits.
-9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query.
+9. **Lists:** `.where(await app.access.readable(notes.id))` or `allows(level, column)` filters in the same query; for ids that are no column, such as paths, `await app.access.filter(ids, "read")` keeps those the caller may read, in order, in one query.
 10. **Move and delete:** `move(point, parent)` needs `manage` and `create` on the new parent; `remove(point)` needs `delete` and returns the ids of the point and everything under it, so delete those rows in the same transaction.
 11. **Static points:** `defineApp(handler, { access: { points: { site: { grants: [{ to: { owner: true }, level: "manage" }] } } } })`, written by every deploy and `dev`; their grants change only in code. A grant to `{ owner: true }` gives the app's owner a point with no organization and no address in code.
 12. **Organizations:** each has the point `organizationPoint(id)` granting its members `read`, and each team `teamPoint(id)` granting the team `write`; members of the built-in Admins team get `manage` on everything under their organization.
 13. **As the app:** `app.access.asApp()` passes every check, for work no person asked for; never use it for a request's own data.
+14. **As everyone:** `app.access.asEveryone()` answers as anyone signed out with no link, the same for every visitor; it only reads.
 
 ## Speed
 
@@ -284,7 +286,7 @@ it("lists items to the signed-in person", async () => {
 ```
 
 1. **Database:** each `testApp` gets a database of its own, copied from one migrated with `drizzle/`, static points included; call it in `beforeEach` for a clean database per test. It stops when `src/schema.ts` has changes with no migration.
-2. **Postgres:** from the app's `embedded-postgres` dev dependency, which `new` and `upgrade` add and npm installs for each machine, or else Postgres 18 or later on the `PATH`. With pnpm, allow its binaries' install script under `allowBuilds` in `pnpm-workspace.yaml`. One server starts per test process, in about a second, and stops within a second of that process ending.
+2. **Postgres:** from the app's `embedded-postgres` dev dependency, which `new` and `upgrade` add and npm installs for each machine, or else Postgres 18 or later on the `PATH`. With pnpm, allow its binaries' install script under `allowBuilds` in `pnpm-workspace.yaml`. One server serves every test process of the app, however many run in parallel: the first starts it, in about a second, the rest connect, and it stops within a second of the last ending. The migrated template is shared too, made once per change to `drizzle/`.
 3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status` and the server's `message`, so `rejects.toThrow("only the owner may publish")` checks what it says. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
 4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
 5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.

@@ -29,6 +29,7 @@ const notes = page({
     "/:id/me": async (_, app) => `<p>${(await app.requireUser()).id}</p>`,
     "/:id/session": async (_, app) => `<p>${JSON.stringify(await app.session())}</p>`,
     "/:id/level": async ({ id }, app) => `<p>${await app.access.level(id)}</p>`,
+    "/:id/everyone": async ({ id }, app) => `<p>${await app.access.asEveryone().level(id)}</p>`,
   },
 });
 
@@ -202,6 +203,15 @@ describe("Pages: serving", () => {
     for (const [path, asked] of [["/notes/1/me", "requireUser"], ["/notes/1/session", "session"], ["/notes/1/level", "access"]]) {
       await expect(get(path!), path).rejects.toThrow(new RegExp(`page /notes/:id/${path!.split("/")[3]} asked app\\.${asked}`));
     }
+  });
+
+  it("P16b: a page may ask app.access.asEveryone(), whose answer is the same for every visitor", async () => {
+    const asked: string[] = [];
+    const fake = { access: { asEveryone: () => ({ level: async (id: string) => (asked.push(id), "read") }) } };
+    const server = pageServer([notes])!;
+    const response = await server.handle(new Request("https://app.test/notes/9/everyone"), new URL("https://app.test/notes/9/everyone"), fake as never, false);
+    expect(await response!.text()).toBe("<p>read</p>");
+    expect(asked).toEqual(["9"]);
   });
 
   it("P17: pages are not served cached", async () => {

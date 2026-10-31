@@ -210,6 +210,29 @@ describe("Points", () => {
     expect(await w.as(someone).asApp().level(id)).toBe("manage");
   });
 
+  it("P14: filter keeps, in order, the ids the caller has the level on, in one query", async () => {
+    const owner = w.as(await w.user());
+    const [a, b, c] = [`f-${uid()}`, `f-${uid()}`, `f-${uid()}`];
+    for (const id of [a, b, c]) await owner.create(id);
+    await owner.grant(b, { everyone: true }, "read");
+    const stranger = w.as(await w.user());
+    expect(await owner.filter([c, "missing", a, b], "manage")).toEqual([c, a, b]);
+    expect(await stranger.filter([a, b, c], "read")).toEqual([b]);
+    expect(await stranger.filter([a, b, c], "write")).toEqual([]);
+    expect(await stranger.filter([], "read")).toEqual([]);
+  });
+
+  it("P15: asEveryone answers as anyone signed out with no link, whoever asks, and only reads", async () => {
+    const owner = w.as(await w.user());
+    const [open, closed] = [`e-${uid()}`, `e-${uid()}`];
+    await owner.create(open);
+    await owner.create(closed);
+    await owner.grant(open, { everyone: true }, "read");
+    expect(await owner.asEveryone().filter([open, closed], "read")).toEqual([open]);
+    expect(await owner.asEveryone().level(closed)).toBe(null);
+    await expect(owner.asEveryone().grant(closed, { everyone: true }, "read")).rejects.toThrow(/only reads/);
+  });
+
   it("P13: a point's own settings are shown to those who can read it", async () => {
     const c = await company();
     expect(await w.as(c.teammate).point(c.page)).toEqual({ id: c.page, parent: c.folder, inherits: true, static: false, organizationId: c.org });

@@ -26,8 +26,11 @@ npx --no-install @celsoft/platform --help >/dev/null
 npx --no-install @celsoft/platform db generate >/dev/null
 ls drizzle/*.sql >/dev/null
 ! test -e mise.toml
-# Postgres for the tests comes from the app's embedded-postgres, never this repo's own.
+# Postgres for the tests comes from the app's embedded-postgres, never this repo's own. Sixteen
+# copies of the test run in parallel workers, as an app with many test files does, sharing one server.
+for n in $(seq 1 16); do cp src/worker.test.ts "src/parallel-$n.test.ts"; done
 PATH=$(printf %s "$PATH" | tr : '\n' | grep -v postgresql | paste -sd: -) npm test
+rm src/parallel-*.test.ts
 test -f node_modules/@celsoft/platform/skills/celsoft-platform/SKILL.md
 grep -q "node_modules/@celsoft/platform/skills/" AGENTS.md
 grep -q "^.claude/skills/celsoft-platform\*/$" .gitignore
