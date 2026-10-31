@@ -238,6 +238,18 @@ describe("Points", () => {
     expect(await stranger.level("abc-%")).toBe(null);
     expect(await stranger.level(id.replace("abc", "a_c"))).toBe(null);
   });
+
+  it("P14: listing the points under one needs manage, and gives every depth, nearest first", async () => {
+    const { as, owner, folder, page } = await personal();
+    const deeper = `deeper-${uid()}`;
+    await as.create(deeper, { parent: page });
+    const reader = await w.user();
+    await as.grant(folder, { user: reader }, "write");
+    expect((await as.points(folder)).map((p) => [p.id, p.parent])).toEqual([[page, folder], [deeper, page]]);
+    expect(await as.points(deeper)).toEqual([]);
+    await refused(w.as(reader).points(folder));
+    expect((await w.as(owner).asApp().points(folder)).map((p) => p.id)).toEqual([page, deeper]);
+  });
 });
 
 describe("Token caps", () => {

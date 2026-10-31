@@ -88,6 +88,9 @@ export interface Access {
   grants(point: string): Promise<Grant[]>;
   link(point: string, level: Level, options?: { expires?: Date }): Promise<{ id: string; token: string }>;
   links(point: string): Promise<Link[]>;
+  // Needs `manage`; every point under this one, at any depth, nearest first, so the app can find
+  // the resources gated below it.
+  points(point: string): Promise<PointInfo[]>;
   revokeLink(point: string, linkId: string): Promise<void>;
   // A condition for the app's own query: rows whose `column` holds the id of a point the caller
   // can read, or has `level` on.
@@ -568,6 +571,16 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
         return { id: row!.id, token };
       },
 
+      async points(point) {
+        await need(on, point, MANAGE);
+        const under = (await subtree(on, point)).slice(1).map((p) => p.id);
+        if (under.length === 0) return [];
+        const found = new Map((await rows<PointRow>(on, sql`select id, parent_id, organization_id, for_organization, for_team, inherits, static from access_point where id in ${under}`)).map((row) => [row.id, row]));
+        return under.flatMap((id) => {
+          const row = found.get(id);
+          return row ? [{ id: row.id, parent: row.parent_id, inherits: row.inherits, static: row.static, organizationId: row.organization_id }] : [];
+        });
+      },
       async links(point) {
         await need(on, point, MANAGE);
         const found = await rows<{ id: string; level: number; expires_at: Date | null }>(
