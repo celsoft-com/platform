@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Client, Pool } from "pg";
+import { Pool } from "pg";
+import { withClient } from "./adapters/database.js";
 import { DrizzleMigrator, MIGRATIONS_DIR } from "./adapters/drizzle.js";
 import { loadApp, type Config } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
@@ -295,16 +296,6 @@ const timer = setInterval(() => {
 `;
 
 const databaseUrl = (base: string, name: string) => base.replace("/postgres?", `/${name}?`);
-
-async function withClient<T>(url: string, work: (client: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: url });
-  await client.connect();
-  try {
-    return await work(client);
-  } finally {
-    await client.end();
-  }
-}
 
 function tool(command: string, args: string[], missing?: string): string {
   try {
