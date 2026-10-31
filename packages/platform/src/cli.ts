@@ -17,9 +17,9 @@ import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
 import { generate } from "./generate.js";
 import { HttpsError, waitForHttps } from "./https.js";
-import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
+import { checkWorkflow, init, tokenNames } from "./init.js";
 import { invalid, rules, scaffold, upgradeScaffold, type Answers } from "./scaffold.js";
-import { packageScripts, runScript, startScript } from "./scripts.js";
+import { packageManager, packageScripts, runScript, startScript } from "./scripts.js";
 import { AGENT_SKILLS_DIR, installSkills } from "./skills.js";
 import { cleanup, deploy, destroy, dev, DEV_URL, findPreviews, moveApp, neonProject, PreflightError, requireProjectKey, sweep, type Context } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
@@ -397,7 +397,8 @@ async function newApp(appDir: string, answers: Partial<Answers>, dryRun: boolean
   const { written, kept } = await scaffold(appDir, answers as Answers, version, dryRun);
   for (const file of written) console.log(dryRun ? `~ would write ${file}` : `✓ ${file}`);
   for (const file of kept) console.log(`• ${file} already there, kept`);
-  const manager = await packageManager(appDir);
+  // A new app may not be in a repository yet; then its own folder is the root.
+  const manager = await packageManager(gitRoot(appDir) ?? appDir);
   if (dryRun) return console.log(`~ would run ${manager} install`);
   console.log(`\n${manager} install`);
   execFileSync(manager, ["install"], { cwd: appDir, stdio: "inherit" });
@@ -441,12 +442,23 @@ async function confirmDestroy(ctx: Context, appName: string, data: boolean): Pro
   console.log(`\n${appName} destroyed; the next deploy sets it up from scratch.`);
 }
 
-function repoRoot(dir: string): string {
-  try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8" }).trim();
-  } catch {
-    throw new PreflightError(`${dir} is not inside a git repository`);
+// The git repository holding `dir`, asked of git once per run; undefined outside one.
+const roots = new Map<string, string | undefined>();
+function gitRoot(dir: string): string | undefined {
+  if (!roots.has(dir)) {
+    try {
+      roots.set(dir, execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim());
+    } catch {
+      roots.set(dir, undefined);
+    }
   }
+  return roots.get(dir);
+}
+
+function repoRoot(dir: string): string {
+  const root = gitRoot(dir);
+  if (!root) throw new PreflightError(`${dir} is not inside a git repository`);
+  return root;
 }
 
 function requireToken(secrets: Record<string, string>, name: string): string {

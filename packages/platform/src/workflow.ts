@@ -1,6 +1,6 @@
 export const WORKFLOW_PATH = ".github/workflows/platform.yml";
 
-export type PackageManager = "pnpm" | "npm";
+import type { PackageManager } from "./scripts.js";
 
 export interface WorkflowInput {
   appDir: string;

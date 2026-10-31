@@ -1,11 +1,13 @@
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Config } from "./config.js";
 import { neonProject, PreflightError, requirePostgres, requireProjectKey } from "./lifecycle.js";
 import type { Cloudflare, GitHub, Mail, Neon } from "./ports.js";
 import type { Run } from "./run.js";
 import { parseDotenv, SECRETS_FILE, VARS_FILE } from "./secrets.js";
-import { renderWorkflow, WORKFLOW_PATH, type PackageManager } from "./workflow.js";
+import { packageManager } from "./scripts.js";
+import { ensureIgnored } from "./skills.js";
+import { renderWorkflow, WORKFLOW_PATH } from "./workflow.js";
 
 export const TOKEN_HELP: Record<string, string> = {
   CLOUDFLARE_API_TOKEN: "Cloudflare API token; see SETUP.md or the platform README for its permissions",
@@ -80,12 +82,6 @@ export async function checkWorkflow(repoRoot: string, appDir: string, config: Co
   }
 }
 
-async function ensureIgnored(repoRoot: string, file: string, run: Run): Promise<void> {
-  const gitignore = join(repoRoot, ".gitignore");
-  const ignored = (await readOptional(gitignore))?.split(/\r?\n/).some((line) => line.trim() === file || line.trim() === `/${file}`);
-  if (!ignored) await run.mutate(`add ${file} to .gitignore`, () => appendFile(gitignore, `\n${file}\n`), undefined);
-}
-
 async function prepareSecretsFile(repoRoot: string, names: string[], run: Run): Promise<Record<string, string>> {
   await ensureIgnored(repoRoot, SECRETS_FILE, run);
 
@@ -112,10 +108,6 @@ async function expectedWorkflow(repoRoot: string, appDir: string, config: Config
     secrets: [...tokenNames(config), ...config.secrets],
     variables,
   });
-}
-
-export async function packageManager(repoRoot: string): Promise<PackageManager> {
-  return (await readOptional(join(repoRoot, "pnpm-lock.yaml"))) !== undefined ? "pnpm" : "npm";
 }
 
 async function readOptional(path: string): Promise<string | undefined> {

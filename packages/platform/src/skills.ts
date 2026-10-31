@@ -1,6 +1,7 @@
 import { appendFile, cp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Run } from "./run.js";
 
 export const SKILLS_DIR = fileURLToPath(new URL("../skills/", import.meta.url));
 
@@ -56,12 +57,15 @@ export async function writeAgentsBlock(appDir: string): Promise<boolean> {
   return true;
 }
 
-// True when .gitignore changed.
-export async function ensureIgnored(appDir: string, entry: string): Promise<boolean> {
-  const gitignore = join(appDir, ".gitignore");
+// Adds `entry` to the folder's .gitignore unless a line already names it, with or without a
+// leading or trailing slash; true when .gitignore changed. With `run`, a dry run only says so.
+export async function ensureIgnored(dir: string, entry: string, run?: Run): Promise<boolean> {
+  const gitignore = join(dir, ".gitignore");
   const text = await readFile(gitignore, "utf8").catch(() => "");
   const bare = entry.replace(/^\/|\/$/g, "");
   if (text.split(/\r?\n/).some((line) => line.trim().replace(/^\/|\/$/g, "") === bare)) return false;
-  await appendFile(gitignore, `${text && !text.endsWith("\n") ? "\n" : ""}${entry}\n`);
+  const append = () => appendFile(gitignore, `${text && !text.endsWith("\n") ? "\n" : ""}${entry}\n`);
+  if (run) await run.mutate(`add ${entry} to .gitignore`, append, undefined);
+  else await append();
   return true;
 }
