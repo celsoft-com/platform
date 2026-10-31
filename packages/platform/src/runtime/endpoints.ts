@@ -30,7 +30,10 @@ export interface EndpointDefinition<Input extends z.ZodType, Output extends z.Zo
   access?: EndpointAccess<z.output<Input>>;
 }
 
-export type EndpointAccess<In = any> = { point: string | ((input: In) => string); level: Level } | { level: Level } | "anon";
+// A point is an input field, or a function of the input returning one id or a list, sync or async;
+// with a list, the first point that exists decides.
+export type PointIds = string | readonly string[];
+export type EndpointAccess<In = any> = { point: string | ((input: In) => PointIds | Promise<PointIds>); level: Level } | { level: Level } | "anon";
 
 // The level each request's API token is capped at, keyed by the request's `app`; absent without a token.
 export const tokenCaps = new WeakMap<object, Level>();
@@ -80,11 +83,16 @@ export async function requireAccess(access: EndpointAccess | undefined, input: u
     if (cap && rank(cap) < rank(access.level)) throw new EndpointError(403, `this API token is capped at ${cap}; this needs ${access.level}`);
     return;
   }
-  const { point, level } = access as { point: string | ((input: unknown) => string); level: Level };
-  const id = typeof point === "function" ? point(input) : (input as Record<string, unknown>)[point];
+  const { point, level } = access as { point: string | ((input: unknown) => PointIds | Promise<PointIds>); level: Level };
+  const named = typeof point === "function" ? await point(input) : (input as Record<string, unknown>)[point];
+  // Nothing, as when the input lacks the field, is a missing point; a value of another type is a bug.
+  if (typeof point === "function" && named != null && typeof named !== "string" && !(Array.isArray(named) && named.every((id) => typeof id === "string"))) {
+    throw new Error(`an access point function returned ${JSON.stringify(named)}; it returns a control point id or a list of them`);
+  }
+  const ids = typeof named === "string" ? [named] : Array.isArray(named) ? (named as unknown[]) : [named];
   // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
-  if (typeof id !== "string" || id.length === 0 || id.length > 200) throw new EndpointError(404, "not found");
-  await (app as { access: Access }).access.require(id, level);
+  if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id.length === 0 || id.length > 200)) throw new EndpointError(404, "not found");
+  await (app as { access: Access }).access.require(ids.length === 1 ? (ids[0] as string) : (ids as string[]), level);
 }
 
 // Throws when an access declaration is neither { point, level }, { level } nor "anon", or names a
@@ -184,9 +192,12 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
       const { matched, response } = await handler.handle(request, { context: { app } });
       if (!matched || !response) return undefined;
       if (response.ok) return response;
-      // oRPC's error body, with the `error` every platform API error carries.
-      const body = (await response.json().catch(() => ({}))) as { message?: string };
-      return Response.json({ error: body.message ?? response.statusText, ...body }, { status: response.status });
+      // oRPC's error body, with the `error` every platform API error carries; failed validation
+      // names each field, such as "where: unexpected '=' at 12".
+      const body = (await response.json().catch(() => ({}))) as { message?: string; data?: { issues?: { path?: (string | number)[]; message: string }[] } };
+      const issues = body.data?.issues;
+      const error = Array.isArray(issues) && issues.length > 0 ? issues.map((i) => (i.path?.length ? `${i.path.join(".")}: ${i.message}` : i.message)).join("; ") : (body.message ?? response.statusText);
+      return Response.json({ error, ...body }, { status: response.status });
     },
   };
 }

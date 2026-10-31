@@ -23,6 +23,9 @@ const notes = page({
     "/:id/gone": () => {
       throw new EndpointError(410, "this note <was> removed");
     },
+    "/:id/missing": () => {
+      throw new EndpointError(404, "no such day");
+    },
     "/:id/me": async (_, app) => `<p>${(await app.requireUser()).id}</p>`,
     "/:id/session": async (_, app) => `<p>${JSON.stringify(await app.session())}</p>`,
     "/:id/level": async ({ id }, app) => `<p>${await app.access.level(id)}</p>`,
@@ -183,6 +186,17 @@ describe("Pages: serving", () => {
     expect(gone.body).not.toContain("<was>");
   });
 
+  it("P15b: a handler's 404 is byte for byte the 404 an unmatched path gets, its message only in the logs", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    const thrown = await get("/notes/1/missing");
+    const unmatched = await get("/notes/1/unknown");
+    expect(thrown).toMatchObject({ status: 404, type: "text/html; charset=utf-8" });
+    expect(thrown.body).toBe(unmatched.body.replace("/notes/1/unknown", "/notes/1/missing"));
+    expect(thrown.body).not.toContain("no such day");
+    expect(logged).toHaveBeenCalledWith("page /notes/1/missing not found: no such day");
+    logged.mockRestore();
+  });
+
   it("P16: a page cannot ask who is looking: session, requireUser and access all throw, naming the route", async () => {
     for (const [path, asked] of [["/notes/1/me", "requireUser"], ["/notes/1/session", "session"], ["/notes/1/level", "access"]]) {
       await expect(get(path!), path).rejects.toThrow(new RegExp(`page /notes/:id/${path!.split("/")[3]} asked app\\.${asked}`));
@@ -212,6 +226,9 @@ describe("Pages: beside sign-in, links and tokens", () => {
           "/:id/edit": route({ params: NoteId, access: { point: ({ id }) => id, level: "write" } }, ({ id }) => `<h1>edit ${id}</h1>`),
           "/mine/list": route({ access: { level: "read" } }, () => "<p>signed in</p>"),
           "/open/door": route({ access: "anon" }, () => "<p>open</p>"),
+          // The path's own point, else each folder's above it: the first that exists decides.
+          "/broken/:id": route({ params: NoteId, access: { point: () => 42 as never, level: "read" } }, () => "<p>never</p>"),
+          "/tree/*path": route({ access: { point: async ({ path }) => path.split("/").map((_, i, parts) => `tree:${parts.slice(0, parts.length - i).join("/")}`), level: "read" } }, ({ path }) => `<p>${path}</p>`),
         },
       }),
     ],
@@ -255,6 +272,22 @@ describe("Pages: beside sign-in, links and tokens", () => {
     expect(answer.text).toContain(`/login?next=${next}`);
     expect(answer.text).toContain(`/signup?next=${next}`);
     expect(await send("/doc/mine/list", { cookie: await signUp() })).toMatchObject({ status: 200, text: "<p>signed in</p>" });
+  });
+
+  it("P30: a route naming a list of points is checked on the first that exists, and never falls through a refusal", async () => {
+    const cookie = await signUp();
+    const top = uid();
+    const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+    await pool.query(`insert into access_point (id) values ($1), ($2)`, [`tree:${top}`, `tree:${top}/private`]);
+    await pool.end();
+    await grant(`tree:${top}`, cookie, 1);
+    expect(await send(`/doc/tree/${top}/a/b`, { cookie })).toMatchObject({ status: 200, text: `<p>${top}/a/b</p>` });
+    expect(await send(`/doc/tree/${top}`, { cookie })).toMatchObject({ status: 200 });
+    // Its own point exists and refuses them, so the readable folder above never decides.
+    expect((await send(`/doc/tree/${top}/private/x`, { cookie })).status).toBe(404);
+    expect((await send(`/doc/tree/${uid()}/a`, { cookie })).status).toBe(404);
+    // A function returning anything but ids is the app's bug, thrown as one, never a quiet 404.
+    await expect(send("/doc/broken/x", { cookie })).rejects.toThrow("an access point function returned 42");
   });
 
   it("P19: an anon route serves anyone", async () => {

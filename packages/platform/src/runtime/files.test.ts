@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFiles, memoryBucket } from "./files.js";
+import { createFiles, memoryBucket, QUERY_FILE_LIMIT } from "./files.js";
 
 describe("createFiles", () => {
   it("stores JSON and lists folders like a file browser", async () => {
@@ -57,5 +57,20 @@ describe("createFiles", () => {
     expect(second).toMatchObject({ files: [{ path: "items/e.json" }], folders: ["items/sub/"] });
     expect(second.cursor).toBeUndefined();
     await expect(files.list("items", { limit: 1001 })).rejects.toThrow(/1 to 1000/);
+  });
+
+  it("queries a JSON file with JSONPath, and answers null for a missing one", async () => {
+    const files = createFiles({ FILES: memoryBucket(), FILES_PREFIX: "pr-7/" });
+    await files.putJson("collections/books.json", [{ title: "Dune", stars: 5 }, { title: "Emma", stars: 4 }]);
+    expect(await files.query("collections/books.json", "$[?@.stars == 4].title")).toEqual({ items: [{ path: "$[1]['title']", value: "Emma" }], total: 1 });
+    expect(await files.query("collections/none.json", "$[*]")).toBeNull();
+  });
+
+  it("refuses a query on a file that is not JSON, or too large to read whole", async () => {
+    const files = createFiles({ FILES: memoryBucket() });
+    await files.put("notes.txt", "not json");
+    await expect(files.query("notes.txt", "$[*]")).rejects.toMatchObject({ status: 422, message: "notes.txt is not JSON" });
+    await files.put("big.json", new Uint8Array(QUERY_FILE_LIMIT + 1).buffer);
+    await expect(files.query("big.json", "$[*]")).rejects.toMatchObject({ status: 413 });
   });
 });

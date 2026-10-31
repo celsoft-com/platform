@@ -70,8 +70,9 @@ export interface Access {
   can(point: string, level: Level): Promise<boolean>;
   // The caller's level, or a 404 when it is less than `read`, so points people cannot see look missing.
   check(point: string): Promise<Level>;
-  // The caller's level, or a 404 unless it is at least `level`.
-  require(point: string, level: Level): Promise<Level>;
+  // The caller's level, or a 404 unless it is at least `level`. Given a list, it checks the first
+  // point that exists, and only that one, so a refused point never falls through to the next.
+  require(point: string | readonly string[], level: Level): Promise<Level>;
   // A dynamic point for one resource; whoever creates it gets `manage` on it.
   create(point: string, options?: PointOptions): Promise<void>;
   // A new parent, or null for none; needs `manage` on the point and `create` on the new parent.
@@ -374,6 +375,13 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       return level;
     }
 
+    async function firstExisting(at: Db, points: readonly string[]): Promise<string | undefined> {
+      points.forEach(checkPointId);
+      if (points.length === 0) return undefined;
+      const found = new Set(((await at.execute(sql`select id from access_point where id in ${points}`)).rows as { id: string }[]).map((r) => r.id));
+      return points.find((p) => found.has(p));
+    }
+
     async function need(at: Db, point: string, level: number): Promise<number> {
       const has = await levelOf(at, point);
       if (has < level) throw notFound();
@@ -429,7 +437,11 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       level: async (point) => named(await levelOf(on, point)),
       can: async (point, level) => (await levelOf(on, point)) >= rank(level),
       check: async (point) => named(await need(on, point, READ))!,
-      require: async (point, level) => named(await need(on, point, rank(level)))!,
+      require: async (point, level) => {
+        const id = typeof point === "string" ? point : await firstExisting(on, point);
+        if (id === undefined) throw notFound();
+        return named(await need(on, id, rank(level)))!;
+      },
 
       async create(point, options = {}) {
         checkPointId(point);

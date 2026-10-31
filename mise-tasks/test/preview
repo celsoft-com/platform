@@ -66,6 +66,10 @@ check "read link cannot edit (404)" "$(status -X PUT -H "x-access-link: $read_to
 check "write link edits signed out" "$(json -X PUT -H "x-access-link: $write_token" -d '{"body":"edited by link"}' "$note_url" | grep -c 'edited by link')"
 check "altered link refused (404)" "$(status -H "x-access-link: x$write_token" "$note_url")"
 check "no link, no note (404)" "$(status "$note_url")"
+# Bookmarks: one JSON file per person in app.files, searched with JSONPath over a GET.
+check "save bookmarks" "$(json -b "$jar" -X PUT -d '{"bookmarks":[{"url":"https://a.example","title":"A","stars":4},{"url":"https://b.example","title":"B","stars":5}]}' "$base/api/bookmarks")"
+check "JSONPath search keeps types (total 1)" "$(json -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%3D%204%5D" | grep -o '"total":[0-9]*')"
+check "bad JSONPath refused (400)" "$(status -b "$jar" "$base/api/bookmarks?where=%24%5B%3F%40.stars%20%3D%204%5D")"
 check "permissions panel for the owner" "$(json -b "$jar" "$base/api/notes/$id/access" | grep -c '"inherits":false')"
 check "permissions panel refused to others (404)" "$(status -b "$jar2" "$base/api/notes/$id/access")"
 check "grant Everyone read" "$(status -b "$jar" -d '{"to":{"kind":"everyone"},"level":"read"}' "$base/api/notes/$id/grants")"
