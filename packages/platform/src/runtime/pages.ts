@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { escape, htmlDocument } from "./html.js";
 import { RESERVED } from "./routes.js";
 import { refusal } from "./endpoint-error.js";
 import { checkAccessDeclaration, requireAccess, type AnyApp, type EndpointAccess } from "./endpoints.js";
@@ -317,10 +318,8 @@ function html(body: string, status: number, headers: Record<string, string> = {}
   return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", ...headers } });
 }
 
-const escape = (text: string) => text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-
 function errorPage(status: number, message: string, extra = ""): string {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${status}</title></head><body><h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p></body></html>`;
+  return htmlDocument({ title: String(status), body: `<h1>${status}</h1><p>${escape(message)}</p>${extra}<p><a href="/">Home</a></p>` });
 }
 
 // The one 404 page, for any path outside /api/ that nothing answers, as for a missing page.

@@ -1,3 +1,4 @@
+import { escape, htmlDocument } from "./html.js";
 // Sign-in, sign-up and password screens every app with auth gets. Class names are part of the
 // public interface: an app restyles them with its own stylesheet, loaded after this one.
 
@@ -72,12 +73,14 @@ export function renderScreen(path: ScreenPath, appName: string, stylesheet: stri
     )
     .join("");
   const links = screen.links.map(([href, text]) => `<a href="${href}" data-carry>${text}</a>`).join("");
-  const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${screen.title} · ${escape(appName)}</title>
-<style>${STYLE}</style>${stylesheet ? `<link rel="stylesheet" href="${escape(stylesheet)}">` : ""}
-</head><body class="platform-screen" data-page="${path.slice(1)}">
-<main class="platform-card">
+  const html = htmlDocument({
+    title: screen.title,
+    appName,
+    stylesheet,
+    style: STYLE,
+    page: path.slice(1),
+    script: SCRIPT,
+    body: `<main class="platform-card">
 <p class="platform-app">${escape(appName)}</p>
 <h1 class="platform-title">${screen.title}</h1>
 ${screen.intro ? `<p class="platform-intro">${screen.intro}</p>` : ""}
@@ -86,14 +89,9 @@ ${screen.intro ? `<p class="platform-intro">${screen.intro}</p>` : ""}
 <button class="platform-button" type="submit">${screen.button}</button></form>
 <div class="platform-message" role="status" hidden></div>
 <nav class="platform-links">${links}</nav>
-</main>
-<script>${SCRIPT}</script>
-</body></html>`;
+</main>`,
+  });
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
-}
-
-function escape(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 const STYLE = `
@@ -216,12 +214,14 @@ if (page === "login" && !oauthQuery) fetch("/api/auth/get-session", { credential
 export const TOKENS_PATH = "/tokens";
 
 export function renderTokensScreen(appName: string, stylesheet: string | undefined): Response {
-  const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>API tokens · ${escape(appName)}</title>
-<style>${STYLE}${TOKENS_STYLE}</style>${stylesheet ? `<link rel="stylesheet" href="${escape(stylesheet)}">` : ""}
-</head><body class="platform-screen" data-page="tokens">
-<main class="platform-card platform-wide">
+  const html = htmlDocument({
+    title: "API tokens",
+    appName,
+    stylesheet,
+    style: STYLE + TOKENS_STYLE,
+    page: "tokens",
+    script: TOKENS_SCRIPT,
+    body: `<main class="platform-card platform-wide">
 <p class="platform-app">${escape(appName)}</p>
 <h1 class="platform-title">API tokens</h1>
 <p class="platform-intro">A token lets a script call this app's API as you, sent as <code>Authorization: Bearer &lt;token&gt;</code>. Its level caps what it can do, so a leaked token can do no more.</p>
@@ -235,9 +235,8 @@ export function renderTokensScreen(appName: string, stylesheet: string | undefin
 <div class="platform-message" role="status" hidden></div>
 <ul class="platform-tokens"></ul>
 <nav class="platform-links"><a href="/">Back to the app</a></nav>
-</main>
-<script>${TOKENS_SCRIPT}</script>
-</body></html>`;
+</main>`,
+  });
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
@@ -315,12 +314,14 @@ load();
 
 // The invitations screen: the owner and admins invite an address to sign up, and revoke open ones.
 export function renderInvitesScreen(appName: string, stylesheet: string | undefined): Response {
-  const html = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Invitations · ${escape(appName)}</title>
-<style>${STYLE}${TOKENS_STYLE}</style>${stylesheet ? `<link rel="stylesheet" href="${escape(stylesheet)}">` : ""}
-</head><body class="platform-screen" data-page="invites">
-<main class="platform-card platform-wide">
+  const html = htmlDocument({
+    title: "Invitations",
+    appName,
+    stylesheet,
+    style: STYLE + TOKENS_STYLE,
+    page: "invites",
+    script: INVITES_SCRIPT,
+    body: `<main class="platform-card platform-wide">
 <p class="platform-app">${escape(appName)}</p>
 <h1 class="platform-title">Invitations</h1>
 <p class="platform-intro">Sign-up is invite-only. An invitation lets one address create an account within 14 days; it is emailed a link.</p>
@@ -331,9 +332,8 @@ export function renderInvitesScreen(appName: string, stylesheet: string | undefi
 <div class="platform-message" role="status" hidden></div>
 <ul class="platform-tokens"></ul>
 <nav class="platform-links"><a href="/">Back to the app</a></nav>
-</main>
-<script>${INVITES_SCRIPT}</script>
-</body></html>`;
+</main>`,
+  });
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
