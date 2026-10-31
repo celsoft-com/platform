@@ -88,7 +88,7 @@ flowchart LR
 1. **Folder:** `"frontend": { "dir": "public" }` in `platform.jsonc` names it: plain files, or a build's output such as `dist` in the demo.
 2. **Served free:** files come straight from Cloudflare's asset store and never run the Worker.
 3. **Unknown paths:** a path with no matching file is a 404, so a broken link shows as one; `"spa": true` gives it `index.html` instead, so client-side routing works.
-4. **Build:** when `package.json` has a `build` script, every deploy runs it first; a failed build stops the deploy.
+4. **Build:** when `package.json` has a `build` script, every deploy, preview and `dev` runs it first, with the commit, branch, build time and target in its environment; a failed build stops the run, and the Worker reads the same stamp as `app.deploy`.
 5. **Any tool:** the output is static, so any tool works; pages search engines must read without JavaScript are rendered at build time, by tools such as SvelteKit's static adapter or Astro, or per request as server pages.
 6. **Local:** when `package.json` has a `dev` script, `platform dev` runs it beside the local Worker; with the package's Vite plugin, `plugins: [platform()]` from `@celsoft/platform/vite`, Vite forwards the Worker's paths and edits reload instantly.
 7. **Worker first:** `/api/*`, the sign-in screens and every path a server page claims always go to the Worker, even if a file has the same path.

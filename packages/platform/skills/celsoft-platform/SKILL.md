@@ -144,6 +144,14 @@ Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`,
 
 `app.routes.serves(path)` says what answers a GET of a path, for checking links: `"platform"` (a screen or platform API that is on), `"page"` (a page route matches), `"endpoint"` (a GET endpoint's path matches), `"file"` (a frontend file, `/about` for `about.html` or `about/index.html`), `"fallback"` (nothing else, and `spa` gives `index.html`), or `null` for a 404. It is free: lists built into the Worker, no request. A query or `#fragment` is ignored, and hand-written handler paths are unknown, so a link to one reads `null`.
 
+`app.deploy` says what the Worker was built from: `{ commit, branch, builtAt, target }`, with `target` one of `"prod"`, `"preview"`, `"dev"` or `"test"`, and null for anything unknown; render a build stamp from it, such as `${app.deploy.commit?.slice(0, 7)}`.
+
+**Build step:** a `build` script in `package.json` runs before every deploy, preview and `dev`, after `.platform/client.ts` is written, with `PLATFORM_COMMIT`, `PLATFORM_BRANCH`, `PLATFORM_BUILT_AT` and `PLATFORM_TARGET` in its environment; a failed build stops the run before anything changes.
+
+1. **Browser app:** bundle a script that imports `call` from `.platform/client` into `frontend.dir`, such as `esbuild src/admin/main.ts --bundle --outdir=public/admin`.
+2. **Bundled content:** write files the Worker imports, such as markdown into `src/generated/docs.ts`, gitignored, so the deploy bundles them.
+3. **Tests:** add `"pretest": "npm run build"` when tests import what the build writes.
+
 Code outside the handlers takes `app` as a parameter typed `App`, so `app.db` knows the app's tables:
 
 ```ts

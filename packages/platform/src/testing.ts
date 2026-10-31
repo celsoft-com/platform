@@ -75,6 +75,10 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
   const env = {
     ...featureVars(config),
     APP_URL: TEST_URL,
+    PLATFORM_COMMIT: "test",
+    PLATFORM_BRANCH: "test",
+    PLATFORM_BUILT_AT: new Date().toISOString(),
+    PLATFORM_TARGET: "test",
     ...(url && { DB: { connectionString: url } }),
     ...(config.files && { FILES: bucket }),
     ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost", EMAIL_OUTBOX: emails }),

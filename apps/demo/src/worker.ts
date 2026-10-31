@@ -1,4 +1,4 @@
-import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, upload, type App, type Grantee } from "@celsoft/platform";
+import { defineApp, endpoint, EndpointError, jsonPath, organizationPoint, page, route, teamPoint, upload, type App, type Deploy, type Grantee } from "@celsoft/platform";
 import { organization, team, user as users } from "@celsoft/platform/schema";
 import { and, count, desc, eq, inArray, isNull, ne } from "drizzle-orm";
 import { z } from "zod";
@@ -124,6 +124,9 @@ const print = page({
   },
 });
 
+// The build stamp the deploy sets, such as "prod build abc1234 of main, 2026-10-31".
+const stamp = ({ target, commit, branch, builtAt }: Deploy) => escape(`${target ?? "unknown"} build ${commit?.slice(0, 7) ?? "unknown"} of ${branch ?? "unknown"}, ${builtAt?.toISOString().slice(0, 10) ?? "unknown"}`);
+
 // A page anyone may read: every visitor sees it the same, so the edge keeps it for a minute; a
 // reload shows the same time and runs no query until a note is added or deleted, which
 // invalidates it.
@@ -134,7 +137,7 @@ const stats = page({
       const [row] = await app.db.select({ total: count() }).from(notes);
       // Everyone's view is the same for every visitor, so the page can still be kept at the edge.
       const [open] = await app.db.select({ total: count() }).from(notes).where(await app.access.asEveryone().readable(notes.id));
-      return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far, ${open!.total} of them readable by everyone.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p>`);
+      return pageHtml("Stats", `<h1>Stats</h1><p>${row!.total} notes written so far, ${open!.total} of them readable by everyone.</p><p class="meta">Rendered at ${new Date().toISOString()}; kept at the edge for every visitor until a note is added or deleted, or a minute passes.</p><p class="meta">${stamp(app.deploy)}</p>`);
     }),
   },
 });

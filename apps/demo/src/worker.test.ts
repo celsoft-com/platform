@@ -39,6 +39,10 @@ describe("demo", () => {
     expect(Number(await stats())).toBe(before + 1);
   });
 
+  it("stamps /stats with the build it runs", async () => {
+    expect(await (await t.fetch("/stats")).text()).toContain("test build test of test");
+  });
+
   it("keeps one person's organization from another", async () => {
     const owner = await t.signUp("first@example.com");
     const stranger = await t.signUp("stranger@example.com");

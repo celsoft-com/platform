@@ -20,6 +20,7 @@ import { notFoundPage, pageServer, type Page, type PageCache } from "./pages.js"
 import { EndpointError } from "./endpoint-error.js";
 import { createInvites, INVITE_ONLY, INVITES_API, INVITES_PATH, serveInvites, signupAllowed, type Invites } from "./invites.js";
 import { isScreen, renderInvitesScreen, renderScreen, renderTokensScreen, TOKENS_PATH } from "./screens.js";
+import { readDeploy, type Deploy, type DeployBindings } from "./deploy.js";
 import { createCache, pageVersion, type Cache } from "./cache.js";
 import { conditional } from "./conditional.js";
 import { Trace, withTiming } from "./trace.js";
@@ -39,9 +40,10 @@ export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
 export type { Routes, Served } from "./routes.js";
 export type { Invite, Invites } from "./invites.js";
+export type { Deploy, DeployTarget } from "./deploy.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
 
-export interface PlatformBindings extends EmailBindings, FilesBindings {
+export interface PlatformBindings extends EmailBindings, FilesBindings, DeployBindings {
   DB?: { connectionString: string };
   APP_URL?: string;
   APP_NAME?: string;
@@ -84,6 +86,8 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly cache: Cache;
   readonly invites: Invites;
   readonly routes: Routes;
+  // What this Worker was built from: commit, branch, build time and target.
+  readonly deploy: Deploy;
   session(): Promise<Session | null>;
   requireUser(): Promise<User>;
   waitUntil(promise: Promise<unknown>): void;
@@ -313,6 +317,7 @@ interface RequestResources<Env extends PlatformBindings, Schema extends Record<s
   readonly live: Live;
   readonly cache: Cache;
   readonly routes: Routes;
+  readonly deploy: Deploy;
   waitUntil(promise: Promise<unknown>): void;
   // Ends the pool after the answer.
   close(): void;
@@ -336,6 +341,7 @@ function requestResources<Env extends PlatformBindings, Schema extends Record<st
   let live: Live | undefined;
   let cache: Cache | undefined;
   let routes: Routes | undefined;
+  let deploy: Deploy | undefined;
 
   const resources: RequestResources<Env, Schema> = {
     request,
@@ -379,6 +385,9 @@ function requestResources<Env extends PlatformBindings, Schema extends Record<st
     },
     get routes() {
       return (routes ??= createRoutes({ features: features(env), frontend: env.FRONTEND, files: once.files, page: once.page, endpoint: once.endpoint }));
+    },
+    get deploy() {
+      return (deploy ??= readDeploy(env));
     },
     waitUntil: (promise) => ctx.waitUntil(promise),
     close: () => void (pool && ctx.waitUntil(pool.end())),
@@ -424,6 +433,9 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
     },
     get routes() {
       return resources.routes;
+    },
+    get deploy() {
+      return resources.deploy;
     },
     get invites() {
       if (!env.BETTER_AUTH_SECRET) throw new Error("this app has no auth; set `auth: true` in platform.jsonc");

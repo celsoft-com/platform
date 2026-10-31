@@ -296,6 +296,12 @@ describe("auth and email", () => {
     expect(ports.wrangler.deploys[0]!.secrets).not.toHaveProperty("EMAIL_API_KEY");
   });
 
+  it("stamps the Worker with what was built", async () => {
+    const build = { commit: "abc123", branch: "feat/x", builtAt: "2026-10-31T00:00:00.000Z", target: "preview" as const };
+    await deploy({ ...authCtx(), build }, { kind: "preview", pr: 7 });
+    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ PLATFORM_COMMIT: "abc123", PLATFORM_BRANCH: "feat/x", PLATFORM_BUILT_AT: "2026-10-31T00:00:00.000Z", PLATFORM_TARGET: "preview" });
+  });
+
   it("logs no secret values", async () => {
     await deploy(authCtx(), { kind: "prod" });
     const values = Object.values(ports.wrangler.deploys[0]!.secrets);

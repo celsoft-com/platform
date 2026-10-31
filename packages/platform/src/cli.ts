@@ -15,6 +15,7 @@ import { queryStats, runSqlFile } from "./adapters/database.js";
 import { resetOwner } from "./adapters/owner.js";
 import { WranglerCli } from "./adapters/process.js";
 import { CONFIG_FILE, ConfigError, configVariables, parseConfig, readConfigText, upgradeConfigText, type Config } from "./config.js";
+import { buildInfo, buildVars } from "./build-info.js";
 import { generate } from "./generate.js";
 import { HttpsError, waitForHttps } from "./https.js";
 import { checkWorkflow, init, packageManager, tokenNames } from "./init.js";
@@ -150,6 +151,12 @@ async function main(argv: string[]): Promise<void> {
   if (inCi) await checkWorkflow(repoRoot(appDir), appDir, app.config, Object.keys(app.variables));
   const ctx = { ...(await context(appDir, app.config, dryRun)), pages: declared.pages, staticPoints: declared.staticPoints };
   if (ctx.providers?.neon) await requireProjectKey(ctx.ports.neon);
+  // The app's build runs after generate, since it may bundle .platform/client, and before anything
+  // changes, so a broken build stops the run; it and the Worker get the same stamp.
+  if (command.name === "dev" || command.name === "deploy" || command.name === "preview") {
+    ctx.build = buildInfo(appDir, command.name === "deploy" ? "prod" : command.name, process.env, command.name === "preview" ? command.sha : undefined);
+    if (!dryRun && (await packageScripts(appDir)).build) await runScript(appDir, await packageManager(repoRoot(appDir)), "build", buildVars(ctx.build));
+  }
 
   if (command.name === "cleanup") {
     await cleanup(ctx, command.pr);
@@ -189,8 +196,6 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
-  // The frontend is built first, so a broken build stops the run before anything changes.
-  if (!dryRun && (await packageScripts(appDir)).build) await runScript(appDir, await packageManager(repoRoot(appDir)), "build");
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
   console.log(`\nwaiting for https://${hostname} to answer over HTTPS`);

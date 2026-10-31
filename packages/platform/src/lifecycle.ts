@@ -1,3 +1,4 @@
+import { buildVars, type BuildInfo } from "./build-info.js";
 import { randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
@@ -20,6 +21,8 @@ export interface Context {
   pages?: string[];
   // The app's static control points, read from its Worker and written after migrations.
   staticPoints?: Record<string, StaticPoint>;
+  // What is being built, set on the Worker as app.deploy.
+  build?: BuildInfo;
   now?: () => Date;
 }
 
@@ -137,7 +140,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   const oldBucket = config.files && target.kind === "prod" ? await legacyFilesBucket(ctx) : undefined;
   if (oldBucket) await copyFiles(ctx, oldBucket, n.bucket, false);
 
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample" };
+  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample", ...(ctx.build && buildVars(ctx.build)) };
   if (config.email) {
     Object.assign(vars, { EMAIL_MODE: sending ? "send" : "capture", EMAIL_FROM: `noreply@${sending ? hostname : config.hostname}` });
     if (previewSending) vars.EMAIL_SEND_TO = allowed.join(",");
@@ -255,7 +258,7 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     if (config.auth && copied) await forgetSigningKeys(ctx, uri, DEV_BRANCH);
   }
 
-  const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(ctx.build && buildVars(ctx.build)), ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
   const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
     config,
     worker: `${config.name}-dev`,
