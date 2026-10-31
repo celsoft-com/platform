@@ -267,7 +267,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 ## Testing
 
-`@celsoft/platform/testing` runs the app's real runtime in a test: routing, access checks, token caps, validation and auth are the platform's own code, on a local Postgres, files in memory and captured email. Never build a fake `app` instead.
+`@celsoft/platform/testing` runs the app's real runtime in a test: routing, access checks, token caps, validation and auth are the platform's own code, on a local Postgres, files in memory, captured email and an in-memory edge cache, so a cached page answers `platform-cache: miss` then `hit`, and `invalidates` empties it. Never build a fake `app` instead.
 
 ```ts
 import { testApp } from "@celsoft/platform/testing";

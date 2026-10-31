@@ -172,7 +172,7 @@ flowchart LR
 ### Testing
 
 1. **Real runtime:** `testApp(app)` runs the app's own code through the platform's routing, access checks and auth, so a test passes only when the deployed endpoint would.
-2. **Local stand-ins:** a Postgres 18 database of its own, migrated from `drizzle/`; files in memory; email kept in `t.emails`; live room messages in `t.published`.
+2. **Local stand-ins:** a Postgres 18 database of its own, migrated from `drizzle/`; files in memory; email kept in `t.emails`; live room messages in `t.published`; cached pages in a memory edge cache, so `invalidates` can be tested.
 3. **People:** `t.signUp(email)` makes a person, and `t.as(person).call("listItems", {})` calls an endpoint as them.
 4. **Postgres:** from the app's `embedded-postgres` dev dependency, so `npm install` provides it, then `npm test` runs.
 

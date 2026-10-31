@@ -72,8 +72,11 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
   const published: { room: string; message: unknown }[] = [];
   // As the deploy's entry module does, so app.routes knows the frontend's files.
   if (config.frontend) app.staticFiles = await listStaticFiles(join(dir, config.frontend.dir));
+  installEdgeCache();
   const env = {
     ...featureVars(config),
+    // A deploy of its own, so pages one test app kept never reach another.
+    CF_VERSION_METADATA: { id: `test-${randomUUID()}` },
     APP_URL: TEST_URL,
     ...(url && { DB: { connectionString: url } }),
     ...(config.files && { FILES: bucket }),
@@ -138,6 +141,21 @@ function recordingRooms(published: { room: string; message: unknown }[]): LiveNa
         return new Response(null, { status: 204 });
       },
     }),
+  };
+}
+
+// Cloudflare's Cache API as a Worker sees it, kept in memory, so cached pages are kept, served and
+// emptied as they are deployed; one Worker runtime's own cache is left alone.
+function installEdgeCache(): void {
+  const scope = globalThis as { caches?: { default?: unknown } };
+  if (scope.caches?.default) return;
+  const kept = new Map<string, Response>();
+  scope.caches = {
+    ...scope.caches,
+    default: {
+      match: async (key: string) => kept.get(key)?.clone(),
+      put: async (key: string, response: Response) => void kept.set(key, response),
+    },
   };
 }
 

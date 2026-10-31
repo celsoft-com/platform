@@ -39,6 +39,19 @@ describe("demo", () => {
     expect(Number(await stats())).toBe(before + 1);
   });
 
+  it("keeps a printed note at the edge until editing it empties the copy", async () => {
+    const writer = await t.signUp("printer@example.com");
+    const note = await t.as(writer).call("addNote", { body: "first" });
+    const print = async () => {
+      const response = await t.as(writer).fetch(`/print/${note.id}`);
+      return { state: response.headers.get("platform-cache"), first: (await response.text()).includes("first") };
+    };
+    expect(await print()).toEqual({ state: "miss", first: true });
+    expect(await print()).toEqual({ state: "hit", first: true });
+    await t.as(writer).call("editNote", { id: note.id, body: "second" });
+    expect(await print()).toEqual({ state: "miss", first: false });
+  });
+
   it("keeps one person's organization from another", async () => {
     const owner = await t.signUp("first@example.com");
     const stranger = await t.signUp("stranger@example.com");
