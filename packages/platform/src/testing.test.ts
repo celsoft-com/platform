@@ -41,3 +41,25 @@ describe("templateName", () => {
     expect(await templateName(dir, config, { everyone: { level: "read" } as never })).not.toBe(await name());
   });
 });
+
+describe("testApp's frontend files", () => {
+  it("redirects a folder's bare path to its slash and serves its index there, as Cloudflare does", async () => {
+    const { mkdtemp, mkdir: makeDir, writeFile: write } = await import("node:fs/promises");
+    const { tmpdir: temp } = await import("node:os");
+    const { join: joinPath } = await import("node:path");
+    const { defineApp } = await import("./runtime/index.js");
+    const { testApp } = await import("./testing.js");
+    const dir = await mkdtemp(joinPath(temp(), "frontend-"));
+    await makeDir(joinPath(dir, "public/admin"), { recursive: true });
+    await write(joinPath(dir, "platform.jsonc"), JSON.stringify({ name: "probe", hostname: "probe.example", worker: "src/worker.ts", frontend: { dir: "public" }, compatibilityDate: "2026-10-01" }));
+    await write(joinPath(dir, "public/admin/index.html"), "<h1>admin</h1>");
+    await write(joinPath(dir, "public/about.html"), "<h1>about</h1>");
+    const t = await testApp(defineApp(() => new Response("worker")), { dir });
+    const bare = await t.fetch("/admin?x=1", { redirect: "manual" });
+    expect(bare.status).toBe(307);
+    expect(bare.headers.get("location")).toBe("/admin/?x=1");
+    expect(await (await t.fetch("/admin/")).text()).toBe("<h1>admin</h1>");
+    expect(await (await t.fetch("/about")).text()).toBe("<h1>about</h1>");
+    await t.close();
+  });
+});

@@ -102,7 +102,14 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     if (!frontendDir || (request.method !== "GET" && request.method !== "HEAD")) return undefined;
     const pathname = decodeURIComponent(new URL(request.url).pathname);
     if (workerPaths.some((pattern) => covers(pattern, pathname))) return undefined;
-    const candidates = pathname.endsWith("/") ? [`${pathname}index.html`] : [pathname, `${pathname}.html`, `${pathname}/index.html`];
+    // As Cloudflare's default html handling does: a folder's index answers at its path with a slash,
+    // and the bare path is redirected there.
+    if (!pathname.endsWith("/") && (await readFile(resolve(frontendDir, `.${pathname}/index.html`)).then(() => true, () => false))) {
+      const target = new URL(request.url);
+      target.pathname = `${target.pathname}/`;
+      return new Response(null, { status: 307, headers: { location: target.pathname + target.search } });
+    }
+    const candidates = pathname.endsWith("/") ? [`${pathname}index.html`] : [pathname, `${pathname}.html`];
     if (config.frontend!.spa && (request.headers.get("accept") ?? "").includes("text/html")) candidates.push("/index.html");
     for (const candidate of candidates) {
       const file = resolve(frontendDir, `.${candidate}`);
