@@ -159,19 +159,13 @@ export class CloudflareApi implements Cloudflare {
   }
 
   async deleteObjects(bucket: string, prefix: string): Promise<number> {
-    const account_id = await this.accountId();
     const keys = await this.listObjects(bucket, prefix);
-    for (const key of keys) await this.client.r2.buckets.objects.delete(key, { account_id, bucket_name: bucket });
+    await this.s3.deleteMany(bucket, keys);
     return keys.length;
   }
 
   async listObjects(bucket: string, prefix: string): Promise<string[]> {
-    const account_id = await this.accountId();
-    const keys: string[] = [];
-    for await (const object of this.client.r2.buckets.objects.list(bucket, { account_id, prefix })) {
-      if (object.key) keys.push(object.key);
-    }
-    return keys;
+    return this.s3.list(bucket, prefix);
   }
 
   async copyObject(from: string, key: string, to: string): Promise<void> {

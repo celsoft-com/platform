@@ -1,7 +1,8 @@
 import { createHash, createHmac } from "node:crypto";
 
 // R2's S3 API, for what its REST API cannot do: writing only if absent (the REST API ignores
-// If-None-Match) and copying objects with their metadata. Its keys come from the API token
+// If-None-Match), copying objects with their metadata, and listing and deleting in bulk, which the
+// REST API does one object per request against an account-wide limit of 1,200 every five minutes. Its keys come from the API token
 // itself: the token's id is the access key, and the SHA-256 of its value is the secret.
 export class R2S3 {
   private keys: Promise<{ accessKey: string; secretKey: string }> | undefined;
@@ -34,6 +35,18 @@ export class R2S3 {
   async copy(from: string, key: string, to: string): Promise<void> {
     const source = `/${from}/${key.split("/").map(encodeURIComponent).join("/")}`;
     await expectOk(await this.request("PUT", to, key, { headers: { "x-amz-copy-source": source } }), `copy ${key} from ${from} to ${to}`);
+  }
+
+  // At most 1,000 keys per request, as S3's DeleteObjects allows.
+  async deleteMany(bucket: string, keys: readonly string[]): Promise<void> {
+    for (let i = 0; i < keys.length; i += DELETE_BATCH) {
+      const batch = keys.slice(i, i + DELETE_BATCH);
+      const body = `<Delete><Quiet>true</Quiet>${batch.map((k) => `<Object><Key>${escapeXml(k)}</Key></Object>`).join("")}</Delete>`;
+      const response = await this.request("POST", bucket, "", { body, query: { delete: "" }, headers: { "content-type": "application/xml", "content-md5": md5(body) } });
+      await expectOk(response, `delete ${batch.length} objects from ${bucket}`);
+      const failed = [...(await response.text()).matchAll(/<Error>[\s\S]*?<Key>([^<]*)<\/Key>[\s\S]*?<\/Error>/g)].map((m) => unescapeXml(m[1]!));
+      if (failed.length > 0) throw new Error(`R2 could not delete ${failed.length} objects from ${bucket}, such as ${failed[0]}`);
+    }
   }
 
   async list(bucket: string, prefix: string): Promise<string[]> {
@@ -86,6 +99,16 @@ export class R2S3 {
 
 async function expectOk(response: Response, what: string): Promise<void> {
   if (!response.ok) throw new Error(`R2 could not ${what}: ${response.status} ${(await response.text()).slice(0, 200)}`);
+}
+
+const DELETE_BATCH = 1000;
+
+function md5(value: string): string {
+  return createHash("md5").update(value).digest("base64");
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
 function sha256(value: string): string {
