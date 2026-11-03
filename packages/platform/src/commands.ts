@@ -182,7 +182,13 @@ export const COMMANDS: { [N in Command["name"]]: Spec<N> } = {
 // changes; then the deploy, and a wait until the hostname answers over HTTPS. A preview in CI
 // comments its link and dry-runs prod with the change.
 async function deployAndWait(command: Of<"deploy"> | Of<"preview">, { ctx, appDir, dryRun, inCi, terminal }: ContextInput): Promise<void> {
-  if (!dryRun && (await packageScripts(appDir)).build) await runScript(appDir, await packageManager(repoRoot(appDir)), "build");
+  if (!dryRun) {
+    // The frontend is built, then the app's tests run, so a failing build or test deploys nothing.
+    const scripts = await packageScripts(appDir);
+    const manager = await packageManager(repoRoot(appDir));
+    if (scripts.build) await runScript(appDir, manager, "build");
+    if (scripts.test) await runScript(appDir, manager, "test");
+  }
   const { hostname } = await deploy(ctx, command.name === "deploy" ? { kind: "prod" } : { kind: "preview", pr: command.pr });
   if (dryRun) return;
   terminal.log(`\nwaiting for https://${hostname} to answer over HTTPS`);
