@@ -98,8 +98,9 @@ export interface Access {
   // can read, or has `level` on.
   readable(column: unknown): Promise<SQL>;
   allows(level: Level, column: unknown): Promise<SQL>;
-  // The ids the caller has `level` on, in their order, in one query; an id no point has is left out.
-  filter(points: readonly string[], level: Level): Promise<string[]>;
+  // The entries the caller has `level` on, in their order, in one query. An entry is an id, or a list
+  // whose first existing point is checked, as in require; an entry with no existing point is left out.
+  filter<T extends string | readonly string[]>(points: readonly T[], level: Level): Promise<T[]>;
   // The ids starting with `prefix` the caller can read, sorted; the prefix is taken literally.
   points(options?: { prefix?: string }): Promise<string[]>;
   // The same calls inside the app's transaction, so a change and its access commit together.
@@ -611,11 +612,22 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
 
       readable: async (column) => sql`(${levelSql(sql`(${column})::text`, await me())} >= ${READ})`,
       allows: async (level, column) => sql`(${levelSql(sql`(${column})::text`, await me())} >= ${rank(level)})`,
-      async filter(points, level) {
-        const ids = [...new Set(points.filter((p) => typeof p === "string" && p.length > 0 && p.length <= 200))];
+      async filter<T extends string | readonly string[]>(points: readonly T[], level: Level): Promise<T[]> {
+        const wanted = rank(level);
+        const valid = (p: unknown): p is string => typeof p === "string" && p.length > 0 && p.length <= 200;
+        const entries = points.map((entry) => (typeof entry === "string" ? [entry] : Array.isArray(entry) ? entry : []).filter(valid));
+        const ids = [...new Set(entries.flat())];
         if (ids.length === 0) return [];
-        const allowed = new Set((await rows<{ id: string }>(on, sql`select id from jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) as id where ${levelSql(sql`id`, await me())} >= ${rank(level)}`)).map((r) => r.id));
-        return points.filter((p) => allowed.has(p));
+        const found = await rows<{ id: string; level: number }>(
+          on,
+          sql`select t.id, ${levelSql(sql`t.id`, await me())} as level from jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) as t(id)
+              where exists (select 1 from access_point p where p.id = t.id)`,
+        );
+        const levels = new Map(found.map((r) => [r.id, Number(r.level)]));
+        return points.filter((_, i) => {
+          const first = entries[i]!.find((id) => levels.has(id));
+          return first !== undefined && levels.get(first)! >= wanted;
+        });
       },
 
       async points(options = {}) {

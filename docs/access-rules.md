@@ -43,7 +43,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | P11 | The app acting as itself creates | No creator grant; the app passes every check |
 | P12 | Ids with quotes, `%`, `_`, other scripts | Taken literally; never match another point |
 | P13 | Reading a point's own settings | Parent, inheritance, static and organization, for those with `read`; 404 otherwise |
-| P14 | `filter(ids, level)` | The ids the caller has the level on, in their order, in one query |
+| P14 | `filter(entries, level)` | The entries the caller has the level on, in their order, in one query; an entry is an id or a list whose first existing point is checked, and one with no existing point is left out |
 | P15 | `asEveryone()` | Answers as anyone signed out with no link, whoever asks; writes are an error in the app's code |
 | P16 | `points({ prefix })` | The ids starting with the prefix that the caller can `read`, sorted; the prefix is taken literally |
 

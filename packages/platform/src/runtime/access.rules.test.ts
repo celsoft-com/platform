@@ -222,6 +222,22 @@ describe("Points", () => {
     expect(await stranger.filter([], "read")).toEqual([]);
   });
 
+  it("P14: filter takes lists, checking each entry's first existing point, in one query", async () => {
+    const owner = w.as(await w.user());
+    const tag = uid();
+    const [site, secret] = [`site-${tag}`, `path:/secret-${tag}`];
+    await owner.create(site);
+    await owner.create(secret);
+    await owner.grant(site, { everyone: true }, "read");
+    const about = [`path:/about-${tag}`, site];
+    const hidden = [secret, site];
+    const nowhere = [`path:/none-${tag}`, `none-${tag}`];
+    const everyone = owner.asEveryone();
+    expect(await everyone.filter([about, hidden, nowhere], "read")).toEqual([about]);
+    expect(await owner.filter([about, hidden, nowhere], "manage")).toEqual([about, hidden]);
+    expect(await everyone.filter([about, site, [], hidden], "read")).toEqual([about, site]);
+  });
+
   it("P15: asEveryone answers as anyone signed out with no link, whoever asks, and only reads", async () => {
     const owner = w.as(await w.user());
     const [open, closed] = [`e-${uid()}`, `e-${uid()}`];
