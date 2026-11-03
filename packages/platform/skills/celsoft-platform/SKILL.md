@@ -157,7 +157,7 @@ export async function getSettings(app: App<typeof schema>, id: string) {
 }
 ```
 
-`App<typeof schema, { STRIPE_KEY: string }>` also types the app's own secrets on `app.env`.
+**App secrets:** list each in `platform.jsonc` as `"secrets": ["STRIPE_KEY"]`, put its value in `.env.secrets` beside the deploy tokens, and run `npx @celsoft/platform init`, which stores it as a GitHub secret the workflow passes on; `deploy`, `preview` and `dev` hand it to the Worker as `app.env.STRIPE_KEY` and stop, naming it, when it has no value. `App<typeof schema, { STRIPE_KEY: string }>` types it, and a test passes its own value with `testApp(app, { env: { STRIPE_KEY: "test" } })`.
 
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
 
@@ -263,7 +263,7 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
    `"signup"` is `"invite"` unless set to `"open"`: the first account is saved as the owner, and its sign-up reply and session say `role: "owner"`; after it, only invited addresses may sign up. The owner and admins invite at `/invites`, or in code with `app.invites.create(email)`, `list()` and `revoke(id)`; an open organization invitation or a share to an address also lets that address sign up. Never build a sign-up path around it; to open sign-up, set `"open"`.
 4. **`files`:** `app.files` in an R2 bucket; see `app.files` above.
 5. **`live`:** rooms over WebSockets; `live: { message: schema, canJoin, canSend, onMessage }` in `defineApp`; browsers use `live()` from `@celsoft/platform/live`. Joining and sending are refused unless `canJoin` and `canSend` say yes.
-6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`.
+6. **`mcp`:** serves endpoints with `serve` including `"mcp"` at `/mcp` to AI clients that sign in with OAuth, with the same access checks as the API. Needs `auth`. `defineApp(handler, { mcp: { instructions } })` gives the text every client is told when it connects, such as which tool to call first.
 7. **`access`:** `app.access`, for who may do what to the app's resources; see Access above. Needs `auth`.
 8. **`rateLimit`:** requests a minute one caller may make to `/api/*`, server pages and `/mcp`, 1,200 by default; counted per person, per API token, or per address when signed out, and a bad token also counts against its sender's address; over it, a 429 with `retry-after`.
 9. **`frontend`:** `{ "dir": "public" }` serves that folder's files free, before the Worker; a path with no file is the one 404 page (signed out, it offers sign-in), unless `"spa": true` gives it `index.html` for browser routing. A bare `"frontend": "public"` is the older shape: `upgrade` rewrites it to `{ "dir": "public", "spa": true }`; drop `spa` unless the app routes in the browser.

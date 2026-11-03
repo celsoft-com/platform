@@ -10,8 +10,9 @@ import { filesFromMcp, mcpInput } from "./upload.js";
 
 // A stateless MCP server: each request lists or calls the app's MCP endpoints as tools, with the
 // same checks the API applies, and a failure reported as a tool error, as MCP asks.
-export async function serveMcp<App>(request: Request, app: App, name: string, endpoints: Record<string, Endpoint<z.ZodType, z.ZodType, App>>): Promise<Response> {
-  const server = new McpServer({ name, version: "1.0.0" });
+// `instructions`, when given, is what every client is told about the server when it connects.
+export async function serveMcp<App>(request: Request, app: App, name: string, endpoints: Record<string, Endpoint<z.ZodType, z.ZodType, App>>, instructions?: string): Promise<Response> {
+  const server = new McpServer({ name, version: "1.0.0" }, instructions ? { instructions } : undefined);
   for (const [tool, e] of Object.entries(endpoints)) {
     if (!servesMcp(e)) continue;
     // The SDK's types expect its own Zod shape; the app's Zod 4 object schema is what it validates against.

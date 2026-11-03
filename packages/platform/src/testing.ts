@@ -62,7 +62,8 @@ export interface TestApp<App> extends Acting<App> {
 
 // Builds `app` on a database of its own, copied from one migrated with the app's drizzle/ folder,
 // so every call gets a clean start. `dir` is the app's folder, holding platform.jsonc.
-export async function testApp<App extends TestableApp>(app: App, options: { dir?: string } = {}): Promise<TestApp<App>> {
+// `env` adds the app's own values, such as its secrets, which a test supplies itself.
+export async function testApp<App extends TestableApp>(app: App, options: { dir?: string; env?: Record<string, string> } = {}): Promise<TestApp<App>> {
   const dir = resolve(options.dir ?? process.cwd());
   // A test reaches no real hostname, so a variable with no value, as in CI, gets a stand-in.
   const { config } = await loadApp(dir, { fallback: "test.localhost" });
@@ -82,6 +83,7 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost", EMAIL_OUTBOX: emails }),
     ...(config.auth && { BETTER_AUTH_SECRET: randomBytes(32).toString("hex") }),
     ...(config.live && { LIVE: recordingRooms(published) }),
+    ...options.env,
   };
 
   async function send(request: Request): Promise<Response> {

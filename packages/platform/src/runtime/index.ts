@@ -114,6 +114,8 @@ export interface AppOptions<Env, Schema extends Record<string, unknown>> {
   live?: LiveOptions<Env, Schema>;
   // Control points declared in code, written by every deploy after migrations; see StaticPoint.
   access?: { points?: Record<string, StaticPoint> };
+  // What an AI client is told about the app when it connects to /mcp, before it calls any tool.
+  mcp?: { instructions?: string };
   pool?: (connectionString: string) => Pool;
 }
 
@@ -528,7 +530,7 @@ async function mcpRoute<Env extends PlatformBindings, Schema extends Record<stri
   const asUser = asCaller(resources, () => sessionAs(app, userId, "mcp"));
   if (!(await asUser.session())) return mcpChallenge(origin);
   const { serveMcp } = await import("./mcp-server.js");
-  return await serveMcp(request, asUser, resources.appName, withInvalidates(options.endpoints ?? {}, options.invalidates));
+  return await serveMcp(request, asUser, resources.appName, withInvalidates(options.endpoints ?? {}, options.invalidates), options.mcp?.instructions);
 }
 
 // Live rooms answer for themselves: the browser client, and joining a room once the app agrees.

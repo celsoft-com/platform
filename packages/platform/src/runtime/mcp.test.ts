@@ -28,6 +28,23 @@ async function rpc(method: string, params: object = {}) {
 }
 
 describe("MCP", () => {
+  it("tells a connecting client the app's instructions when it has some", async () => {
+    const initialize = (instructions?: string) =>
+      serveMcp(
+        new Request("https://app.test/mcp", {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } } }),
+        }),
+        {} as never,
+        "demo",
+        endpoints as never,
+        instructions,
+      ).then((r) => r.json() as Promise<{ result: { instructions?: string } }>);
+    expect((await initialize("Read get_instructions first.")).result.instructions).toBe("Read get_instructions first.");
+    expect((await initialize()).result.instructions).toBeUndefined();
+  });
+
   it("lists only endpoints served over MCP, with their input schemas", async () => {
     const { result } = await rpc("tools/list");
     const tools = result!.tools as { name: string; description: string; inputSchema: { properties: object } }[];
