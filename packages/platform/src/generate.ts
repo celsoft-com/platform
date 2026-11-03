@@ -6,6 +6,7 @@ import { parse } from "jsonc-parser";
 import { readConfigText } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
+import { packageManagerAbove, packageScripts, runScript } from "./scripts.js";
 import { ensureIgnored, installSkills } from "./skills.js";
 
 // Everything the package writes into an app lives here, gitignored: files the app's code may
@@ -20,6 +21,13 @@ export const generatedPath = (appDir: string, file: string) => join(appDir, GENE
 // paths the Worker's pages claim, which the deploy routes to it.
 export async function generate(appDir: string): Promise<{ files: string[]; pages: string[]; staticPoints: Record<string, StaticPoint> }> {
   const workerFile = workerPath(await readConfigText(appDir));
+  // The app's own `generate` script writes modules the Worker imports, such as content built from
+  // files, so they exist before the Worker is read here; the frontend's `build` runs after.
+  const own = (await packageScripts(appDir)).generate;
+  if (own !== undefined) {
+    if (/\bplatform\s+generate\b/.test(own)) throw new Error("the app's `generate` script runs `platform generate`, which runs that script again; give it only the app's own steps");
+    await runScript(appDir, await packageManagerAbove(appDir), "generate", "nothing was generated");
+  }
   await mkdir(join(appDir, GENERATED_DIR), { recursive: true });
   await ensureIgnored(appDir, `${GENERATED_DIR}/`);
   const declared = await readApp(appDir, workerFile);

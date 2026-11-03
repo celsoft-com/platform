@@ -305,8 +305,8 @@ it("lists items to the signed-in person", async () => {
 | `new` | Writes a new app's files; see `celsoft-platform-setup` |
 | `dev` | Runs the app locally on its own `dev` database branch; starts the `dev` script beside it, with `plugins: [platform()]` from `@celsoft/platform/vite` |
 | `db generate` | Writes migrations for schema changes; `--rename <old>=<new>` and `--create <new>` answer its rename questions |
-| `generate` | Rewrites `.platform/`; also runs on install |
-| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each first runs the app's `build` script, if `package.json` has one, so files it writes, such as a bundled frontend or a module the Worker imports, ship in the deploy and a failed build deploys nothing; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
+| `generate` | Rewrites `.platform/`; also runs on install, and before `dev`, `deploy` and `preview`. It first runs the app's own `generate` script, if `package.json` has one, which writes modules the Worker imports, such as content built from `docs/*.md`; gitignore them, and never call `platform generate` from it |
+| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each runs `generate` (and with it the app's own `generate` script), then the app's `build` script, if `package.json` has one, so the frontend it bundles ships in the deploy and a failed build deploys nothing; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
 | `previews` | Lists the previews that exist |
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |
