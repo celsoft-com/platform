@@ -218,7 +218,7 @@ async function migratedTemplate(base: string, dir: string, config: Config, stati
     try {
       if (await exists(c)) return;
       const migrator = new DrizzleMigrator(dir, config);
-      if (!(await migrator.upToDate())) throw new Error("src/schema.ts has changes with no migration; run `npx @celsoft/platform db generate`, then test again");
+      if (!(await migrator.upToDate())) throw new Error("the schema has changes with no migration, in src/schema.ts or, after an upgrade, in the platform's own tables; run `npx @celsoft/platform db generate`, review the SQL in drizzle/, then test again");
       const building = `building_${randomUUID().replace(/-/g, "")}`;
       await c.query(`create database ${building}`);
       const url = databaseUrl(base, building);

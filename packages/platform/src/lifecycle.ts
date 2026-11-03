@@ -70,7 +70,7 @@ export async function requirePostgres(neon: Ports["neon"], project: string): Pro
   }
 }
 
-export const UNGENERATED = "the schema has changes with no migration; run `npx @celsoft/platform db generate`, review the SQL in drizzle/, and commit it";
+export const UNGENERATED = "the schema has changes with no migration, in src/schema.ts or, after an upgrade, in the platform's own tables; run `npx @celsoft/platform db generate`, review the SQL in drizzle/, and commit it";
 
 export async function deploy(ctx: Context, target: Target): Promise<{ hostname: string }> {
   const { config, ports, run } = ctx;
