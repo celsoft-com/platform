@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { type Client, Pool } from "pg";
 import { withClient } from "./adapters/database.js";
+import { quietOnTermination } from "./runtime/pool.js";
 import { DrizzleMigrator, MIGRATIONS_DIR } from "./adapters/drizzle.js";
 import { loadApp, type Config } from "./config.js";
 import type { StaticPoint } from "./runtime/access.js";
@@ -76,7 +77,7 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
   // A test reaches no real hostname, so a variable with no value, as in CI, gets a stand-in.
   const { config } = await loadApp(dir, { fallback: "test.localhost" });
   const url = config.database ? await freshDatabase(dir, config, app.staticPoints) : undefined;
-  const pool = url ? new Pool({ connectionString: url, max: 5 }) : undefined;
+  const pool = url ? quietOnTermination(new Pool({ connectionString: url, max: 5 })) : undefined;
   const bucket = memoryBucket();
   const emails: EmailMessage[] = [];
   const published: { room: string; message: unknown }[] = [];

@@ -6,6 +6,7 @@ import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, type Acces
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings, type Mail } from "./email.js";
+import { quietOnTermination } from "./pool.js";
 import { createRedirects, findRedirect, type Redirects } from "./redirects.js";
 import { apiHandler, getMatcher, OPENAPI_PATH, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
 import type { AppContext, Session, User } from "./types.js";
@@ -151,7 +152,7 @@ const requestDb = new Proxy({} as Db, {
   },
 });
 
-const defaultPool = (connectionString: string) => new Pool({ connectionString, max: 5 });
+const defaultPool = (connectionString: string) => quietOnTermination(new Pool({ connectionString, max: 5 }));
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
