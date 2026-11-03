@@ -153,6 +153,9 @@ const defaultPool = (connectionString: string) => new Pool({ connectionString, m
 
 const json = (body: unknown, status = 200) => Response.json(body, { status });
 
+// Answers who is calling; see platformRoute.
+export const CALLER_PATH = "/api/platform/caller";
+
 const notFound: Handler<unknown, Record<string, unknown>> = () => json({ error: "not found" }, 404);
 
 // `Secrets` names the app's secrets, such as `defineApp<{ SESSION_SECRET: string }>`; the
@@ -584,6 +587,14 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
   }
   // The API document is the API's own, served with the endpoints.
   if (path === OPENAPI_PATH) return undefined;
+  // Who a request is, and the level its API token is capped at, so a script can tell a token
+  // capped too low from a resource that is not there; both answer 404 on a point.
+  if (path === CALLER_PATH && request.method === "GET") {
+    const session = await app.session().catch(() => null);
+    if (!session) return json({ error: "sign in, or send an API token" }, 401);
+    const { id, email, name } = session.user;
+    return json({ user: { id, email, name, role: (session.user as { role?: string }).role ?? null }, cap: app.cap ?? null });
+  }
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
     await app.requireUser();

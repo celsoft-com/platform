@@ -93,6 +93,16 @@ describe("API tokens", () => {
     expect(JSON.stringify(listed.body)).toContain('"cap":"write"');
   });
 
+  it("T12: GET /api/platform/caller says who is calling and the token's cap, so a script can tell a cap from a missing point", async () => {
+    const p = await person();
+    const read = await token(p.cookie, { metadata: { cap: "read" } });
+    const asToken = await send("/api/platform/caller", { token: read.key });
+    expect(asToken.status).toBe(200);
+    expect(asToken.body).toMatchObject({ user: { id: p.id }, cap: "read" });
+    expect((await send("/api/platform/caller", { cookie: p.cookie })).body).toMatchObject({ user: { id: p.id }, cap: null });
+    expect((await send("/api/platform/caller")).status).toBe(401);
+  });
+
   it("T2: a token acts as the person who made it", async () => {
     const p = await person();
     const { key } = await token(p.cookie);

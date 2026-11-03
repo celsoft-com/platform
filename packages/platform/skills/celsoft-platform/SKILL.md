@@ -241,9 +241,10 @@ With `"auth": { "apiTokens": true }`, people make personal tokens for scripts:
 
 1. **Screen:** `/tokens` lists, makes and revokes the signed-in person's tokens; link to it from the app's settings.
 2. **Sending:** `Authorization: Bearer <token>` on `/api/` outside `/api/auth/`, and on page reads; `requireUser()` returns the token's owner.
-3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, an endpoint declared `{ level }` refuses a token capped below it with a 403, and a `read` token gets a 403 on anything but GET. Send structured reads as GET in bracket notation so read tokens reach them.
-4. **Lifetime:** 90 days unless chosen, at most 365.
-5. **Never:** on `/api/auth/*` or `/mcp`.
+3. **Cap:** each token has a level cap, `read` to `manage`; `app.access` checks give it at most that, an endpoint declared `{ level }` refuses a token capped below it with a 403, and a `read` token gets a 403 on anything but GET. Send structured reads as GET in bracket notation so read tokens reach them. On a point, a cap too low answers the same 404 as a missing point.
+4. **Who:** `GET /api/platform/caller` answers `{ user: { id, email, name, role }, cap }`, `cap` null for a session, so a script can tell a token capped too low from a resource that is not there.
+5. **Lifetime:** 90 days unless chosen, at most 365.
+6. **Never:** on `/api/auth/*` or `/mcp`.
 
 ## Tables and migrations
 
