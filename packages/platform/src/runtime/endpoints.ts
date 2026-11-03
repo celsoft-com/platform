@@ -115,13 +115,14 @@ export interface AccessCaller {
 
 // The check an endpoint or a page declares, run against its input. "anon" checks nothing; `{ level }`
 // needs someone signed in and an API token capped at `level` or above; a point is checked by `app.access`.
-export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: AccessCaller): Promise<void> {
-  if (!access || access === "anon") return;
+// Returns the point that admitted the caller, or null when the check names none.
+export async function requireAccess(access: EndpointAccess | undefined, input: unknown, app: AccessCaller): Promise<string | null> {
+  if (!access || access === "anon") return null;
   if (!hasPoint(access)) {
     if (!(await app.session())) throw new EndpointError(404, "not found");
     const cap = app.cap;
     if (cap && rank(cap) < rank(access.level)) throw new EndpointError(403, `this API token is capped at ${cap}; this needs ${access.level}`);
-    return;
+    return null;
   }
   const { point, level } = access as { point: string | ((input: unknown) => PointIds | Promise<PointIds>); level: Level };
   const named = typeof point === "function" ? await point(input) : (input as Record<string, unknown>)[point];
@@ -132,7 +133,7 @@ export async function requireAccess(access: EndpointAccess | undefined, input: u
   const ids = typeof named === "string" ? [named] : Array.isArray(named) ? (named as unknown[]) : [named];
   // A point id the input cannot name, such as an empty or missing one, looks like any missing point.
   if (ids.length === 0 || ids.some((id) => typeof id !== "string" || id.length === 0 || id.length > 200)) throw new EndpointError(404, "not found");
-  await app.access.require(ids.length === 1 ? (ids[0] as string) : (ids as string[]), level);
+  return (await app.access.admit(ids.length === 1 ? (ids[0] as string) : (ids as string[]), level)).point;
 }
 
 // Throws when an access declaration is neither { point, level }, { level } nor "anon", or names a

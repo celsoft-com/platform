@@ -78,6 +78,8 @@ export interface Access {
   // The caller's level, or a 404 unless it is at least `level`. Given a list, it checks the first
   // point that exists, and only that one, so a refused point never falls through to the next.
   require(point: string | readonly string[], level: Level): Promise<Level>;
+  // As require, also naming the point that decided: the one given, or the first of a list that exists.
+  admit(point: string | readonly string[], level: Level): Promise<{ point: string; level: Level }>;
   // A dynamic point for one resource; whoever creates it gets `manage` on it.
   create(point: string, options?: PointOptions): Promise<void>;
   // A new parent, or null for none; needs `manage` on the point and `create` on the new parent.
@@ -457,10 +459,12 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
       level: async (point) => named(await levelOf(on, point)),
       can: async (point, level) => (await levelOf(on, point)) >= rank(level),
       check: async (point) => named(await need(on, point, READ))!,
-      require: async (point, level) => {
+      require: async (point, level) => (await api.admit(point, level)).level,
+
+      admit: async (point, level) => {
         const id = typeof point === "string" ? point : await firstExisting(on, point);
         if (id === undefined) throw notFound();
-        return named(await need(on, id, rank(level)))!;
+        return { point: id, level: named(await need(on, id, rank(level)))! };
       },
 
       async create(point, options = {}) {

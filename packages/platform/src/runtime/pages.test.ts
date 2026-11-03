@@ -236,10 +236,10 @@ describe("Pages: beside sign-in, links and tokens", () => {
           "/:id": route({ params: NoteId, access: { point: "id", level: "read" }, cache: true }, ({ id }) => (ran.push(id), `<h1>${id}</h1>`)),
           "/:id/edit": route({ params: NoteId, access: { point: ({ id }) => id, level: "write" } }, ({ id }) => `<h1>edit ${id}</h1>`),
           "/mine/list": route({ access: { level: "read" } }, () => "<p>signed in</p>"),
-          "/open/door": route({ access: "anon" }, () => "<p>open</p>"),
+          "/open/door": route({ access: "anon" }, (_params, _app, _request, gate) => `<p>open</p>${gate.point === null ? "" : "<i>gated</i>"}`),
           // The path's own point, else each folder's above it: the first that exists decides.
           "/broken/:id": route({ params: NoteId, access: { point: () => 42 as never, level: "read" } }, () => "<p>never</p>"),
-          "/tree/*path": route({ access: { point: async ({ path }) => path.split("/").map((_, i, parts) => `tree:${parts.slice(0, parts.length - i).join("/")}`), level: "read" } }, ({ path }) => `<p>${path}</p>`),
+          "/tree/*path": route({ access: { point: async ({ path }) => path.split("/").map((_, i, parts) => `tree:${parts.slice(0, parts.length - i).join("/")}`), level: "read" } }, ({ path }, _app, _request, gate) => `<p>${path}</p><i>${gate.point}</i>`),
         },
       }),
     ],
@@ -292,7 +292,8 @@ describe("Pages: beside sign-in, links and tokens", () => {
     await pool.query(`insert into access_point (id) values ($1), ($2)`, [`tree:${top}`, `tree:${top}/private`]);
     await pool.end();
     await grant(`tree:${top}`, cookie, 1);
-    expect(await send(`/doc/tree/${top}/a/b`, { cookie })).toMatchObject({ status: 200, text: `<p>${top}/a/b</p>` });
+    // The handler learns which point let the request in: here the folder's, the first that exists.
+    expect(await send(`/doc/tree/${top}/a/b`, { cookie })).toMatchObject({ status: 200, text: `<p>${top}/a/b</p><i>tree:${top}</i>` });
     expect(await send(`/doc/tree/${top}`, { cookie })).toMatchObject({ status: 200 });
     // Its own point exists and refuses them, so the readable folder above never decides.
     expect((await send(`/doc/tree/${top}/private/x`, { cookie })).status).toBe(404);

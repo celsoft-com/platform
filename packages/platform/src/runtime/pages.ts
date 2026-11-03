@@ -18,7 +18,9 @@ export type PathParams<S extends string> = { [K in ParamNames<S>]: string };
 
 // HTML, or a whole Response such as a redirect.
 export type PageResult = string | Response;
-export type PageHandler<Params = any, App = AnyApp> = (params: Params, app: App, request: Request) => PageResult | Promise<PageResult>;
+// `gate.point` is the control point the route's access let the request in on, or null when it names
+// none, so a page inside a private scope can list that scope's other pages for everyone it admits.
+export type PageHandler<Params = any, App = AnyApp> = (params: Params, app: App, request: Request, gate: { point: string | null }) => PageResult | Promise<PageResult>;
 
 export interface PageRoute<Params = any, App = AnyApp> {
   // Checks and converts the route's parameters, as an endpoint's input schema does; a failure is a 404.
@@ -220,8 +222,9 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         params = checked.data;
       }
       // The gate runs before the cache, so a kept copy only ever reaches someone who passes it.
+      let gate: string | null;
       try {
-        await requireAccess(found.route.access, params, app);
+        gate = await requireAccess(found.route.access, params, app);
       } catch (thrown) {
         const refused = thrown instanceof Response ? undefined : await refusal(thrown);
         if (refused && (refused.status === 404 || refused.status === 403)) return refuse();
@@ -242,7 +245,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       }
       let answer: PageResult;
       try {
-        answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), request);
+        answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), request, { point: gate });
       } catch (thrown) {
         // A page answers in HTML, so a thrown Response is not one of its refusals.
         const refused = thrown instanceof Response ? undefined : await refusal(thrown);
