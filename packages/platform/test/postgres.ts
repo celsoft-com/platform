@@ -1,7 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { generateDrizzleJson, generateMigration } from "drizzle-kit/api";
 import { Client } from "pg";
 import type { TestProject } from "vitest/node";
@@ -9,6 +7,7 @@ import * as platformSchema from "../src/schema.js";
 import { prepareAccess } from "../src/runtime/access-sql.js";
 import { prepareCache } from "../src/runtime/cache.js";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { sharedPostgres } from "../src/test-postgres.js";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -18,8 +17,9 @@ declare module "vitest" {
 
 export const TEMPLATE = "platform_template";
 
-// Starts a private Postgres listening only on a socket in a temporary folder, and builds a template
-// database holding the platform's tables, migrated the way drizzle-kit migrates an app.
+// Starts the test Postgres server testApp uses, and builds a template database holding the
+// platform's tables, migrated the way drizzle-kit migrates an app; the server stops on its own once
+// the test run is gone.
 export default async function setup(project: TestProject) {
   try {
     return await start(project);
@@ -31,41 +31,26 @@ export default async function setup(project: TestProject) {
 }
 
 async function start(project: TestProject) {
-  const dir = await mkdtemp(join(tmpdir(), "pg-"));
-  const data = join(dir, "data");
-  const log = join(dir, "log");
-  run("initdb", ["-D", data, "-U", "postgres", "--auth=trust", "-E", "UTF8", "--locale=C", "--no-instructions"]);
-  try {
-    run("pg_ctl", ["-D", data, "-l", log, "-w", "-o", `-k ${dir} -c listen_addresses='' -c fsync=off -c max_connections=200`, "start"]);
-  } catch (error) {
-    throw new Error(`${(error as Error).message}\n${await readFile(log, "utf8").catch(() => "")}`);
-  }
-  const url = `postgresql://postgres@localhost/postgres?host=${encodeURIComponent(dir)}`;
-
+  const url = await sharedPostgres(fileURLToPath(new URL("..", import.meta.url)));
+  // Another run sharing the server may be building it, so one builds it under a lock and renames
+  // it into place whole; it is rebuilt each run, since the platform's tables may have changed.
   const client = new Client({ connectionString: url });
   await client.connect();
-  await client.query(`create database ${TEMPLATE}`);
-  await client.end();
-  const template = new Client({ connectionString: url.replace("/postgres?", `/${TEMPLATE}?`) });
-  await template.connect();
-  for (const statement of await generateMigration(generateDrizzleJson({}), generateDrizzleJson(platformSchema))) await template.query(statement);
-  await prepareAccess(drizzle(template));
-  await prepareCache(drizzle(template));
-  await template.end();
-
-  project.provide("postgres", url);
-  return async () => {
-    run("pg_ctl", ["-D", data, "-m", "immediate", "-w", "stop"]);
-    await rm(dir, { recursive: true, force: true });
-  };
-}
-
-// Fails with the tool's own output, since a bare exit code says nothing on a CI runner.
-function run(command: string, args: string[]): void {
   try {
-    execFileSync(command, args, { stdio: "pipe", encoding: "utf8" });
-  } catch (error) {
-    const { stdout = "", stderr = "", message } = error as { stdout?: string; stderr?: string; message: string };
-    throw new Error(`${command} failed: ${message}\n${stdout}${stderr}`);
+    await client.query("select pg_advisory_lock(hashtext($1))", [TEMPLATE]);
+    const building = `${TEMPLATE}_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    await client.query(`create database ${building}`);
+    const template = new Client({ connectionString: url.replace("/postgres?", `/${building}?`) });
+    await template.connect();
+    for (const statement of await generateMigration(generateDrizzleJson({}), generateDrizzleJson(platformSchema))) await template.query(statement);
+    await prepareAccess(drizzle(template));
+    await prepareCache(drizzle(template));
+    await template.end();
+    await client.query(`drop database if exists ${TEMPLATE}`);
+    await client.query(`alter database ${building} rename to ${TEMPLATE}`);
+  } finally {
+    await client.query("select pg_advisory_unlock(hashtext($1))", [TEMPLATE]).catch(() => {});
+    await client.end();
   }
+  project.provide("postgres", url);
 }
