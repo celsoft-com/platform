@@ -15,6 +15,8 @@ import type { EmailMessage } from "./runtime/email.js";
 import type { LiveNamespace } from "./runtime/live.js";
 import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 import { createFiles, memoryBucket, type Files } from "./runtime/files.js";
+import type { EdgeCache } from "./runtime/index.js";
+import { covers, features, workerFirst } from "./runtime/routes.js";
 import { listStaticFiles } from "./static-files.js";
 import { featureVars } from "./wrangler-config.js";
 
@@ -27,6 +29,7 @@ export const TEST_URL = "http://localhost";
 
 interface TestableApp {
   endpoints: Record<string, Endpoint<any, any, any>>;
+  pages: readonly string[];
   staticPoints: Record<string, StaticPoint>;
   staticFiles: readonly string[];
   fetch(request: Request, env: never, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<Response>;
@@ -78,6 +81,9 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     ...featureVars(config),
     APP_URL: TEST_URL,
     DEPLOY_TARGET: "test",
+    // As a deploy runs: the page cache, keyed by a version that stays put for the test's life.
+    CF_VERSION_METADATA: { id: "test" },
+    EDGE_CACHE: memoryEdgeCache(),
     ...(url && { DB: { connectionString: url } }),
     ...(config.files && { FILES: bucket }),
     ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost", EMAIL_OUTBOX: emails }),
@@ -86,7 +92,28 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
     ...options.env,
   };
 
+  // As Cloudflare serves the frontend: a GET of a file's path gets the file before the Worker,
+  // unless the Worker claims the path first; with spa, a page request no file answers gets index.html.
+  const frontendDir = config.frontend ? join(dir, config.frontend.dir) : undefined;
+  const workerPaths = [...workerFirst(features(featureVars(config))), ...app.pages.flatMap((p) => (p === "/" ? [p] : [p, `${p}/*`]))];
+  async function frontendFile(request: Request): Promise<Response | undefined> {
+    if (!frontendDir || (request.method !== "GET" && request.method !== "HEAD")) return undefined;
+    const pathname = decodeURIComponent(new URL(request.url).pathname);
+    if (workerPaths.some((pattern) => covers(pattern, pathname))) return undefined;
+    const candidates = pathname.endsWith("/") ? [`${pathname}index.html`] : [pathname, `${pathname}.html`, `${pathname}/index.html`];
+    if (config.frontend!.spa && (request.headers.get("accept") ?? "").includes("text/html")) candidates.push("/index.html");
+    for (const candidate of candidates) {
+      const file = resolve(frontendDir, `.${candidate}`);
+      if (!file.startsWith(`${frontendDir}/`)) continue;
+      const bytes = await readFile(file).catch(() => undefined);
+      if (bytes) return new Response(request.method === "HEAD" ? null : bytes, { headers: { "content-type": contentType(file) } });
+    }
+    return undefined;
+  }
+
   async function send(request: Request): Promise<Response> {
+    const file = await frontendFile(request);
+    if (file) return file;
     const pending: Promise<unknown>[] = [];
     const response = await app.fetch(request, env as never, { waitUntil: (promise) => void pending.push(promise) });
     const body = await response.arrayBuffer();
@@ -366,3 +393,24 @@ function tool(command: string, args: string[], missing?: string): string {
     throw new Error(`${command} failed: ${message}\n${stdout}${stderr}`);
   }
 }
+
+// The Cache API as a test needs it: one store per testApp, matched by the exact key.
+function memoryEdgeCache(): EdgeCache {
+  const store = new Map<string, { body: ArrayBuffer; init: ResponseInit }>();
+  return {
+    async match(key) {
+      const hit = store.get(key);
+      return hit ? new Response(hit.body.slice(0), hit.init) : undefined;
+    },
+    async put(key, response) {
+      store.set(key, { body: await response.arrayBuffer(), init: { status: response.status, headers: [...response.headers] } });
+    },
+  };
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  html: "text/html; charset=utf-8", css: "text/css; charset=utf-8", js: "text/javascript; charset=utf-8", mjs: "text/javascript; charset=utf-8",
+  json: "application/json", txt: "text/plain; charset=utf-8", xml: "application/xml", svg: "image/svg+xml", png: "image/png",
+  jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon", woff2: "font/woff2", pdf: "application/pdf",
+};
+const contentType = (file: string) => CONTENT_TYPES[file.split(".").pop()!.toLowerCase()] ?? "application/octet-stream";

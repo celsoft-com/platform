@@ -49,6 +49,8 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   // The deploy serving this Worker: "production", "preview", "dev" or "test", when it was made,
   // and the commit and branch it was made from.
   DEPLOY_TARGET?: string;
+  // testApp's stand-in for Cloudflare's caches.default, so a test sees cached pages as a deploy serves them.
+  EDGE_CACHE?: EdgeCache;
   DEPLOY_AT?: string;
   DEPLOY_COMMIT?: string;
   DEPLOY_BRANCH?: string;
@@ -465,7 +467,7 @@ const signInRedirect = (url: URL) => new Response(null, { status: 302, headers: 
 
 const SAMPLE_EVERY = 100;
 
-interface EdgeCache {
+export interface EdgeCache {
   match(key: string): Promise<Response | undefined>;
   put(key: string, response: Response): Promise<void>;
 }
@@ -473,7 +475,7 @@ interface EdgeCache {
 // Cloudflare's Cache API, shared by every visitor in a data center; keyed by the deploy and, with
 // a database, by the versions app.cache bumps; absent outside Workers and without a deploy version.
 function pageCache<Env extends PlatformBindings, Schema extends Record<string, unknown>>(env: Env, ctx: ExecutionContext, app: AppContext<Env, Schema>): PageCache | undefined {
-  const edge = (globalThis as { caches?: { default?: EdgeCache } }).caches?.default;
+  const edge = env.EDGE_CACHE ?? (globalThis as { caches?: { default?: EdgeCache } }).caches?.default;
   const deploy = env.CF_VERSION_METADATA?.id;
   if (!edge || !deploy) return undefined;
   return {

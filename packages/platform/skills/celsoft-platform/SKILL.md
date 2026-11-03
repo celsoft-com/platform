@@ -293,7 +293,8 @@ it("lists items to the signed-in person", async () => {
 3. **Calls:** `t.call(name, input)` signed out, `t.as(caller).call(...)` as a person, `t.as({ token })` with an API token; refusals throw `EndpointError` from `@celsoft/platform/client` with its `status` and the server's `message`, so `rejects.toThrow("only the owner may publish")` checks what it says. `t.fetch(path, init)` and `t.as(caller).fetch(...)` reach pages, hand-written routes and `/api/auth/*`.
 4. **People:** `t.signUp(email)` signs up through the app's own sign-up, inviting the address first when sign-up is invite-only.
 5. **Seen:** `t.db` and `t.files` are the app's own, for seeding and checking; `t.emails` holds every email sent, and `t.published` every live room message, `{ room, message }`. Browsers cannot join live rooms in a test.
-6. **Running:** `npm test`, which runs `vitest run`.
+6. **As deployed:** `t.fetch(path)` gets a frontend file before the Worker, as a deploy serves it, unless a page or platform path claims it, and with `spa` a page request no file answers gets `index.html`; cached page routes keep their copy and answer `platform-cache: hit` or `miss`, and endpoints empty them as in a deploy.
+7. **Running:** `npm test`, which runs `vitest run`.
 
 ## Commands
 

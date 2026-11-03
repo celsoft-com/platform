@@ -41,7 +41,7 @@ export const RESERVED = ["/api", ...PLATFORM_PATHS.map(({ path }) => path.replac
 // The paths that reach the Worker before static files: all of /api/ and each platform path that is on.
 export const workerFirst = (f: Features) => ["/api/*", ...PLATFORM_PATHS.filter(({ path, on }) => on(f) && !path.startsWith("/api/")).map(({ path }) => path)];
 
-const covers = (pattern: string, pathname: string) => (pattern.endsWith("/*") ? pathname.startsWith(pattern.slice(0, -1)) : pathname === pattern);
+export const covers = (pattern: string, pathname: string) => (pattern.endsWith("/*") ? pathname.startsWith(pattern.slice(0, -1)) : pathname === pattern);
 
 // The paths a frontend folder's files answer, as Cloudflare's default html handling serves them:
 // /about for about.html or about/index.html, and / for index.html.

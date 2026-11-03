@@ -39,6 +39,16 @@ describe("demo", () => {
     expect(Number(await stats())).toBe(before + 1);
   });
 
+  it("keeps /stats at the edge until a note is added", async () => {
+    const writer = await t.signUp("cacher@example.com");
+    const cache = async () => (await t.fetch("/stats")).headers.get("platform-cache");
+    await t.as(writer).call("addNote", { body: "warm" });
+    expect(await cache()).toBe("miss");
+    expect(await cache()).toBe("hit");
+    await t.as(writer).call("addNote", { body: "cold" });
+    expect(await cache()).toBe("miss");
+  });
+
   it("keeps one person's organization from another", async () => {
     const owner = await t.signUp("first@example.com");
     const stranger = await t.signUp("stranger@example.com");
