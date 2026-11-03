@@ -160,6 +160,8 @@ export async function getSettings(app: App<typeof schema>, id: string) {
 
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
 
+`app.env.DEPLOY_TARGET` is `"production"`, `"preview"`, `"dev"` or `"test"`; `DEPLOY_AT` is when that deploy or `dev` run started, as an ISO time; `DEPLOY_COMMIT` and `DEPLOY_BRANCH` name the commit and branch it was made from (in CI, a pull request's own head, not its merge commit), and are absent under `testApp`. Show which deploy served a page from them rather than writing a stamp at build time.
+
 ## `app.files`
 
 With `"files": true`, `app.files` keeps files in an R2 bucket under paths such as `assets/logo.png`; `/` makes folders.
@@ -301,7 +303,7 @@ it("lists items to the signed-in person", async () => {
 | `dev` | Runs the app locally on its own `dev` database branch; starts the `dev` script beside it, with `plugins: [platform()]` from `@celsoft/platform/vite` |
 | `db generate` | Writes migrations for schema changes; `--rename <old>=<new>` and `--create <new>` answer its rename questions |
 | `generate` | Rewrites `.platform/`; also runs on install |
-| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
+| `deploy` / `preview <pr>` | Deploy prod or a PR's preview; CI runs these on push and on pull requests; each first runs the app's `build` script, if `package.json` has one, so files it writes, such as a bundled frontend or a module the Worker imports, ship in the deploy and a failed build deploys nothing; each says `live at` once the hostname answers over HTTPS, waiting up to 10 minutes for a new certificate |
 | `previews` | Lists the previews that exist |
 | `owner reset <email>` | Makes that account the owner and sets its password |
 | `db stats [--pr <n>] [--reset]` | Lists the costliest queries, or clears the counts |

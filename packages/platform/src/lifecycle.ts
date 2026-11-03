@@ -21,6 +21,23 @@ export interface Context {
   // The app's static control points, read from its Worker and written after migrations.
   staticPoints?: Record<string, StaticPoint>;
   now?: () => Date;
+  // The commit and branch being deployed, handed to the Worker as DEPLOY_COMMIT and DEPLOY_BRANCH.
+  source?: () => Promise<Source>;
+}
+
+export interface Source {
+  commit: string;
+  branch: string;
+}
+
+// What the Worker is told about the deploy serving it.
+async function deployVars(ctx: Context, target: "production" | "preview" | "dev"): Promise<Record<string, string>> {
+  const source = ctx.source ? await ctx.source() : undefined;
+  return {
+    DEPLOY_TARGET: target,
+    DEPLOY_AT: (ctx.now?.() ?? new Date()).toISOString(),
+    ...(source && { DEPLOY_COMMIT: source.commit, DEPLOY_BRANCH: source.branch }),
+  };
 }
 
 export class PreflightError extends Error {}
@@ -90,7 +107,12 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   if (config.files) await ensureBucket(ctx, n.bucket, target.kind === "preview");
   const finishBucketMove = await migrateLegacyBucket(ctx, target, n);
 
-  const vars: Record<string, string> = { APP_URL: `https://${hostname}`, TRACE: target.kind === "preview" ? "on" : "sample", ...email.vars };
+  const vars: Record<string, string> = {
+    APP_URL: `https://${hostname}`,
+    TRACE: target.kind === "preview" ? "on" : "sample",
+    ...email.vars,
+    ...(await deployVars(ctx, target.kind === "prod" ? "production" : "preview")),
+  };
   if (config.files && n.filesPrefix) vars.FILES_PREFIX = n.filesPrefix;
 
   const wrangler = wranglerConfig({ config, worker: n.worker, hostname, accountId, hyperdriveId, vars, bucket: config.files ? n.bucket : undefined, pages: ctx.pages, placement });
@@ -233,7 +255,12 @@ export async function dev(ctx: Context, { appUrl = DEV_URL }: { appUrl?: string 
     ({ uri } = await prepareBranch(ctx, project, DEV_BRANCH, { forgetKeys: false, generate: true }));
   }
 
-  const vars: Record<string, string> = { APP_URL: appUrl, TRACE: "on", ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }) };
+  const vars: Record<string, string> = {
+    APP_URL: appUrl,
+    TRACE: "on",
+    ...(config.email && { EMAIL_MODE: "capture", EMAIL_FROM: "noreply@localhost" }),
+    ...(await deployVars(ctx, "dev")),
+  };
   const { routes: _routes, account_id: _account, ...local } = wranglerConfig({
     config,
     worker: `${config.name}-dev`,

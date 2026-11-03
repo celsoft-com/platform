@@ -46,6 +46,12 @@ export interface PlatformBindings extends EmailBindings, FilesBindings {
   DB?: { connectionString: string };
   APP_URL?: string;
   APP_NAME?: string;
+  // The deploy serving this Worker: "production", "preview", "dev" or "test", when it was made,
+  // and the commit and branch it was made from.
+  DEPLOY_TARGET?: string;
+  DEPLOY_AT?: string;
+  DEPLOY_COMMIT?: string;
+  DEPLOY_BRANCH?: string;
   BETTER_AUTH_SECRET?: string;
   AUTH_ORGANIZATIONS?: string;
   AUTH_API_TOKENS?: string;

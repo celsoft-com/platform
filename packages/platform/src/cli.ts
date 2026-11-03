@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -14,7 +15,7 @@ import { ConfigError, loadApp, type Config } from "./config.js";
 import { generate } from "./generate.js";
 import { HttpsError } from "./https.js";
 import { checkWorkflow, tokenNames } from "./init.js";
-import { PreflightError, requireProjectKey, type Context } from "./lifecycle.js";
+import { PreflightError, requireProjectKey, type Context, type Source } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
 import { Run } from "./run.js";
 import { loadSecrets } from "./secrets.js";
@@ -127,6 +128,7 @@ async function context(appDir: string, config: Config, dryRun: boolean, terminal
     secrets,
     run: new Run(dryRun, (line) => terminal.log(line)),
     repo: () => (repo ??= currentRepo(appDir)),
+    source: () => currentSource(appDir),
     providers: { neon: Boolean(neonKey && secrets.NEON_PROJECT_ID), mail: Boolean(resendKey) },
     ports: {
       cloudflare,
@@ -144,6 +146,17 @@ async function currentRepo(appDir: string): Promise<Repo> {
   const { GITHUB_REPOSITORY_ID: id, GITHUB_REPOSITORY: name } = process.env;
   if (id && name) return { id: Number(id), name };
   return new GhCli(repoRoot(appDir)).repository();
+}
+
+// In Actions, a pull request's own head commit and branch, not the merge commit it is checked out at.
+async function currentSource(appDir: string): Promise<Source> {
+  const { GITHUB_SHA, GITHUB_HEAD_REF, GITHUB_REF_NAME, GITHUB_EVENT_PATH } = process.env;
+  if (GITHUB_SHA) {
+    const event = GITHUB_EVENT_PATH ? (JSON.parse(await readFile(GITHUB_EVENT_PATH, "utf8")) as { pull_request?: { head?: { sha?: string } } }) : {};
+    return { commit: event.pull_request?.head?.sha ?? GITHUB_SHA, branch: GITHUB_HEAD_REF || GITHUB_REF_NAME || "" };
+  }
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: appDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  return { commit: git("rev-parse", "HEAD"), branch: git("branch", "--show-current") };
 }
 
 function requireToken(secrets: Record<string, string>, name: string): string {

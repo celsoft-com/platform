@@ -196,6 +196,8 @@ describe("auth and email", () => {
       ACCESS: "off",
       EMAIL_MODE: "send",
       EMAIL_FROM: "noreply@demo.example.com",
+      DEPLOY_TARGET: "production",
+      DEPLOY_AT: "2026-10-24T12:34:56.000Z",
     });
     expect(first.config.ratelimits).toEqual([
       { name: "AUTH_LIMIT", namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 10, period: 60 } },
@@ -287,6 +289,13 @@ describe("auth and email", () => {
     expect(ports.mail.keys).toHaveLength(2);
     await cleanup(c(), 7);
     expect(ports.mail.keys.map((k) => k.name)).toEqual(["platform demo.example.com"]);
+  });
+
+  it("tells the Worker its deploy: target, time, and the commit and branch when known", async () => {
+    await deploy({ ...ctx(), source: async () => ({ commit: "abc1234", branch: "feat/x" }) }, { kind: "preview", pr: 7 });
+    expect(ports.wrangler.deploys[0]!.config.vars).toMatchObject({ DEPLOY_TARGET: "preview", DEPLOY_AT: "2026-10-24T12:34:56.000Z", DEPLOY_COMMIT: "abc1234", DEPLOY_BRANCH: "feat/x" });
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys[1]!.config.vars).not.toHaveProperty("DEPLOY_COMMIT");
   });
 
   it("captures email in previews and never touches Resend", async () => {
