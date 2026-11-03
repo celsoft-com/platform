@@ -37,6 +37,9 @@ interface Attachment {
   room: string;
   user: LivePeer | null;
   canSend: boolean;
+  // When canJoin and canSend were decided; a socket older than RECHECK_MS is closed before it is
+  // sent anything more, and the browser rejoins, so a revoked grant stops reaching it.
+  checkedAt: number;
 }
 
 export interface Live {
@@ -89,7 +92,7 @@ export async function joinRoom(request: Request, url: URL, namespace: LiveNamesp
 
   const headers = new Headers(request.headers);
   headers.set("x-room", room);
-  headers.set("x-attachment", JSON.stringify({ room, user, canSend } satisfies Attachment));
+  headers.set("x-attachment", JSON.stringify({ room, user, canSend, checkedAt: Date.now() } satisfies Attachment));
   const since = url.searchParams.get("since");
   return roomStub(namespace, room).fetch(new Request(`https://room/join${since ? `?since=${encodeURIComponent(since)}` : ""}`, { headers }));
 }
@@ -140,6 +143,7 @@ export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined, che
 
     async webSocketMessage(socket: RoomSocket, raw: string | ArrayBuffer): Promise<void> {
       const attachment = socket.deserializeAttachment() as Attachment;
+      if (expired(socket)) return;
       if (!attachment.canSend) return socket.send(JSON.stringify({ type: "error", error: "not allowed to send to this room" }));
       if (typeof raw !== "string" || raw.length > MAX_MESSAGE) return socket.send(JSON.stringify({ type: "error", error: `messages are text up to ${MAX_MESSAGE} bytes` }));
       let data: unknown;
@@ -188,7 +192,7 @@ export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined, che
       const seq = Number(this.state.storage.sql.exec("insert into messages (body, sender) values (?, ?) returning seq", body, sender).toArray()[0]!.seq);
       this.state.storage.sql.exec("delete from messages where seq <= ?", seq - KEPT_MESSAGES);
       const frame = `{"type":"message","seq":${seq},"from":${sender},"data":${body}}`;
-      for (const socket of this.state.getWebSockets()) if (socket !== except) trySend(socket, frame);
+      for (const socket of this.state.getWebSockets()) if (socket !== except && !expired(socket)) trySend(socket, frame);
       return seq;
     }
 
@@ -202,9 +206,25 @@ export function liveRoom(onMessage: (env: unknown) => OnMessage | undefined, che
         else anonymous++;
       }
       const frame = JSON.stringify({ type: "presence", people: [...people.values()], anonymous });
-      for (const socket of sockets) trySend(socket, frame);
+      for (const socket of sockets) if (!expired(socket)) trySend(socket, frame);
     }
   };
+}
+
+// How long a join's access decision stands before the browser must rejoin and be asked again.
+export const RECHECK_MS = 5 * 60_000;
+export const RECHECK_CODE = 4001;
+
+// Closes a socket whose access was decided too long ago; the browser rejoins and catches up.
+function expired(socket: RoomSocket): boolean {
+  const { checkedAt } = socket.deserializeAttachment() as Attachment;
+  if (Date.now() - (checkedAt ?? 0) < RECHECK_MS) return false;
+  try {
+    socket.close(RECHECK_CODE, "access is checked again on rejoin");
+  } catch {
+    // already closed
+  }
+  return true;
 }
 
 function trySend(socket: RoomSocket, frame: string): void {

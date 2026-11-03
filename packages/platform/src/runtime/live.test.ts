@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { KEPT_MESSAGES, liveRoom } from "./live.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { KEPT_MESSAGES, liveRoom, RECHECK_CODE, RECHECK_MS } from "./live.js";
 import { defineApp } from "./index.js";
 import { entryModule } from "../wrangler-config.js";
 
@@ -72,7 +72,7 @@ function roomState() {
 const ann = { id: "u1", name: "Ann" };
 const bob = { id: "u2", name: "Bob" };
 const joinRequest = (user: typeof ann | null, canSend: boolean, since?: number) =>
-  new Request(`https://room/join${since === undefined ? "" : `?since=${since}`}`, { headers: { "x-attachment": JSON.stringify({ room: "note:1", user, canSend }) } });
+  new Request(`https://room/join${since === undefined ? "" : `?since=${since}`}`, { headers: { "x-attachment": JSON.stringify({ room: "note:1", user, canSend, checkedAt: Date.now() }) } });
 
 describe("live room", () => {
   let state: ReturnType<typeof roomState>;
@@ -89,6 +89,25 @@ describe("live room", () => {
     heard = [];
     const Room = liveRoom(() => async (_room, message, from) => void heard.push({ message, from }));
     room = new Room(state, {}) as unknown as typeof room;
+  });
+
+  it("closes a socket whose access was checked too long ago, before sending it more, so it rejoins", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const stale = await join(ann, true);
+      vi.setSystemTime(Date.now() + RECHECK_MS + 1);
+      const fresh = await join(bob);
+      await publish({ title: "after" });
+      expect(stale.closed?.code).toBe(RECHECK_CODE);
+      expect(stale.of("message")).toEqual([]);
+      expect(fresh.of("message")).toEqual([{ type: "message", seq: 1, from: null, data: { title: "after" } }]);
+      await room.webSocketMessage(stale, JSON.stringify({ data: "late" }));
+      expect(heard).toEqual([]);
+      const back = await join(ann, true, 0);
+      expect(back.of("message")).toEqual([{ type: "message", seq: 1, from: null, data: { title: "after" } }]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("delivers server messages to everyone, numbered", async () => {
