@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { type Client, Pool } from "pg";
 import { withClient } from "./adapters/database.js";
 import { DrizzleMigrator, MIGRATIONS_DIR } from "./adapters/drizzle.js";
 import { loadApp, type Config } from "./config.js";
