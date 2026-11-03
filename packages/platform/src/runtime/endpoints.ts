@@ -1,6 +1,7 @@
 import { ORPCError, os, type Router } from "@orpc/server";
+import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
-import { experimental_ZodSmartCoercionPlugin } from "@orpc/zod/zod4";
+import { experimental_ZodSmartCoercionPlugin, ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import type { z } from "zod";
 import { rank, type Access, type Level } from "./access.js";
 import type { Cache } from "./cache.js";
@@ -188,6 +189,59 @@ export function getMatcher(endpoints: Record<string, Omit<Endpoint, "handler">>)
   return (pathname) => patterns.some((pattern) => pattern.test(pathname));
 }
 
+// Where any client learns the API: every endpoint served over it, with its method, path, input and
+// output schemas, and the access it needs.
+export const OPENAPI_PATH = "/api/platform/openapi.json";
+
+// What an endpoint needs, as `x-platform-access` on its operation: anyone, anyone signed in at a
+// level, or a level on a control point the input names (`point` is the input field, or "computed").
+function accessSpec(access: EndpointAccess | undefined): Record<string, unknown> {
+  if (!access || access === "anon") return { anyone: true };
+  if (!hasPoint(access)) return { level: access.level };
+  const { point, level } = access as { point: unknown; level: Level };
+  return { level, point: typeof point === "string" ? point : "computed" };
+}
+
+function apiRouter<App>(endpoints: Record<string, Endpoint<z.ZodType, z.ZodType, App>>, routes: Record<string, Route>): Router<any, { app: App }> {
+  const base = os.$context<{ app: App }>();
+  return Object.fromEntries(
+    Object.keys(routes).map((name) => {
+      const e = endpoints[name]!;
+      const procedure = base
+        .route({
+          method: routes[name]!.method,
+          path: routes[name]!.path as `/${string}`,
+          ...(e.description && { description: e.description }),
+          spec: (operation) => ({ ...operation, "x-platform-access": accessSpec(e.access) }),
+        })
+        .input(e.input)
+        .output(e.output)
+        .handler(async ({ input, context }) => {
+          try {
+            return await runEndpoint(e, input, context.app);
+          } catch (error) {
+            const refused = await refusal(error);
+            if (refused) throw new ORPCError("ENDPOINT_ERROR", refused);
+            throw error;
+          }
+        });
+      return [name, procedure];
+    }),
+  );
+}
+
+// The OpenAPI 3.1 document of the endpoints served over the API, as OPENAPI_PATH serves it; app code
+// can build its own reference page from it.
+export async function openApiDocument(endpoints: Record<string, Endpoint<z.ZodType, z.ZodType, any>>, info: { title: string; version?: string; url?: string }): Promise<Record<string, unknown>> {
+  const routes = apiRoutes(endpoints);
+  const generator = new OpenAPIGenerator({ schemaConverters: [new ZodToJsonSchemaConverter()] });
+  const document = await generator.generate(apiRouter(endpoints, routes), {
+    info: { title: info.title, version: info.version ?? "1" },
+    ...(info.url && { servers: [{ url: info.url }] }),
+  });
+  return document as unknown as Record<string, unknown>;
+}
+
 export interface ApiHandler<App> {
   handle(request: Request, app: App): Promise<Response | undefined>;
 }
@@ -204,26 +258,8 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
     return Object.keys(fields).length === 0 ? [] : [{ method: routes[name]!.method, pattern: pathPattern(routes[name]!.path), bytes: bodyLimit(fields) }];
   });
 
-  const base = os.$context<{ app: App }>();
-  const router: Router<any, { app: App }> = Object.fromEntries(
-    names.map((name) => {
-      const e = endpoints[name]!;
-      const procedure = base
-        .route({ method: routes[name]!.method, path: routes[name]!.path as `/${string}`, ...(e.description && { description: e.description }) })
-        .input(e.input)
-        .output(e.output)
-        .handler(async ({ input, context }) => {
-          try {
-            return await runEndpoint(e, input, context.app);
-          } catch (error) {
-            const refused = await refusal(error);
-            if (refused) throw new ORPCError("ENDPOINT_ERROR", refused);
-            throw error;
-          }
-        });
-      return [name, procedure];
-    }),
-  );
+  const router = apiRouter(endpoints, routes);
+  let document: Promise<Record<string, unknown>> | undefined;
   const handler = new OpenAPIHandler(router, {
     plugins: [new experimental_ZodSmartCoercionPlugin()],
     clientInterceptors: [
@@ -242,6 +278,14 @@ export function apiHandler<App>(endpoints: Record<string, Endpoint<z.ZodType, z.
     async handle(request, app) {
       const length = Number(request.headers.get("content-length") ?? 0);
       const pathname = new URL(request.url).pathname;
+      if (pathname === OPENAPI_PATH && (request.method === "GET" || request.method === "HEAD")) {
+        const current = app as { env?: { APP_NAME?: string; APP_URL?: string; DEPLOY_COMMIT?: string; BETTER_AUTH_SECRET?: string }; session?: () => Promise<unknown> };
+        const env = current.env ?? {};
+        // Like every /api/ path outside /api/public/, it needs someone signed in once the app has auth.
+        if (env.BETTER_AUTH_SECRET && !(await current.session?.().catch(() => null))) return Response.json({ error: "sign in to read the API document" }, { status: 401 });
+        document ??= openApiDocument(endpoints, { title: env.APP_NAME ?? "app", version: env.DEPLOY_COMMIT, url: env.APP_URL });
+        return Response.json(await document);
+      }
       const limit = limits.find((l) => l.method === request.method && l.pattern.test(pathname));
       if (limit && length > limit.bytes) return Response.json({ error: `the request is ${length} bytes; this endpoint takes at most ${limit.bytes}` }, { status: 413 });
       const { matched, response } = await handler.handle(request, { context: { app } });

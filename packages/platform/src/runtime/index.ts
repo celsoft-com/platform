@@ -6,7 +6,7 @@ import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, type Acces
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings, type Mail } from "./email.js";
-import { apiHandler, getMatcher, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
+import { apiHandler, getMatcher, OPENAPI_PATH, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
 import type { AppContext, Session, User } from "./types.js";
 import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
 import { createFiles, type Files, type FilesBindings } from "./files.js";
@@ -29,7 +29,7 @@ export { LEVELS, LINK_HEADER, MAX_DEPTH, organizationPoint, teamPoint, type Acce
 export type { Invitation, Member, Organization, Organizations, Team } from "./organizations.js";
 export type { Auth } from "./auth.js";
 export { EndpointError } from "./endpoint-error.js";
-export { endpoint, type Door, type Endpoint, type EndpointDefinition, type Invalidates, type Method } from "./endpoints.js";
+export { endpoint, OPENAPI_PATH, openApiDocument, type Door, type Endpoint, type EndpointDefinition, type Invalidates, type Method } from "./endpoints.js";
 export { page, route, type Page, type PageHandler, type PageResult, type PageRoute, type PathParams } from "./pages.js";
 export type { Email, EmailMessage } from "./email.js";
 export type { FileEntry, Files, Folder, PutOptions, StoredFile, StoredObject } from "./files.js";
@@ -578,6 +578,8 @@ async function platformRoute<Env extends PlatformBindings, Schema extends Record
     const address = (await readJsonBody<{ email?: unknown }>(request, { clone: true }))?.email;
     if (typeof address !== "string" || !(await signupAllowed(app.db as unknown as NodePgDatabase<Record<string, unknown>>, address))) return Response.json({ message: INVITE_ONLY, code: "INVITE_ONLY" }, { status: 403 });
   }
+  // The API document is the API's own, served with the endpoints.
+  if (path === OPENAPI_PATH) return undefined;
   if (path.startsWith(PLATFORM_API)) {
     if (env.AUTH_ORGANIZATIONS !== "on") return json({ error: "not found" }, 404);
     await app.requireUser();

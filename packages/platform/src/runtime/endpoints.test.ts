@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { defineApp, endpoint, EndpointError } from "./index.js";
+import { defineApp, endpoint, EndpointError, OPENAPI_PATH, openApiDocument, upload } from "./index.js";
 import { apiRoutes } from "./endpoints.js";
 
 const ctx = { waitUntil: () => {} };
@@ -80,6 +80,39 @@ describe("endpoints over the API", () => {
 
   it("leaves every other request to the handler, including MCP-only endpoints", async () => {
     expect(await call("/api/public/other")).toEqual({ status: 200, body: "handler" });
+  });
+});
+
+describe("the API's OpenAPI document", () => {
+  type Doc = { openapi: string; info: { title: string }; paths: Record<string, Record<string, { operationId: string; "x-platform-access": unknown; requestBody?: unknown; parameters?: { name: string }[] }>> };
+
+  it("serves every API endpoint with its method, path, schemas and access, and no MCP-only one", async () => {
+    const { status, body } = await call(OPENAPI_PATH);
+    const doc = body as Doc;
+    expect(status).toBe(200);
+    expect(doc.openapi).toMatch(/^3\.1/);
+    expect(doc.paths["/api/public/notes/{id}"]!.get).toMatchObject({ operationId: "getNote", "x-platform-access": { anyone: true } });
+    expect(doc.paths["/api/public/notes/{id}"]!.get!.parameters!.map((p) => p.name)).toContain("id");
+    expect(doc.paths["/api/public/folders/{folder}/notes"]!.post!.requestBody).toBeDefined();
+    expect(JSON.stringify(doc)).not.toContain("toolOnly");
+  });
+
+  it("says which level and point each endpoint needs, and documents file inputs", async () => {
+    const doc = (await openApiDocument(
+      {
+        read: endpoint({ method: "GET", path: "/api/notes/:id", input: z.object({ id: z.string() }), output: z.object({}), access: { point: "id", level: "read" } }, () => ({})),
+        mine: endpoint({ method: "GET", path: "/api/mine", input: z.object({}), output: z.object({}), access: { level: "write" } }, () => ({})),
+        moved: endpoint({ method: "POST", path: "/api/move", input: z.object({ to: z.string() }), output: z.object({}), access: { point: ({ to }) => `folder:${to}`, level: "create" } }, () => ({})),
+        attach: endpoint({ method: "POST", path: "/api/attach", input: z.object({ id: z.string(), file: upload() }), output: z.object({}), access: { point: "id", level: "write" } }, () => ({})),
+      },
+      { title: "notes", url: "https://notes.example" },
+    )) as unknown as Doc & { servers: { url: string }[] };
+    expect(doc.info.title).toBe("notes");
+    expect(doc.servers).toEqual([{ url: "https://notes.example" }]);
+    expect(doc.paths["/api/notes/{id}"]!.get!["x-platform-access"]).toEqual({ level: "read", point: "id" });
+    expect(doc.paths["/api/mine"]!.get!["x-platform-access"]).toEqual({ level: "write" });
+    expect(doc.paths["/api/move"]!.post!["x-platform-access"]).toEqual({ level: "create", point: "computed" });
+    expect(doc.paths["/api/attach"]!.post!.requestBody).toBeDefined();
   });
 });
 

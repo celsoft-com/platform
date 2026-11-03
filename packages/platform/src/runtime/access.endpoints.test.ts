@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { freshDatabase, world } from "../../test/database.js";
 import { applyStaticPoints, organizationPoint, type Access, type Level } from "./access.js";
-import { apiHandler, apiRoutes, endpoint, undeclaredAccess } from "./endpoints.js";
+import { apiHandler, apiRoutes, endpoint, OPENAPI_PATH, undeclaredAccess } from "./endpoints.js";
 import { defineApp } from "./index.js";
 import { serveMcp } from "./mcp-server.js";
 
@@ -246,5 +246,36 @@ describe("Wiring with auth", () => {
       ctx,
     );
     expect(form.status).toBe(403);
+  });
+});
+
+describe("The API document with auth and organizations on", () => {
+  it("needs someone signed in, like every /api/ path outside /api/public/", async () => {
+    const app = defineApp(undefined, {
+      pool: (connectionString) => new Pool({ connectionString, max: 2 }),
+      endpoints: { open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({}), access: { level: "read" } }, () => ({})) },
+    });
+    const env = { DB: { connectionString: url }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", APP_URL: "https://app.test", APP_NAME: "notes", ACCESS: "on", AUTH_ORGANIZATIONS: "on", EMAIL_MODE: "capture" as const };
+    expect((await app.fetch(new Request(`https://app.test${OPENAPI_PATH}`), env, { waitUntil: () => {} })).status).toBe(401);
+  });
+
+  it("is served at OPENAPI_PATH to someone signed in, past the platform's own /api/platform/ routes, titled with the app's name", async () => {
+    const app = defineApp(undefined, {
+      pool: (connectionString) => new Pool({ connectionString, max: 2 }),
+      endpoints: { open: endpoint({ method: "GET", path: "/api/open", input: z.object({}), output: z.object({}), access: { level: "read" } }, () => ({})) },
+    });
+    const env = { DB: { connectionString: url }, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret", AUTH_SIGNUP: "open", APP_URL: "https://app.test", APP_NAME: "notes", ACCESS: "on", AUTH_ORGANIZATIONS: "on", EMAIL_MODE: "capture" as const };
+    const ctx = { waitUntil: () => {} };
+    const signedUp = await app.fetch(
+      new Request("https://app.test/api/auth/sign-up/email", { method: "POST", headers: { "content-type": "application/json", origin: "https://app.test" }, body: JSON.stringify({ name: "Pat", email: `${uid()}@example.com`, password: "a-long-password-1" }) }),
+      env,
+      ctx,
+    );
+    const cookie = signedUp.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    const response = await app.fetch(new Request(`https://app.test${OPENAPI_PATH}`, { headers: { cookie } }), env, ctx);
+    expect(response.status).toBe(200);
+    const doc = (await response.json()) as { info: { title: string }; paths: Record<string, unknown> };
+    expect(doc.info.title).toBe("notes");
+    expect(Object.keys(doc.paths)).toEqual(["/api/open"]);
   });
 });
