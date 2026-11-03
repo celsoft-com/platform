@@ -72,7 +72,8 @@ export function renderScreen(path: ScreenPath, appName: string, stylesheet: stri
         `<input class="platform-input" id="${f.name}" name="${f.name}" type="${f.type}" autocomplete="${f.autocomplete}" required${f.type === "password" ? ' minlength="8"' : ""}></label>`,
     )
     .join("");
-  const links = screen.links.map(([href, text]) => `<a href="${href}" data-carry>${text}</a>`).join("");
+  // A link to another screen carries the query along; an in-page action such as #deny is no link to carry.
+  const links = screen.links.map(([href, text]) => (href.startsWith("#") ? `<a href="${href}" data-action="${href.slice(1)}">${text}</a>` : `<a href="${href}" data-carry>${text}</a>`)).join("");
   const html = htmlDocument({
     title: screen.title,
     appName,
@@ -175,8 +176,8 @@ const actions = {
 };
 
 if (page === "consent") {
-  const deny = document.querySelector('a[href^="#deny"]');
-  deny.addEventListener("click", async e => {
+  const deny = document.querySelector('[data-action="deny"]');
+  deny?.addEventListener("click", async e => {
     e.preventDefault();
     try { follow(await post("/api/auth/oauth2/consent", { accept: false, oauth_query: oauthQuery })); }
     catch (err) { error.textContent = err.message; error.hidden = false; }
