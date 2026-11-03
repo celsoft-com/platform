@@ -238,7 +238,7 @@ export async function ownerReset(ctx: Context, config: Config, email: string, pr
   const password = await newPassword(terminal);
   if (ctx.run.dryRun) return terminal.log(`~ would make ${email} the owner on ${branch.name} and set its password`);
   if (!(await resetOwner(await ctx.ports.neon.connectionUri(project, branch.id), email, password))) {
-    throw new PreflightError(`no account uses ${email} on ${branch.name}; sign up with it first`);
+    throw new PreflightError(`no account uses ${email} on ${branch.name}, so nothing changed; sign up with it first, after the owner invites it at /invites when sign-up is invite-only, then run this again`);
   }
   terminal.log(`+ ${email} is the owner on ${branch.name}, with the new password; its sessions are signed out`);
 }
