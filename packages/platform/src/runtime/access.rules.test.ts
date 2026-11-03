@@ -233,6 +233,22 @@ describe("Points", () => {
     await expect(owner.asEveryone().grant(closed, { everyone: true }, "read")).rejects.toThrow(/only reads/);
   });
 
+  it("P16: points lists, sorted, the ids with the prefix the caller can read, the prefix taken literally", async () => {
+    const owner = w.as(await w.user());
+    const tag = uid();
+    const [b, a, other, wild] = [`pp-${tag}/b`, `pp-${tag}/a`, `pq-${tag}`, `pp-${tag}%x`];
+    for (const id of [b, a, other, wild]) await owner.create(id);
+    await owner.grant(b, { everyone: true }, "read");
+    const stranger = w.as(await w.user());
+    expect(await owner.points({ prefix: `pp-${tag}/` })).toEqual([a, b]);
+    expect(await owner.points({ prefix: `pp-${tag}` })).toEqual([wild, a, b]);
+    expect(await stranger.points({ prefix: `pp-${tag}` })).toEqual([b]);
+    expect(await owner.asEveryone().points({ prefix: `pp-${tag}` })).toEqual([b]);
+    expect(await owner.points({ prefix: `pp-${tag}_` })).toEqual([]);
+    expect(await owner.points({ prefix: `pp-${tag}%` })).toEqual([wild]);
+    await appError(owner.points({ prefix: "x".repeat(201) }));
+  });
+
   it("P13: a point's own settings are shown to those who can read it", async () => {
     const c = await company();
     expect(await w.as(c.teammate).point(c.page)).toEqual({ id: c.page, parent: c.folder, inherits: true, static: false, organizationId: c.org });
@@ -731,7 +747,24 @@ describe("Links", () => {
     await refused(w.as(writer).link(page, "read"));
     await refused(w.as(writer).links(page));
     await refused(w.as(writer).revokeLink(page, link.id));
-    expect(await as.links(page)).toEqual([{ id: link.id, level: "read", expiresAt: null }]);
+    expect(await as.links(page)).toEqual([{ id: link.id, level: "read", label: null, expiresAt: null, createdAt: expect.any(Date) }]);
+  });
+
+  it("K14: links list each link's label, expiry and when it was made; a label is 1 to 100 characters", async () => {
+    const { as, page } = await personal();
+    const expires = new Date(Date.now() + 60_000);
+    const before = Date.now() - 5_000;
+    const first = await as.link(page, "read", { label: "For Ana" });
+    const second = await as.link(page, "write", { expires });
+    const listed = await as.links(page);
+    expect(listed).toEqual([
+      { id: first.id, level: "read", label: "For Ana", expiresAt: null, createdAt: expect.any(Date) },
+      { id: second.id, level: "write", label: null, expiresAt: expires, createdAt: expect.any(Date) },
+    ]);
+    expect(listed[0]!.createdAt.getTime()).toBeGreaterThan(before);
+    await appError(as.link(page, "read", { label: "" }), /label/);
+    await appError(as.link(page, "read", { label: "x".repeat(101) }), /label/);
+    expect(await as.links(page)).toHaveLength(2);
   });
 
   it("K8: revoking with another point's link id revokes nothing", async () => {

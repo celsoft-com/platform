@@ -466,11 +466,16 @@ export const accessLink = pgTable(
       .references(() => accessPoint.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull().unique(),
     level: smallint("level").notNull(),
+    label: text("label"),
     expiresAt: at("expires_at"),
     createdBy: uuid("created_by").references(() => user.id, { onDelete: "set null" }),
     ...timestamps(),
   },
-  (t) => [check("access_link_level", sql`${t.level} between 1 and 3`), index("access_link_point_idx").on(t.pointId)],
+  (t) => [
+    check("access_link_level", sql`${t.level} between 1 and 3`),
+    check("access_link_label", sql`${t.label} is null or length(${t.label}) between 1 and 100`),
+    index("access_link_point_idx").on(t.pointId),
+  ],
 );
 
 // An invitation to sign up, once sign-up is invite-only: one address, used up when it signs up.

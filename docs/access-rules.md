@@ -43,6 +43,9 @@ checked against a plain reference version of these rules, in `access.model.test.
 | P11 | The app acting as itself creates | No creator grant; the app passes every check |
 | P12 | Ids with quotes, `%`, `_`, other scripts | Taken literally; never match another point |
 | P13 | Reading a point's own settings | Parent, inheritance, static and organization, for those with `read`; 404 otherwise |
+| P14 | `filter(ids, level)` | The ids the caller has the level on, in their order, in one query |
+| P15 | `asEveryone()` | Answers as anyone signed out with no link, whoever asks; writes are an error in the app's code |
+| P16 | `points({ prefix })` | The ids starting with the prefix that the caller can `read`, sorted; the prefix is taken literally |
 
 ## Token caps
 
@@ -112,6 +115,7 @@ checked against a plain reference version of these rules, in `access.model.test.
 | K6 | What is stored | Only a hash of the token |
 | K7 | Making, listing, revoking links | Need `manage` |
 | K8 | Revoking with another point's link id | Revokes nothing |
+| K14 | Listing a point's links | Each link's id, level, label, expiry and when it was made; a label is 1 to 100 characters, or none |
 | K9 | Link and grant together | The higher wins |
 | K10 | Link token posted to `/api/platform/link` | Kept as an HttpOnly, same-site cookie for its point, until the link expires, at most 30 days; anything else is a 404 with no cookie |
 | K11 | Request with link cookies | Each counts like the header, on pages, downloads and the API; at most 20 per request |

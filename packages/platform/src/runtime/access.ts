@@ -36,8 +36,12 @@ export interface ShareNotice {
 export interface Link {
   id: string;
   level: Level;
+  label: string | null;
   expiresAt: Date | null;
+  createdAt: Date;
 }
+
+export const MAX_LABEL = 100;
 
 export interface PointOptions {
   // An existing point this one sits under; naming it needs `create` on it.
@@ -87,7 +91,7 @@ export interface Access {
   grant(point: string, to: Grantee, level: Level, options?: { email?: ShareEmail }): Promise<void>;
   revoke(point: string, to: Grantee): Promise<void>;
   grants(point: string): Promise<Grant[]>;
-  link(point: string, level: Level, options?: { expires?: Date }): Promise<{ id: string; token: string }>;
+  link(point: string, level: Level, options?: { expires?: Date; label?: string }): Promise<{ id: string; token: string }>;
   links(point: string): Promise<Link[]>;
   revokeLink(point: string, linkId: string): Promise<void>;
   // A condition for the app's own query: rows whose `column` holds the id of a point the caller
@@ -96,6 +100,8 @@ export interface Access {
   allows(level: Level, column: unknown): Promise<SQL>;
   // The ids the caller has `level` on, in their order, in one query; an id no point has is left out.
   filter(points: readonly string[], level: Level): Promise<string[]>;
+  // The ids starting with `prefix` the caller can read, sorted; the prefix is taken literally.
+  points(options?: { prefix?: string }): Promise<string[]>;
   // The same calls inside the app's transaction, so a change and its access commit together.
   in(tx: unknown): Access;
   // The app acting as itself: every check passes and nobody is the creator. For work no user
@@ -571,24 +577,31 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
         const n = rank(level);
         if (n > WRITE) throw new Error(`a link can carry read, create or write, never ${level}`);
         if (options.expires !== undefined && !(options.expires instanceof Date && !Number.isNaN(options.expires.getTime()))) throw new Error("a link's expires must be a valid Date");
+        if (options.label !== undefined && !(typeof options.label === "string" && options.label.length > 0 && options.label.length <= MAX_LABEL)) throw new Error(`a link's label must be 1 to ${MAX_LABEL} characters`);
         await changeable(on, point, MANAGE);
         const token = newToken();
         const { userId } = await me();
         const [row] = await rows<{ id: string }>(
           on,
-          sql`insert into access_link (point_id, token_hash, level, expires_at, created_by)
-              values (${point}, ${await hashToken(token)}, ${n}, ${options.expires ?? null}, ${userParam(userId)}::uuid) returning id`,
+          sql`insert into access_link (point_id, token_hash, level, label, expires_at, created_by)
+              values (${point}, ${await hashToken(token)}, ${n}, ${options.label ?? null}, ${options.expires ?? null}, ${userParam(userId)}::uuid) returning id`,
         );
         return { id: row!.id, token };
       },
 
       async links(point) {
         await need(on, point, MANAGE);
-        const found = await rows<{ id: string; level: number; expires_at: Date | null }>(
+        const found = await rows<{ id: string; level: number; label: string | null; expires_at: Date | null; created_at: Date }>(
           on,
-          sql`select id, level, expires_at from access_link where point_id = ${point} order by created_at, id`,
+          sql`select id, level, label, expires_at, created_at from access_link where point_id = ${point} order by created_at, id`,
         );
-        return found.map((row) => ({ id: row.id, level: named(Number(row.level))!, expiresAt: row.expires_at ? new Date(row.expires_at) : null }));
+        return found.map((row) => ({
+          id: row.id,
+          level: named(Number(row.level))!,
+          label: row.label,
+          expiresAt: row.expires_at ? new Date(row.expires_at) : null,
+          createdAt: new Date(row.created_at),
+        }));
       },
 
       async revokeLink(point, linkId) {
@@ -603,6 +616,16 @@ export function createAccess(db: Db, caller: () => Promise<Caller>, options: Acc
         if (ids.length === 0) return [];
         const allowed = new Set((await rows<{ id: string }>(on, sql`select id from jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb) as id where ${levelSql(sql`id`, await me())} >= ${rank(level)}`)).map((r) => r.id));
         return points.filter((p) => allowed.has(p));
+      },
+
+      async points(options = {}) {
+        const prefix = options.prefix ?? "";
+        if (typeof prefix !== "string" || prefix.length > 200) throw new Error("a points prefix must be a string of at most 200 characters");
+        const found = await rows<{ id: string }>(
+          on,
+          sql`select id from access_point where starts_with(id, ${prefix}) and ${levelSql(sql`id`, await me())} >= ${READ} order by id collate "C"`,
+        );
+        return found.map((r) => r.id);
       },
 
       in: (tx) => bound(tx as Db, me),

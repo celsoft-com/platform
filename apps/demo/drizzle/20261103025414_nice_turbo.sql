@@ -1,0 +1,2 @@
+ALTER TABLE "access_link" ADD COLUMN "label" text;--> statement-breakpoint
+ALTER TABLE "access_link" ADD CONSTRAINT "access_link_label" CHECK ("access_link"."label" is null or length("access_link"."label") between 1 and 100);
