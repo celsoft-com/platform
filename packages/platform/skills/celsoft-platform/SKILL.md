@@ -170,7 +170,7 @@ export async function getSettings(app: App<typeof schema>, id: string) {
 
 1. **Set:** `await app.redirects.set("/about", "/p/about")` answers a GET or HEAD of `/about` with a 301 to `/p/about`, keeping the query; `{ status: 308 }` picks 301, 302, 307 or 308, and `to` may be an `https://` address.
 2. **Folders:** `set("/essay", "/p/essay", { prefix: true })` also moves every path below it, keeping the rest: `/essay/x` goes to `/p/essay/x`; the longest matching prefix wins, and an exact one beats any prefix.
-3. **Only what nothing answers:** a redirect is read once a path's files, pages, endpoints and platform routes have all passed on it, just before the 404 page, so a path that answers keeps answering and costs nothing more. `/`, `/api/` and loops are refused.
+3. **Only where the 404 page would go:** a redirect is read when nothing answers a path, and when a page route answers 404 (no matching route, refused params, the gate, or the handler's own 404), so a moved page inside a claim, such as `/p/trip`, still redirects; a path that answers keeps answering and costs nothing more. `/`, `/api/` and loops are refused.
 4. **Manage:** `list()` and `remove(from)`; leave a redirect when content moves, so links into it keep working. `app.routes.serves` does not know redirects.
 
 ## `app.files`

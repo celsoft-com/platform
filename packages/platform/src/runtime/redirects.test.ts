@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { beforeEach, describe, expect, it } from "vitest";
 import { freshDatabase } from "../../test/database.js";
-import { defineApp, page, route } from "./index.js";
+import { defineApp, EndpointError, page, route } from "./index.js";
 import { createRedirects } from "./redirects.js";
 
 // Redirects as the app keeps them: read only when nothing else answers, just before the 404 page.
@@ -11,7 +11,17 @@ const { pool, url } = await freshDatabase();
 const redirects = createRedirects(() => drizzle(pool) as never);
 const app = defineApp(undefined, {
   pool: (connectionString) => new Pool({ connectionString, max: 2 }),
-  pages: [page({ path: "/p", routes: { "/*path": route({ access: "anon" }, () => "<h1>page</h1>") } })],
+  pages: [
+    page({
+      path: "/p",
+      routes: {
+        "/*path": route({ access: "anon" }, ({ path }) => {
+          if (path.startsWith("moved")) throw new EndpointError(404, "no such page");
+          return "<h1>page</h1>";
+        }),
+      },
+    }),
+  ],
 });
 const env = { DB: { connectionString: url }, APP_URL: "https://app.test", APP_NAME: "test", FRONTEND: "files" };
 const get = async (path: string, method = "GET") => {
@@ -40,6 +50,14 @@ describe("redirects", () => {
     expect((await get("/essay")).location).toBe("/p/essay");
     expect((await get("/essay/drafts/one")).location).toBe("/p/archive/one");
     expect((await get("/essays")).status).toBe(404);
+  });
+
+  it("reach a path inside a page claim whose page answers 404, never one whose page answers", async () => {
+    await redirects.set("/p/moved/trip", "/p/journey");
+    await redirects.set("/p/moved/folder", "/p/elsewhere", { prefix: true });
+    expect(await get("/p/moved/trip")).toEqual({ status: 301, location: "/p/journey" });
+    expect((await get("/p/moved/folder/a")).location).toBe("/p/elsewhere/a");
+    expect((await get("/p/moved/other")).status).toBe(404);
   });
 
   it("never take a path something answers, nor POSTs", async () => {

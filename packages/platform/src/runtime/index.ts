@@ -220,7 +220,8 @@ export function defineApp<
         const platform = await platformRoute(request, url, env, current, options);
         if (platform) return platform;
       }
-      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx, current));
+      const moved = env.DB ? (at: URL) => findRedirect(resources.db as unknown as NodePgDatabase<Record<string, unknown>>, at) : undefined;
+      const page = await pages?.handle(request, url, current, Boolean(env.BETTER_AUTH_SECRET), pageCache(env, ctx, current), moved);
       if (page) return page;
       const answered = await api?.handle(request, current);
       if (answered) return answered;
@@ -228,9 +229,9 @@ export function defineApp<
       // answers gets the one 404 page, so a broken link is a 404 and app.routes agrees.
       if (!url.pathname.startsWith("/api/")) {
         // A path that moved: the app's redirects are read only here, once nothing else answered.
-        if (env.DB && (request.method === "GET" || request.method === "HEAD")) {
-          const moved = await findRedirect(resources.db as unknown as NodePgDatabase<Record<string, unknown>>, url);
-          if (moved) return moved;
+        if (moved && (request.method === "GET" || request.method === "HEAD")) {
+          const answer = await moved(url);
+          if (answer) return answer;
         }
         return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
       }

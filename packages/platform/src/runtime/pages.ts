@@ -149,7 +149,8 @@ export interface PageServer {
   routes(pathname: string): boolean;
   // The answer for a claimed path, or undefined for any other. `canSignIn` says the app has
   // sign-in screens to offer refused visitors; `cache` holds the answers of routes that ask.
-  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean, cache?: PageCache): Promise<Response | undefined>;
+  // `moved` answers a redirect the app keeps for the path, consulted wherever the 404 page would go.
+  handle(request: Request, url: URL, app: AnyApp, canSignIn: boolean, cache?: PageCache, moved?: (url: URL) => Promise<Response | undefined>): Promise<Response | undefined>;
 }
 
 export function pageServer(pages: readonly Page[]): PageServer | undefined {
@@ -205,12 +206,13 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       const claim = claimOf(pathname);
       return claim !== undefined && Boolean(routeOf(claim, pathname));
     },
-    async handle(request, url, app, canSignIn, cache) {
+    async handle(request, url, app, canSignIn, cache, moved) {
       const claim = claimOf(url.pathname);
       if (!claim) return undefined;
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
       // A missing page and a refused one get the same answer, so neither says which paths hold something.
-      const refuse = async () => html(refusedPage(url, canSignIn && !(await app.session().catch(() => null))), 404);
+      // A path that moved goes where it went, whether its route is missing or answers 404.
+      const refuse = async () => (await moved?.(url)) ?? html(refusedPage(url, canSignIn && !(await app.session().catch(() => null))), 404);
       const matched = routeOf(claim, url.pathname);
       if (!matched) return refuse();
       const { found, parts } = matched;

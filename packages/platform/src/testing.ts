@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile, rename } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { type Client, Pool } from "pg";
@@ -25,6 +26,8 @@ import { featureVars } from "./wrangler-config.js";
 // what was published for live rooms, which take no WebSockets here.
 
 export const TEST_URL = "http://localhost";
+
+const PLATFORM_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 interface TestableApp {
   endpoints: Record<string, Endpoint<any, any, any>>;
@@ -224,7 +227,9 @@ async function freshDatabase(dir: string, config: Config, staticPoints: Record<s
 // the migrations and the static points, so a template that exists was checked and built from
 // exactly what the app has now.
 export async function templateName(dir: string, config: Config, staticPoints: Record<string, StaticPoint>): Promise<string> {
-  const hash = createHash("sha256").update(JSON.stringify({ auth: Boolean(config.auth), staticPoints }));
+  // The platform's version too: an upgrade can change the platform's own tables, which every
+  // template holds, so a kept template from before it is never reused.
+  const hash = createHash("sha256").update(JSON.stringify({ auth: Boolean(config.auth), staticPoints, platform: PLATFORM_VERSION }));
   for (const file of await new DrizzleMigrator(dir, config).schemaSources()) hash.update(file).update(await readFile(file));
   const migrations = join(dir, MIGRATIONS_DIR);
   for (const file of await listStaticFiles(migrations)) hash.update(file).update(await readFile(join(migrations, file)));
