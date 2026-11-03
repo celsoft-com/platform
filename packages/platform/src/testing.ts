@@ -14,6 +14,7 @@ import { apiRoutes, type Endpoint } from "./runtime/endpoints.js";
 import { createFiles, memoryBucket, type Files } from "./runtime/files.js";
 import type { EdgeCache } from "./runtime/index.js";
 import { covers, features, workerFirst } from "./runtime/routes.js";
+import { MCP_PATH } from "./runtime/mcp.js";
 import { listStaticFiles } from "./static-files.js";
 import { sharedPostgres } from "./test-postgres.js";
 import { featureVars } from "./wrangler-config.js";
@@ -43,6 +44,9 @@ export interface Caller {
 export interface Acting<App> {
   call: Call<App>;
   fetch(path: string, init?: RequestInit): Promise<Response>;
+  // One JSON-RPC request to /mcp as that person, as an AI client sends it: the first call signs
+  // in through the app's own OAuth flow (register, consent, token), as a client would.
+  mcp(method: string, params?: object): Promise<{ result?: Record<string, unknown>; error?: { code: number; message: string } }>;
 }
 
 export interface TestApp<App> extends Acting<App> {
@@ -120,10 +124,26 @@ export async function testApp<App extends TestableApp>(app: App, options: { dir?
   }
 
   const routes = Object.fromEntries(Object.entries(apiRoutes(app.endpoints)).map(([name, r]) => [name, [r.method, r.path] as const]));
-  const acting = (headers: Record<string, string>): Acting<App> => ({
-    call: createCall<App>(routes, { url: TEST_URL, link: () => null, fetch: (request) => send(withHeaders(request, headers)), headers }),
-    fetch: (path, init = {}) => send(withHeaders(new Request(new URL(path, TEST_URL), init), headers)),
-  });
+  const acting = (headers: Record<string, string>): Acting<App> => {
+    const fetchAs = (path: string, init: RequestInit = {}) => send(withHeaders(new Request(new URL(path, TEST_URL), init), headers));
+    let token: Promise<string> | undefined;
+    let id = 0;
+    return {
+      call: createCall<App>(routes, { url: TEST_URL, link: () => null, fetch: (request) => send(withHeaders(request, headers)), headers }),
+      fetch: fetchAs,
+      async mcp(method, params = {}) {
+        if (!headers.cookie) throw new Error("mcp needs a signed-in person: t.as(await t.signUp(email)).mcp(...)");
+        token ??= mcpToken(fetchAs);
+        const response = await fetchAs(MCP_PATH, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${await token}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+        });
+        if (!response.ok) throw new Error(`/mcp answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+        return (await response.json()) as { result?: Record<string, unknown>; error?: { code: number; message: string } };
+      },
+    };
+  };
   const anonymous = acting({ origin: TEST_URL });
 
   return {
@@ -235,6 +255,39 @@ async function migratedTemplate(base: string, dir: string, config: Config, stati
 }
 
 const databaseUrl = (base: string, name: string) => base.replace("/postgres?", `/${name}?`);
+
+// An access token for /mcp, got the way an AI client gets one: it registers, the signed-in person
+// authorizes and consents, and it trades the code for a token with PKCE.
+async function mcpToken(fetchAs: (path: string, init?: RequestInit) => Promise<Response>): Promise<string> {
+  const json = { "content-type": "application/json" };
+  const redirect = "http://localhost:1/callback";
+  const resource = `${TEST_URL}${MCP_PATH}`;
+  const step = async (what: string, response: Response) => {
+    if (response.status >= 400) throw new Error(`MCP sign-in failed to ${what}: ${response.status} ${(await response.text()).slice(0, 200)}`);
+    return response;
+  };
+  const registered = await step("register", await fetchAs("/api/auth/oauth2/register", {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ client_name: "testApp", redirect_uris: [redirect], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] }),
+  }));
+  const { client_id } = (await registered.json()) as { client_id: string };
+  const verifier = randomBytes(32).toString("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const query = new URLSearchParams({ response_type: "code", client_id, redirect_uri: redirect, scope: "openid", state: "testApp", code_challenge: challenge, code_challenge_method: "S256", resource });
+  const authorized = await step("authorize", await fetchAs(`/api/auth/oauth2/authorize?${query}`, { redirect: "manual" }));
+  const consentAt = new URL(authorized.headers.get("location") ?? "", TEST_URL);
+  const consented = await step("consent", await fetchAs("/api/auth/oauth2/consent", { method: "POST", headers: json, body: JSON.stringify({ accept: true, oauth_query: consentAt.search.slice(1) }) }));
+  const { url } = (await consented.json()) as { url: string };
+  const code = new URL(url).searchParams.get("code");
+  if (!code) throw new Error(`MCP sign-in got no code from consent: ${url}`);
+  const exchanged = await step("trade the code for a token", await fetchAs("/api/auth/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id, code_verifier: verifier, resource }),
+  }));
+  return ((await exchanged.json()) as { access_token: string }).access_token;
+}
 
 // The Cache API as a test needs it: one store per testApp, matched by the exact key.
 function memoryEdgeCache(): EdgeCache {

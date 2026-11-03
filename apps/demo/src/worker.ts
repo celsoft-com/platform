@@ -177,6 +177,8 @@ export default defineApp(
     // A static point, declared here and applied at every start: anyone may read the about line, and the owner manages it.
     access: { points: { about: { grants: [{ to: { everyone: true }, level: "read" }, { to: { owner: true }, level: "manage" }] } } },
     live: { message: RoomMessage, canJoin: inRoom, canSend: inRoom },
+    // What an AI client is told on connecting, before it picks a tool.
+    mcp: { instructions: "Notes belong to a person, an organization or a team. Call listMyOrganizations first to learn which organizations and teams the signed-in user can write to." },
     endpoints: {
       about: endpoint(
         { method: "GET", path: "/api/public/about", input: z.object({}), output: z.object({ level: z.string() }), access: { point: () => "about", level: "read" } },

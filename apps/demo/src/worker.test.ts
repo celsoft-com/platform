@@ -40,6 +40,18 @@ describe("demo", () => {
     expect(Number(await stats())).toBe(before + 1);
   });
 
+  it("serves MCP to a signed-in client, with the app's instructions and only its MCP tools", async () => {
+    const person = t.as(await t.signUp("claude@example.com"));
+    const hello = await person.mcp("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+    expect(hello.result?.instructions).toMatch(/listMyOrganizations first/);
+    const { result } = await person.mcp("tools/list");
+    const tools = (result!.tools as { name: string }[]).map((tool) => tool.name);
+    expect(tools).toContain("listMyOrganizations");
+    expect(tools).not.toContain("listNotes");
+    const called = await person.mcp("tools/call", { name: "listMyOrganizations", arguments: {} });
+    expect(called.result?.isError).toBeFalsy();
+  });
+
   it("keeps /stats at the edge until a note is added", async () => {
     const writer = await t.signUp("cacher@example.com");
     const cache = async () => (await t.fetch("/stats")).headers.get("platform-cache");
