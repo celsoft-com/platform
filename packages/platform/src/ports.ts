@@ -128,8 +128,9 @@ export interface Migrator {
   // Installs the platform's access triggers and writes the app's static control points, read from
   // its Worker; run after migrations.
   prepareAccess(databaseUrl: string, points: Record<string, StaticPoint>): Promise<void>;
-  // The tables page caching keys by, written at deploy and by dev for any app with a database.
-  prepareCache(databaseUrl: string): Promise<void>;
+  // The platform's own tables outside the app's migrations, page cache versions and redirects,
+  // written at deploy and by dev for any app with a database.
+  prepareTables(databaseUrl: string): Promise<void>;
   dropAll(databaseUrl: string): Promise<void>;
   forgetSigningKeys(databaseUrl: string): Promise<void>;
 }

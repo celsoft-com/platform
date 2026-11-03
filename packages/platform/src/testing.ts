@@ -242,7 +242,7 @@ async function migratedTemplate(base: string, dir: string, config: Config, stati
       const url = databaseUrl(base, building);
       await migrator.migrate(url);
       if (config.auth) await migrator.prepareAccess(url, staticPoints);
-      await migrator.prepareCache(url);
+      await migrator.prepareTables(url);
       // Renamed only once whole, so a template that exists is always complete.
       await c.query(`alter database ${building} rename to ${name}`);
       const { rows } = await c.query<{ datname: string }>("select datname from pg_database where datname like 'template\\_%' and datname <> $1", [name]);

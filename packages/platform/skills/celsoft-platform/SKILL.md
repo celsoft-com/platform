@@ -141,7 +141,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 
 Each request gets `app`: `db` (Drizzle, typed with `schema`), `auth`, `invites`, `cache`, `routes`, `session()`, `requireUser()`,
 `files` (R2, folders; see `app.files`), `email` (`app.email.send(...)`), `live` (`app.live.publish(room, message)`),
-`access` (with `access` on), `organizations` (with organizations on), `cap` (the level the request's API token is capped at, or undefined), `env` and `waitUntil`. Each is created on first use.
+`redirects` (with a database; see Redirects below), `access` (with `access` on), `organizations` (with organizations on), `cap` (the level the request's API token is capped at, or undefined), `env` and `waitUntil`. Each is created on first use.
 
 `app.routes.serves(path)` says what answers a GET of a path, for checking links: `"platform"` (a screen or platform API that is on), `"page"` (a page route matches), `"endpoint"` (a GET endpoint's path matches), `"file"` (a frontend file, `/about` for `about.html` or `about/index.html`), `"fallback"` (nothing else, and `spa` gives `index.html`), or `null` for a 404. It is free: lists built into the Worker, no request. A query or `#fragment` is ignored, and hand-written handler paths are unknown, so a link to one reads `null`.
 
@@ -162,6 +162,15 @@ export async function getSettings(app: App<typeof schema>, id: string) {
 `app.env.APP_URL` is the app's own address with no trailing slash: the prod hostname, `https://pr-4.<preview zone>` on preview 4, and the local address in `dev`. Build absolute links from it, such as share links and the MCP address, since an endpoint never sees the request.
 
 `app.env.DEPLOY_TARGET` is `"production"`, `"preview"`, `"dev"` or `"test"`; `DEPLOY_AT` is when that deploy or `dev` run started, as an ISO time; `DEPLOY_COMMIT` and `DEPLOY_BRANCH` name the commit and branch it was made from (in CI, a pull request's own head, not its merge commit), and are absent under `testApp`. Show which deploy served a page from them rather than writing a stamp at build time.
+
+## Redirects
+
+`app.redirects` keeps moved paths as data, so content can move without a deploy:
+
+1. **Set:** `await app.redirects.set("/about", "/p/about")` answers a GET or HEAD of `/about` with a 301 to `/p/about`, keeping the query; `{ status: 308 }` picks 301, 302, 307 or 308, and `to` may be an `https://` address.
+2. **Folders:** `set("/essay", "/p/essay", { prefix: true })` also moves every path below it, keeping the rest: `/essay/x` goes to `/p/essay/x`; the longest matching prefix wins, and an exact one beats any prefix.
+3. **Only what nothing answers:** a redirect is read once a path's files, pages, endpoints and platform routes have all passed on it, just before the 404 page, so a path that answers keeps answering and costs nothing more. `/`, `/api/` and loops are refused.
+4. **Manage:** `list()` and `remove(from)`; leave a redirect when content moves, so links into it keep working. `app.routes.serves` does not know redirects.
 
 ## `app.files`
 

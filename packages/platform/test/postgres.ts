@@ -6,6 +6,7 @@ import type { TestProject } from "vitest/node";
 import * as platformSchema from "../src/schema.js";
 import { prepareAccess } from "../src/runtime/access-sql.js";
 import { prepareCache } from "../src/runtime/cache.js";
+import { REDIRECT_STATEMENTS } from "../src/runtime/redirects.js";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { sharedPostgres } from "../src/test-postgres.js";
 
@@ -45,6 +46,7 @@ async function start(project: TestProject) {
     for (const statement of await generateMigration(generateDrizzleJson({}), generateDrizzleJson(platformSchema))) await template.query(statement);
     await prepareAccess(drizzle(template));
     await prepareCache(drizzle(template));
+    for (const statement of REDIRECT_STATEMENTS) await drizzle(template).execute(statement);
     await template.end();
     await client.query(`drop database if exists ${TEMPLATE}`);
     await client.query(`alter database ${building} rename to ${TEMPLATE}`);

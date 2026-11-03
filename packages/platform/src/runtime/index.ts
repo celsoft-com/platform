@@ -6,6 +6,7 @@ import { createAccess, hashToken, LINK_HEADER, linkTarget, MAX_LINKS, type Acces
 import { LINK_EXCHANGE_PATH } from "./link-header.js";
 import { AUTH_PATH, createAuth, type Auth } from "./auth.js";
 import { createEmail, type Email, type EmailBindings, type Mail } from "./email.js";
+import { createRedirects, findRedirect, type Redirects } from "./redirects.js";
 import { apiHandler, getMatcher, OPENAPI_PATH, requireDeclaredAccess, withInvalidates, type Endpoint } from "./endpoints.js";
 import type { AppContext, Session, User } from "./types.js";
 import { createRoutes, features, servedFiles, type Routes } from "./routes.js";
@@ -38,6 +39,7 @@ export { upload, type UploadOptions } from "./upload.js";
 export type { QueryOptions, QueryResult } from "./jsonpath.js";
 export type { Live } from "./live.js";
 export type { Cache } from "./cache.js";
+export type { Redirect, Redirects, RedirectStatus } from "./redirects.js";
 export type { Routes, Served } from "./routes.js";
 export type { Invite, Invites } from "./invites.js";
 export type { LiveConnection, LiveHandlers, LivePeer } from "./live-client.js";
@@ -224,7 +226,14 @@ export function defineApp<
       if (answered) return answered;
       // Hand-written routes live under /api/; any other path no file, page or platform route
       // answers gets the one 404 page, so a broken link is a 404 and app.routes agrees.
-      if (!url.pathname.startsWith("/api/")) return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
+      if (!url.pathname.startsWith("/api/")) {
+        // A path that moved: the app's redirects are read only here, once nothing else answered.
+        if (env.DB && (request.method === "GET" || request.method === "HEAD")) {
+          const moved = await findRedirect(resources.db as unknown as NodePgDatabase<Record<string, unknown>>, url);
+          if (moved) return moved;
+        }
+        return notFoundPage(url, Boolean(env.BETTER_AUTH_SECRET) && !(await current.session().catch(() => null)));
+      }
       return await handle(request, current);
     } catch (thrown) {
       // A thrown Response, such as requireUser's sign-in redirect, is the answer as it stands.
@@ -300,6 +309,7 @@ interface RequestResources<Env extends PlatformBindings, Schema extends Record<s
   readonly auth: Auth;
   readonly live: Live;
   readonly cache: Cache;
+  readonly redirects: Redirects;
   readonly routes: Routes;
   waitUntil(promise: Promise<unknown>): void;
   // Ends the pool after the answer.
@@ -323,6 +333,7 @@ function requestResources<Env extends PlatformBindings, Schema extends Record<st
   let auth: Auth | undefined;
   let live: Live | undefined;
   let cache: Cache | undefined;
+  let redirects: Redirects | undefined;
   let routes: Routes | undefined;
 
   const resources: RequestResources<Env, Schema> = {
@@ -364,6 +375,10 @@ function requestResources<Env extends PlatformBindings, Schema extends Record<st
     get cache() {
       if (!env.DB) throw new Error("app.cache needs a database; add `database` to platform.jsonc");
       return (cache ??= createCache(() => resources.db as unknown as NodePgDatabase<Record<string, unknown>>));
+    },
+    get redirects() {
+      if (!env.DB) throw new Error("app.redirects needs a database; add `database` to platform.jsonc");
+      return (redirects ??= createRedirects(() => resources.db as unknown as NodePgDatabase<Record<string, unknown>>));
     },
     get routes() {
       return (routes ??= createRoutes({ features: features(env), frontend: env.FRONTEND, files: once.files, page: once.page, endpoint: once.endpoint }));
@@ -414,6 +429,9 @@ function asCaller<Env extends PlatformBindings, Schema extends Record<string, un
     },
     get live() {
       return resources.live;
+    },
+    get redirects() {
+      return resources.redirects;
     },
     get cache() {
       return resources.cache;

@@ -1,3 +1,4 @@
+import type { Redirects } from "./redirects.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Access, Level } from "./access.js";
 import type { Auth } from "./auth.js";
@@ -22,6 +23,7 @@ export interface AppContext<Env, Schema extends Record<string, unknown>> {
   readonly access: Access;
   readonly organizations: Organizations;
   readonly cache: Cache;
+  readonly redirects: Redirects;
   readonly invites: Invites;
   readonly routes: Routes;
   // The level the request's API token is capped at; undefined without a token.

@@ -5,7 +5,8 @@ import { defineApp, EndpointError } from "./index.js";
 
 function fakePool() {
   const calls: string[] = [];
-  const pool = { end: async () => void calls.push("end") } as unknown as Pool;
+  // Answers every query with no rows, as a database holding nothing would.
+  const pool = { end: async () => void calls.push("end"), query: async () => ({ rows: [], fields: [] }) } as unknown as Pool;
   return { pool, calls };
 }
 

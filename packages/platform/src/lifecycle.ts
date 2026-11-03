@@ -305,7 +305,7 @@ async function prepareBranch(ctx: Context, project: string, name: string | undef
   if (options.generate) await run.mutate("generate migrations from the schema", () => ports.migrator.generate(), undefined);
   await run.mutate(`run migrations on ${branch.name}`, () => ports.migrator.migrate(uri), undefined);
   await prepareAccessOn(ctx, uri, branch.name);
-  await run.mutate(`write page cache tables on ${branch.name}`, () => ports.migrator.prepareCache(uri), undefined);
+  await run.mutate(`write the page cache and redirect tables on ${branch.name}`, () => ports.migrator.prepareTables(uri), undefined);
   if (config.auth && (copied || options.forgetKeys)) await forgetSigningKeys(ctx, uri, branch.name);
   return { branch, uri };
 }

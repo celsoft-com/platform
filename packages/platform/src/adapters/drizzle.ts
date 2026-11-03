@@ -13,6 +13,7 @@ import { withClient } from "./database.js";
 import { applyStaticPoints as writeStaticPoints, type StaticPoint } from "../runtime/access.js";
 import { prepareAccess } from "../runtime/access-sql.js";
 import { prepareCache } from "../runtime/cache.js";
+import { REDIRECT_STATEMENTS } from "../runtime/redirects.js";
 import type { Question, Report } from "./drizzle-answers.js";
 
 export const APP_SCHEMA = "src/schema.ts";
@@ -90,9 +91,11 @@ export class DrizzleMigrator implements Migrator {
     }
   }
 
-  async prepareCache(databaseUrl: string): Promise<void> {
+  async prepareTables(databaseUrl: string): Promise<void> {
     await withClient(databaseUrl, async (client) => {
-      await prepareCache(drizzle(client) as never);
+      const db = drizzle(client);
+      await prepareCache(db as never);
+      for (const statement of REDIRECT_STATEMENTS) await db.execute(statement);
     });
   }
 
