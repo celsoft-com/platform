@@ -49,12 +49,12 @@ export class GhCli implements GitHub {
 
   private run(command: string, args: string[], stdin?: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { cwd: this.repoRoot, stdio: ["pipe", "pipe", "inherit"] });
+      const child = spawn(command, args, { cwd: this.repoRoot, stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "inherit"] });
       let out = "";
-      child.stdout.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      child.stdout!.on("data", (chunk: Buffer) => (out += chunk.toString()));
       child.on("error", reject);
       child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`${command} ${args[0]} ${args[1]} exited with code ${code}`))));
-      child.stdin.end(stdin ?? "");
+      if (stdin !== undefined) child.stdin!.end(stdin);
     });
   }
 }
