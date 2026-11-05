@@ -14,6 +14,7 @@ import { COMMANDS, NO_DRY_RUN, prNumber, repoRoot, UsageError, type Command, typ
 import { ConfigError, loadApp, type Config } from "./config.js";
 import { generate } from "./generate.js";
 import { HttpsError } from "./https.js";
+import { installedMismatch } from "./installed.js";
 import { checkWorkflow, tokenNames } from "./init.js";
 import { PreflightError, requireProjectKey, type Context, type Source } from "./lifecycle.js";
 import type { Repo } from "./ports.js";
@@ -72,6 +73,9 @@ async function main(argv: string[], terminal: Terminal): Promise<void> {
   const spec = COMMANDS[command.name] as Spec<Command["name"]>;
   const input = { appDir, dryRun, inCi, flags: values, terminal };
   if (spec.needs === "dir") return spec.run(command as never, input);
+  const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  const mismatch = await installedMismatch(appDir, version);
+  if (mismatch) throw new UsageError(mismatch);
   const { config, variables } = await loadApp(appDir);
   maskInCi(Object.values(variables));
   if (spec.needs === "app") return spec.run(command as never, { ...input, config, variables });
