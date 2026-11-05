@@ -24,6 +24,9 @@ class FakeGitHub implements GitHub {
   async ensureEnvironment(name: string) {
     this.environments.add(name);
   }
+  async target() {
+    return "acme/demo";
+  }
 }
 
 let root: string;

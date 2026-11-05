@@ -142,6 +142,8 @@ export interface GitHub {
   ensureEnvironment(name: string): Promise<void>;
   openPullRequests(): Promise<number[]>;
   repository(): Promise<Repo>;
+  // The owner/name every call goes to.
+  target(): Promise<string>;
 }
 
 export interface Ports {

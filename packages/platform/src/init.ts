@@ -53,6 +53,7 @@ export async function init({ repoRoot, appDir, config, variables, run, connect }
     run.note("✓ Resend API key can manage sending domains");
   }
 
+  run.note(`storing secrets in ${await github.target()}`);
   for (const name of names) {
     await run.mutate(`store ${name} as a GitHub secret`, () => github.setSecret(name, tokens[name]!), undefined);
   }
