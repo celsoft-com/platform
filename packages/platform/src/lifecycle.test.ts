@@ -70,6 +70,13 @@ describe("deploy prod", () => {
     expect(ports.wrangler.deploys).toHaveLength(2);
   });
 
+  it("only warns on a dry run, so a PR's look at prod is not red until the site moves over", async () => {
+    ports.cloudflare.records.push({ id: "netlify", type: "CNAME", name: "demo.example.com", content: "demo.netlify.app", comment: undefined });
+    await deploy(ctx(true), { kind: "prod" });
+    expect(log.some((line) => line.includes("⚠ a deploy would stop here: demo.example.com already has a DNS record"))).toBe(true);
+    expect(ports.wrangler.deploys).toEqual([]);
+  });
+
   it("checks a preview's hostname the same way", async () => {
     ports.cloudflare.records.push({ id: "x", type: "A", name: "pr-7.demo.example.com", content: "192.0.2.1", comment: undefined });
     await expect(deploy(ctx(), { kind: "preview", pr: 7 })).rejects.toThrow(/pr-7\.demo\.example\.com already has a DNS record/);
