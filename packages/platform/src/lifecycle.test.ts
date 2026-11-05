@@ -52,6 +52,29 @@ describe("deploy prod", () => {
     expect(d?.secrets).toEqual({ SESSION_SECRET: "s3cret" });
   });
 
+  it("refuses a hostname with a DNS record it did not make, before touching anything, and names it", async () => {
+    ports.cloudflare.records.push({ id: "netlify", type: "CNAME", name: "demo.example.com", content: "demo.netlify.app", comment: undefined });
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/demo\.example\.com already has a DNS record \(CNAME demo\.netlify\.app\)/);
+    expect(ports.wrangler.deploys).toEqual([]);
+    expect(ports.cloudflare.hyperdrives).toEqual([]);
+    expect(ports.neon.branches).toHaveLength(1);
+  });
+
+  it("refuses a hostname that is another Worker's custom domain, and redeploys onto its own", async () => {
+    ports.cloudflare.domains.set("demo.example.com", "someone-else");
+    await expect(deploy(ctx(), { kind: "prod" })).rejects.toThrow(/custom domain of the Worker someone-else/);
+    ports.cloudflare.domains.clear();
+    await deploy(ctx(), { kind: "prod" });
+    ports.cloudflare.records.push({ id: "own", type: "AAAA", name: "demo.example.com", content: "100::", comment: undefined });
+    await deploy(ctx(), { kind: "prod" });
+    expect(ports.wrangler.deploys).toHaveLength(2);
+  });
+
+  it("checks a preview's hostname the same way", async () => {
+    ports.cloudflare.records.push({ id: "x", type: "A", name: "pr-7.demo.example.com", content: "192.0.2.1", comment: undefined });
+    await expect(deploy(ctx(), { kind: "preview", pr: 7 })).rejects.toThrow(/pr-7\.demo\.example\.com already has a DNS record/);
+  });
+
   it("turns off query caching on an existing Hyperdrive config", async () => {
     await deploy(ctx(), { kind: "prod" });
     ports.cloudflare.hyperdrives[0]!.cached = true;

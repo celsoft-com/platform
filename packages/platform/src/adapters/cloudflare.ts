@@ -114,6 +114,13 @@ export class CloudflareApi implements Cloudflare {
     return names;
   }
 
+  async workerDomain(hostname: string): Promise<string | undefined> {
+    for await (const domain of this.client.workers.domains.list({ account_id: await this.accountId(), hostname })) {
+      if (domain.hostname === hostname) return domain.service;
+    }
+    return undefined;
+  }
+
   async dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]> {
     return this.listRecords({ zone_id: zoneId, name: { exact: name } });
   }

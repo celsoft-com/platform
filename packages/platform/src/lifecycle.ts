@@ -83,6 +83,7 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   if (!zone) throw new PreflightError(`no Cloudflare zone for ${config.hostname}; add the apex domain to this account, or check the token's zone access`);
   const hostname = target.kind === "prod" ? config.hostname : previewHostname(target.pr, config.hostname);
   await checkClaim(ctx, true);
+  await checkHostnameFree(ctx, hostname, zone, n.worker);
 
   const existingSecrets = await ports.cloudflare.workerSecretNames(n.worker);
   const generated: Record<string, string> = {};
@@ -119,6 +120,21 @@ export async function deploy(ctx: Context, target: Target): Promise<{ hostname: 
   await run.mutate(`deploy Worker ${n.worker} at https://${hostname}`, () => ports.wrangler.deploy(wrangler, { ...secrets, ...generated }), undefined);
   await finishBucketMove();
   return { hostname };
+}
+
+// Attaching a custom domain replaces whatever the hostname pointed at, without asking, when wrangler
+// runs outside a terminal. So a hostname is the app's only once it is free or already this Worker's:
+// a record or another Worker there is someone else's site, moved only by removing it first.
+async function checkHostnameFree(ctx: Context, hostname: string, zone: Zone, worker: string): Promise<void> {
+  const { ports } = ctx;
+  const owner = await ports.cloudflare.workerDomain(hostname);
+  if (owner === worker) return;
+  if (owner) throw new PreflightError(`${hostname} is already the custom domain of the Worker ${owner}; deploying would take it over. Remove it from that Worker first, or pick another hostname`);
+  const records = (await ports.cloudflare.dnsRecords(zone.id, hostname)).filter((r) => ["A", "AAAA", "CNAME"].includes(r.type));
+  if (records.length > 0) {
+    const found = records.map((r) => `${r.type} ${r.content}`).join(", ");
+    throw new PreflightError(`${hostname} already has a DNS record (${found}) that this app did not make; deploying would replace it and take over whatever it serves. Delete that record first (in whatever manages it, such as Terraform), then deploy`);
+  }
 }
 
 // How the deploy sends email, as the Worker's vars, and a sending key it made, if any. Prod sends

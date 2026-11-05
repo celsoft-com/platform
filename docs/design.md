@@ -45,7 +45,7 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Tool managers**: its own choice; the platform never requires mise or any other tool manager, and never writes their files, such as `mise.toml`, into an app; what it needs comes through `package.json`.
 2. **Platform**: owns only what it creates.
     1. **Own resources only**: it changes or deletes only resources named the way Resource Identity says it names the app's.
-    2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create.
+    2. **Hostnames**: attaches app and preview hostnames in the zone, and never touches a record it did not create; a deploy refuses a hostname that has a DNS record it did not make or is another Worker's custom domain, since attaching a custom domain would silently replace it.
     3. **Lifecycle**: creates, updates and deletes its own resources, previews included.
     4. **Helper code**: for everything it sets up, the runtime library ships the code that uses it, so apps never hand-write the plumbing.
 3. **Line in app code**: see App Code.

@@ -102,6 +102,10 @@ export class FakeCloudflare implements Cloudflare {
   async workerSecretNames(worker: string) {
     return [...(this.workerSecrets.get(worker) ?? [])];
   }
+  domains = new Map<string, string>();
+  async workerDomain(hostname: string) {
+    return this.domains.get(hostname);
+  }
   async dnsRecords(_zoneId: string, name: string) {
     return this.records.filter((r) => r.name === name);
   }
@@ -212,6 +216,9 @@ export class FakeWrangler implements Wrangler {
     const name = c.name as string;
     this.deploys.push({ config: c, secrets });
     this.cloudflare.workers.add(name);
+    for (const route of (c.routes as { pattern: string; custom_domain?: boolean }[] | undefined) ?? []) {
+      if (route.custom_domain) this.cloudflare.domains.set(route.pattern, name);
+    }
     this.cloudflare.workerHyperdrives.set(name, ((c.hyperdrive as { id: string }[] | undefined) ?? []).map((h) => h.id));
     const stored = this.cloudflare.workerSecrets.get(name) ?? new Set<string>();
     for (const key of Object.keys(secrets)) stored.add(key);

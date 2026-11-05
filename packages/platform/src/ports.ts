@@ -63,6 +63,8 @@ export interface Cloudflare {
   deleteWorker(name: string): Promise<void>;
   workerSecretNames(worker: string): Promise<string[]>;
   dnsRecords(zoneId: string, name: string): Promise<ZoneRecord[]>;
+  // The Worker a hostname is a custom domain of, if any.
+  workerDomain(hostname: string): Promise<string | undefined>;
   createDnsRecord(zoneId: string, record: DnsRecord, comment: string): Promise<void>;
   setDnsRecordComment(zoneId: string, id: string, comment: string): Promise<void>;
   commentedDnsRecords(zoneId: string, comment: string): Promise<ZoneRecord[]>;
