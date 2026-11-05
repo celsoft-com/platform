@@ -54,6 +54,9 @@ export function createAuth({ db, secret, baseURL, email, requireVerification }: 
     },
     emailVerification: {
       sendOnSignUp: true,
+      // An account whose confirmation never arrived, such as before the sending domain verified,
+      // gets another each time it tries to sign in, so it is never stuck.
+      sendOnSignIn: true,
       autoSignInAfterVerification: true,
       sendVerificationEmail: async ({ user, url }) => {
         await email.send({ to: user.email, subject: "Confirm your email", text: `Confirm your email address:\n\n${url}` });

@@ -21,6 +21,8 @@ export interface Context {
   // The app's static control points, read from its Worker and written after migrations.
   staticPoints?: Record<string, StaticPoint>;
   now?: () => Date;
+  // Waits between checks, such as for Resend to verify a sending domain; tests skip the wait.
+  sleep?: (ms: number) => Promise<void>;
   // The commit and branch being deployed, handed to the Worker as DEPLOY_COMMIT and DEPLOY_BRANCH.
   source?: () => Promise<Source>;
 }
@@ -346,7 +348,8 @@ export const dnsComment = (app: string) => `managed by @celsoft/platform for ${a
 
 // The app sends from its own hostname: Resend's DKIM and bounce records sit on names below it,
 // so the zone's existing mail records are never touched.
-async function ensureMailDomain({ config, ports, run }: Context, hostname: string, zone: Zone): Promise<MailDomain> {
+async function ensureMailDomain(ctx: Context, hostname: string, zone: Zone): Promise<MailDomain> {
+  const { config, ports, run } = ctx;
   const domain = await run.ensure(
     `Resend sending domain ${hostname}`,
     () => ports.mail.findDomain(hostname),
@@ -386,9 +389,25 @@ async function ensureMailDomain({ config, ports, run }: Context, hostname: strin
   }
 
   if (!domain.verified) {
-    await run.mutate(`ask Resend to verify ${hostname}; email sends once it does, usually within minutes`, () => ports.mail.verifyDomain(domain.id), undefined);
+    await run.mutate(`ask Resend to verify ${hostname}`, () => ports.mail.verifyDomain(domain.id), undefined);
+    if (!run.dryRun) await awaitVerified(ctx, hostname);
   }
   return domain;
+}
+
+export const VERIFY_WAIT_MS = 3 * 60_000;
+const VERIFY_POLL_MS = 10_000;
+
+// Until Resend verifies the domain, every email fails, and the first thing after a first deploy is
+// the owner signing up, whose confirmation is an email. So the deploy waits a few minutes for it,
+// and says plainly when it is still pending.
+async function awaitVerified({ ports, run, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) }: Context, hostname: string): Promise<void> {
+  for (let waited = 0; ; waited += VERIFY_POLL_MS) {
+    if ((await ports.mail.findDomain(hostname))?.verified) return run.note(`✓ Resend verified ${hostname}; email sends`);
+    if (waited >= VERIFY_WAIT_MS) break;
+    await sleep(VERIFY_POLL_MS);
+  }
+  run.note(`⚠ Resend has not verified ${hostname} yet, so no email sends, sign-up confirmations included; it usually finishes within the hour. Signing up still makes the account, and signing in once it has verified sends the confirmation again`);
 }
 
 // A Resend key is only readable when created, so a Worker missing its key gets a fresh one.

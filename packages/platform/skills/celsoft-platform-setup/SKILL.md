@@ -101,6 +101,7 @@ Only if `platform.jsonc` turns on `email` or `auth`. Apps send from their own ho
 1. **Open:** [API Keys](https://resend.com/api-keys), then **Create API Key**.
 2. **Permission:** **Full access**, since the platform adds each app's hostname as a sending domain.
 3. **Save:** paste it after `RESEND_API_KEY=` in `.env.secrets`.
+4. **First deploy:** it waits up to three minutes for Resend to verify the hostname's sending domain, then says whether email sends. Sign up as the owner once it does; before then no confirmation arrives, and signing in later sends it again.
 
 ## 8. Public repos
 

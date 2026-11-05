@@ -166,7 +166,15 @@ export class FakeMail implements Mail {
   private next = 1;
 
   async findDomain(name: string) {
-    return this.domains.find((d) => d.name === name);
+    const domain = this.domains.find((d) => d.name === name);
+    const left = domain && this.pending.get(domain.id);
+    if (domain && left !== undefined) {
+      if (left <= 1) {
+        this.pending.delete(domain.id);
+        domain.verified = true;
+      } else this.pending.set(domain.id, left - 1);
+    }
+    return domain;
   }
   async createDomain(name: string) {
     const domain = {
@@ -181,8 +189,12 @@ export class FakeMail implements Mail {
     this.domains.push(domain);
     return domain;
   }
+  // How many more looks a domain stays pending after it is asked to verify; Resend takes a while.
+  pendingLooks = 0;
+  private pending = new Map<string, number>();
   async verifyDomain(id: string) {
-    this.domains.find((d) => d.id === id)!.verified = true;
+    if (this.pendingLooks === 0) this.domains.find((d) => d.id === id)!.verified = true;
+    else this.pending.set(id, this.pendingLooks);
   }
   async deleteDomain(id: string) {
     this.domains = this.domains.filter((d) => d.id !== id);

@@ -206,6 +206,22 @@ describe("auth and email", () => {
     expect((ports.wrangler.deploys[0]!.config.assets as { run_worker_first: string[] }).run_worker_first).toEqual(["/api/*", "/"]);
   });
 
+  it("waits for Resend to verify the sending domain, and says so when it is still pending after the wait", async () => {
+    const waits: number[] = [];
+    const sleep = async (ms: number) => void waits.push(ms);
+    ports.mail.pendingLooks = 3;
+    await deploy({ ...authCtx(), sleep }, { kind: "prod" });
+    expect(log).toContain("  ✓ Resend verified demo.example.com; email sends");
+    expect(waits).toEqual([10_000, 10_000]);
+
+    ports = fakePorts();
+    log = [];
+    ports.mail.pendingLooks = 1000;
+    await deploy({ ...authCtx(), sleep }, { kind: "prod" });
+    expect(log.some((line) => line.startsWith("  ⚠ Resend has not verified demo.example.com yet"))).toBe(true);
+    expect(ports.wrangler.deploys).toHaveLength(1);
+  });
+
   it("sets up sending from the prod hostname and hands the Worker its keys once", async () => {
     await deploy(authCtx(), { kind: "prod" });
 
