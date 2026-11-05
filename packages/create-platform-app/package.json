@@ -1,6 +1,6 @@
 {
   "name": "@celsoft/create-platform-app",
-  "version": "0.56.0",
+  "version": "0.56.1",
   "description": "Create an app deployed by @celsoft/platform: npm create @celsoft/platform-app",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/celsoft-com/platform.git", "directory": "packages/create-platform-app" },
