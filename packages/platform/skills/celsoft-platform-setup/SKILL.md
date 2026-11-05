@@ -46,7 +46,7 @@ One Neon project per app. Its default branch is prod; the platform adds a branch
 
 ## 3. App
 
-Skip this step if the folder already has a `platform.jsonc`.
+Skip this step if the folder already has a `platform.jsonc`; for a copy of another app, see **Copying an app** below.
 
 ```sh
 npx @celsoft/platform new --name my-app --hostname app.example.com
@@ -63,7 +63,9 @@ flags it asks for each in a terminal. Add `--dry-run` to list what it would writ
 npx @celsoft/platform init
 ```
 
-The first run adds `.env.secrets` to `.gitignore`, writes a blank entry for each token the app needs, and stops. Steps 5 to 7 fill them in.
+It adds `.env.secrets` to `.gitignore` and writes a blank entry for each token the app needs, then stops while any is empty. Steps 5 to 7 fill them in.
+
+- **Filled already:** once every token has a value, the same command runs the whole of step 9, so never run it just to see the blanks.
 
 ## 5. Cloudflare API token
 
@@ -128,3 +130,13 @@ npx @celsoft/platform db generate
 ```
 
 It writes the SQL for the app's tables in `src/schema.ts`, plus the platform's own tables when auth is on, to `drizzle/`. Commit `drizzle/` and the workflow file, then push; from then on, pushes to main deploy prod and every PR gets a preview.
+
+## Copying an app
+
+When the repo starts as a copy of another app, such as a site made from a shared template, it already has `platform.jsonc`, `drizzle/` and `.github/workflows/platform.yml`.
+
+1. **Name and hostname:** edit `name` and `hostname` in `platform.jsonc` by hand to this app's own; nothing else writes them. A name another repo already deploys is refused.
+2. **Neon:** create a project of its own in step 2; never reuse the source app's.
+3. **Workflow:** the copied workflow runs on the first push, and fails harmlessly until step 9 stores the secrets. From step 9 on, every push to `main` deploys prod.
+4. **Hostname in use:** a deploy refuses a hostname that already has a DNS record the app did not make, or is another Worker's custom domain, and names it. To move a live site onto the app, remove that record first, then deploy.
+5. **The rest:** steps 4 to 10 as written; `drizzle/` is kept, and `db generate` adds only what this app's schema changes.
