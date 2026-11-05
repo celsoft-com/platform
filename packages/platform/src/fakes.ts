@@ -192,7 +192,10 @@ export class FakeMail implements Mail {
   // How many more looks a domain stays pending after it is asked to verify; Resend takes a while.
   pendingLooks = 0;
   private pending = new Map<string, number>();
+  verifyAsks = 0;
   async verifyDomain(id: string) {
+    this.verifyAsks++;
+    if (this.pending.has(id)) return;
     if (this.pendingLooks === 0) this.domains.find((d) => d.id === id)!.verified = true;
     else this.pending.set(id, this.pendingLooks);
   }

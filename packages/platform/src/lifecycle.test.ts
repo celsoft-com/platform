@@ -219,6 +219,7 @@ describe("auth and email", () => {
     ports.mail.pendingLooks = 1000;
     await deploy({ ...authCtx(), sleep }, { kind: "prod" });
     expect(log.some((line) => line.startsWith("  ⚠ Resend has not verified demo.example.com yet"))).toBe(true);
+    expect(ports.mail.verifyAsks).toBeGreaterThan(3);
     expect(ports.wrangler.deploys).toHaveLength(1);
   });
 

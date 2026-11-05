@@ -397,15 +397,20 @@ async function ensureMailDomain(ctx: Context, hostname: string, zone: Zone): Pro
 
 export const VERIFY_WAIT_MS = 3 * 60_000;
 const VERIFY_POLL_MS = 10_000;
+const VERIFY_ASK_MS = 30_000;
 
 // Until Resend verifies the domain, every email fails, and the first thing after a first deploy is
 // the owner signing up, whose confirmation is an email. So the deploy waits a few minutes for it,
 // and says plainly when it is still pending.
+// Resend checks once when asked, often before records just made have spread, then backs off for
+// hours; asking again while it waits makes it look now.
 async function awaitVerified({ ports, run, sleep = (ms) => new Promise((done) => setTimeout(done, ms)) }: Context, hostname: string): Promise<void> {
   for (let waited = 0; ; waited += VERIFY_POLL_MS) {
-    if ((await ports.mail.findDomain(hostname))?.verified) return run.note(`✓ Resend verified ${hostname}; email sends`);
+    const domain = await ports.mail.findDomain(hostname);
+    if (domain?.verified) return run.note(`✓ Resend verified ${hostname}; email sends`);
     if (waited >= VERIFY_WAIT_MS) break;
     await sleep(VERIFY_POLL_MS);
+    if (domain && waited > 0 && waited % VERIFY_ASK_MS === 0) await ports.mail.verifyDomain(domain.id);
   }
   run.note(`⚠ Resend has not verified ${hostname} yet, so no email sends, sign-up confirmations included; it usually finishes within the hour. Signing up still makes the account, and signing in once it has verified sends the confirmation again`);
 }
