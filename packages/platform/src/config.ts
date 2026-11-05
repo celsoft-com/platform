@@ -146,7 +146,7 @@ export async function readConfigText(dir: string): Promise<string> {
   try {
     return await readFile(path, "utf8");
   } catch {
-    throw new ConfigError(`${path} not found; run \`npx @celsoft/platform init\``);
+    throw new ConfigError(`${path} not found; this folder has no app yet. Run \`npx @celsoft/platform new\` to make one, or run commands from the app's folder`);
   }
 }
 
