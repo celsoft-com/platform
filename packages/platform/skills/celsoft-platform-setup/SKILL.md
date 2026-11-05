@@ -10,7 +10,8 @@ app's folder; the user only creates accounts and tokens. Every step is safe to r
 app deploys, the `celsoft-platform` skill covers changing it.
 
 - **Never read `.env.secrets`:** the user pastes each token into it; `init` reports which are empty.
-- **No hand-written setup:** every file below is written by a command; never write them yourself.
+- **No hand-written setup:** every file below is written by a command; never write them yourself, except a copied app's name and hostname (see **Copying an app**).
+- **The app's own copy:** run every command from the app's folder after `npm install`; a different version, such as one npx downloads, is refused.
 
 ## 0. Start
 
@@ -138,5 +139,6 @@ When the repo starts as a copy of another app, such as a site made from a shared
 1. **Name and hostname:** edit `name` and `hostname` in `platform.jsonc` by hand to this app's own; nothing else writes them. A name another repo already deploys is refused.
 2. **Neon:** create a project of its own in step 2; never reuse the source app's.
 3. **Workflow:** the copied workflow runs on the first push, and fails harmlessly until step 9 stores the secrets. From step 9 on, every push to `main` deploys prod.
-4. **Hostname in use:** a deploy refuses a hostname that already has a DNS record the app did not make, or is another Worker's custom domain, and names it. To move a live site onto the app, remove that record first, then deploy.
-5. **The rest:** steps 4 to 10 as written; `drizzle/` is kept, and `db generate` adds only what this app's schema changes.
+4. **Hostname in use:** a deploy refuses a hostname that already has a DNS record the app did not make, or is another Worker's custom domain, and names it. To move a live site onto the app, delete that record where it is managed (in Terraform, if Terraform made it, or it comes back), then at once rerun the refused prod run or push to `main`; the site is down from the delete until that deploy finishes, a few minutes.
+5. **Remotes:** keep the app's own repo as `origin`. With a second remote, such as the template as `upstream`, every GitHub call still goes to `origin`, and `init` names the repo before storing a secret.
+6. **The rest:** steps 4 to 10 as written; `drizzle/` is kept, and `db generate` adds only what this app's schema changes.
