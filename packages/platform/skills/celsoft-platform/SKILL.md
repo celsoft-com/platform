@@ -114,6 +114,7 @@ export default defineApp(undefined, { schema, endpoints, pages: [notesPage] });
 5. **Assets:** link CSS, scripts and images from unclaimed paths such as `/assets/`.
 6. **Access gate:** with `access` on, every route declares who may read it: `{ point: "id", level: "read" }` (a param, or a function of the params), `{ level: "read" }` (anyone signed in) or `"anon"` (anyone); the app refuses every request until each does. It is checked before the handler and the cache.
    - **Refused:** a refused visitor, a missing point and an unmatched path get one 404 page; signed out, it offers Sign in and Sign up, which return to the page. Never build a redirect for it.
+   - **Own 404:** `page({ path: "/data", notFound: () => Response.json({ error: "Not found" }), routes })` answers every 404 under that claim, missing and refused alike, such as JSON for a data claim; it is always sent as a 404 and never kept.
    - **Share links:** `/print/7#link=<token>` opens a gated page; the 404 page swaps the token for a cookie and reloads, so put links after `#`, never in the query.
    - **API tokens:** count on page GET and HEAD, capped at their level.
    - **Blind handler:** `app.session()`, `app.requireUser()` and `app.access` throw inside a page's handler, except `app.access.asEveryone()`; fetch anything personal in the browser from an endpoint.

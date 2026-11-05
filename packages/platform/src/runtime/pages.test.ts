@@ -242,6 +242,16 @@ describe("Pages: beside sign-in, links and tokens", () => {
           "/tree/*path": route({ access: { point: async ({ path }) => path.split("/").map((_, i, parts) => `tree:${parts.slice(0, parts.length - i).join("/")}`), level: "read" } }, ({ path }, _app, _request, gate) => `<p>${path}</p><i>${gate.point}</i>`),
         },
       }),
+      page({
+        path: "/data",
+        notFound: () => Response.json({ error: "Not found" }, { status: 410, headers: { "cache-control": "public, max-age=60" } }),
+        routes: {
+          "/:id": route({ params: NoteId, access: { point: "id", level: "read" } }, ({ id }) => Response.json({ id })),
+          "/gone/thing": route({ access: "anon" }, () => {
+            throw new EndpointError(404, "no such thing");
+          }),
+        },
+      }),
     ],
     endpoints: {},
   });
@@ -545,6 +555,19 @@ describe("Pages: beside sign-in, links and tokens", () => {
     expect(keys[0]).toBe(user.id);
     expect(keys[1]).toMatch(/^token [0-9a-f]{32}$/);
     expect(keys[1]).not.toContain(key);
+  });
+  it("P47: a claim's notFound answers every 404 under it alike, as a 404 never kept", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    const answers = [];
+    for (const path of ["/data/missing-point", "/data/a/b/c", "/data/gone/thing"]) {
+      const response = await wired.fetch(new Request(`https://app.test${path}`), env, ctx);
+      answers.push({ status: response.status, type: response.headers.get("content-type"), cache: response.headers.get("cache-control"), body: await response.text() });
+    }
+    logged.mockRestore();
+    expect(answers[0]).toEqual({ status: 404, type: "application/json", cache: "no-store", body: '{"error":"Not found"}' });
+    expect(answers[1]).toEqual(answers[0]);
+    expect(answers[2]).toEqual(answers[0]);
+    expect((await send("/doc/missing-point")).text).toContain("<");
   });
 });
 

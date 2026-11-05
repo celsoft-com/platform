@@ -53,6 +53,9 @@ const cacheSeconds = (option: PageCacheOption) => (option === true ? DEFAULT_CAC
 export interface Page {
   path: string;
   routes: Record<string, PageRoute>;
+  // The claim's one 404, for a missing and a refused path alike, such as JSON for a data claim;
+  // the platform's 404 page otherwise. Always sent as a 404, never kept.
+  notFound?: (request: Request) => Response | Promise<Response>;
 }
 
 const SEGMENT = /^[A-Za-z0-9._~-]+$/;
@@ -73,7 +76,7 @@ export function route(definition: { params?: z.ZodType; access?: EndpointAccess;
 // `/` alone, never the paths below it, which stay static files.
 export const ROOT = "/";
 
-export function page<R extends Record<string, unknown>, App = AnyApp>(definition: { path: string; routes: { [K in keyof R]: PageRoute<any, App> | PageHandler<PathParams<K & string>, App> } }): Page {
+export function page<R extends Record<string, unknown>, App = AnyApp>(definition: { path: string; routes: { [K in keyof R]: PageRoute<any, App> | PageHandler<PathParams<K & string>, App> }; notFound?: (request: Request) => Response | Promise<Response> }): Page {
   const { path } = definition;
   if (path === ROOT) {
     const keys = Object.keys(definition.routes);
@@ -98,7 +101,8 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
     routes[key] = r;
   }
   if (Object.keys(routes).length === 0) throw new Error(`page ${path} has no routes`);
-  return { path, routes };
+  if (definition.notFound !== undefined && typeof definition.notFound !== "function") throw new Error(`page ${path}: notFound is a function of the request that returns a Response`);
+  return { path, routes, ...(definition.notFound ? { notFound: definition.notFound } : {}) };
 }
 
 interface Segment {
@@ -161,6 +165,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
     if (clash || claims.indexOf(a) !== claims.lastIndexOf(a)) throw new Error(`pages ${a} and ${clash ?? a} claim overlapping paths; claim each path once`);
   }
   const compiled = new Map<string, Compiled[]>();
+  const notFounds = new Map(pages.flatMap((p) => (p.notFound ? [[p.path, p.notFound] as const] : [])));
   for (const p of pages) {
     const list = Object.entries(p.routes).map(([key, route]) => ({ path: p.path, key, segments: routeSegments(key, p.path), route }));
     // Text before parameters before the rest of the path, segment by segment, so "/new" wins
@@ -212,7 +217,8 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       if (request.method !== "GET" && request.method !== "HEAD") return html(errorPage(405, "This page can only be read."), 405, { allow: "GET, HEAD" });
       // A missing page and a refused one get the same answer, so neither says which paths hold something.
       // A path that moved goes where it went, whether its route is missing or answers 404.
-      const refuse = async () => (await moved?.(url)) ?? html(refusedPage(url, canSignIn && !(await app.session().catch(() => null))), 404);
+      const own = notFounds.get(claim);
+      const refuse = async () => (await moved?.(url)) ?? (own ? asNotFound(await own(request)) : html(refusedPage(url, canSignIn && !(await app.session().catch(() => null))), 404));
       const matched = routeOf(claim, url.pathname);
       if (!matched) return refuse();
       const { found, parts } = matched;
@@ -308,6 +314,12 @@ function anonymous(app: AnyApp, name: string): AnyApp {
 
 // Under a path no page can claim, since `!` is never in one, so a visitor can never ask for a key.
 const cacheKey = (url: URL, version: string) => `${url.origin}/!page-cache/${encodeURIComponent(version)}${url.pathname}${url.search}`;
+
+function asNotFound(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "no-store");
+  return new Response(response.body, { status: 404, headers });
+}
 
 // The browser never keeps a page; only the edge does, behind the gate.
 function withCacheState(response: Response, state: "hit" | "miss"): Response {
