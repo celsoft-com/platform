@@ -30,11 +30,13 @@ export interface PageRoute<Params = any, App = AnyApp> {
   // at all. With access on, every route says one of them.
   access?: EndpointAccess<Params>;
   // Keeps the answer, shared by every visitor who passes the gate, for 60 seconds or `seconds`, or until app.cache empties it.
+  // Only the query parameters named in `query` pick a copy; the handler never sees the others, so a
+  // cache buster such as `?v=<time>` gets the kept copy instead of a fresh render.
   cache?: PageCacheOption;
   handler: PageHandler<Params, App>;
 }
 
-export type PageCacheOption = true | { seconds: number };
+export type PageCacheOption = true | { seconds?: number; query?: readonly string[] };
 
 // Where cached answers live: Cloudflare's Cache API in a Worker. `version` is the deploy's and the
 // page's current versions, so a deploy, a clear or an invalidate leaves old copies unasked for.
@@ -48,7 +50,8 @@ export const DEFAULT_CACHE_SECONDS = 60;
 // The longest a page may be kept, a backstop for a change the app never invalidates.
 export const MAX_CACHE_SECONDS = 3600;
 
-const cacheSeconds = (option: PageCacheOption) => (option === true ? DEFAULT_CACHE_SECONDS : option.seconds);
+const cacheSeconds = (option: PageCacheOption) => (option === true ? DEFAULT_CACHE_SECONDS : (option.seconds ?? DEFAULT_CACHE_SECONDS));
+const cacheQuery = (option: PageCacheOption) => (option === true ? [] : (option.query ?? []));
 
 export interface Page {
   path: string;
@@ -97,6 +100,8 @@ export function page<R extends Record<string, unknown>, App = AnyApp>(definition
     if (r.cache !== undefined) {
       const seconds = cacheSeconds(r.cache);
       if (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_CACHE_SECONDS) throw new Error(`page ${path}${key}: cache.seconds is a whole number from 1 to ${MAX_CACHE_SECONDS}`);
+      const query = cacheQuery(r.cache);
+      if (!Array.isArray(query) || query.some((q) => typeof q !== "string" || q === "") || new Set(query).size !== query.length) throw new Error(`page ${path}${key}: cache.query lists the query parameters that pick a copy, each named once, such as ["page"]`);
     }
     routes[key] = r;
   }
@@ -239,11 +244,12 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
         throw thrown;
       }
       const seconds = found.route.cache === undefined ? undefined : cacheSeconds(found.route.cache);
+      const seen = found.route.cache === undefined ? url : named(url, cacheQuery(found.route.cache));
       let key: string | undefined;
       if (seconds && cache && request.method === "GET") {
         // A version that cannot be read means a page that is not cached, never a stale one.
         key = await cache.version(url.pathname).then(
-          (version) => cacheKey(url, version),
+          (version) => cacheKey(seen, version),
           (error: unknown) => void console.error(`page cache skipped for ${url.pathname}:`, error),
         );
       }
@@ -253,7 +259,7 @@ export function pageServer(pages: readonly Page[]): PageServer | undefined {
       }
       let answer: PageResult;
       try {
-        answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), request, { point: gate });
+        answer = await found.route.handler(params, anonymous(app, `${claim}${found.key === "/" ? "" : found.key}`), seen === url ? request : new Request(seen, request), { point: gate });
       } catch (thrown) {
         // A page answers in HTML, so a thrown Response is not one of its refusals.
         const refused = thrown instanceof Response ? undefined : await refusal(thrown);
@@ -310,6 +316,15 @@ function anonymous(app: AnyApp, name: string): AnyApp {
       return Reflect.get(target, key);
     },
   });
+}
+
+// The address with only the named query parameters, sorted, so their order picks no copy of its own.
+function named(url: URL, query: readonly string[]): URL {
+  const kept = new URL(url);
+  kept.search = "";
+  for (const [name, value] of url.searchParams) if (query.includes(name)) kept.searchParams.append(name, value);
+  kept.searchParams.sort();
+  return kept;
 }
 
 // Under a path no page can claim, since `!` is never in one, so a visitor can never ask for a key.

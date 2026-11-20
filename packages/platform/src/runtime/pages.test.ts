@@ -586,6 +586,7 @@ describe("Pages: caching", () => {
         path: "/news",
         routes: {
           "/": route({ cache: true }, () => `<h1>news ${++runs}</h1>`),
+          "/paged": route({ cache: { query: ["page", "q"] } }, (_params, _app, request) => `<p>${++runs} ${new URL(request.url).search}</p>`),
           "/cookie": route({ cache: { seconds: 60 } }, () => new Response("<p>set</p>", { headers: { "content-type": "text/html", "set-cookie": "a=1" } })),
           "/gone": route({ cache: { seconds: 60 } }, () => {
             throw new EndpointError(410, "gone");
@@ -604,6 +605,8 @@ describe("Pages: caching", () => {
     for (const seconds of [0, 1.5, 3601]) expect(() => page({ path: "/a", routes: { "/": route({ cache: { seconds } }, () => "") } }), String(seconds)).toThrow(/cache.seconds/);
     expect(() => page({ path: "/a", routes: { "/": route({ cache: { seconds: 3600 } }, () => "") } })).not.toThrow();
     expect(() => page({ path: "/a", routes: { "/": route({ cache: true }, () => "") } })).not.toThrow();
+    for (const query of [[""], ["page", "page"], "page"]) expect(() => page({ path: "/a", routes: { "/": route({ cache: { query: query as string[] } }, () => "") } }), JSON.stringify(query)).toThrow(/cache.query/);
+    expect(() => page({ path: "/a", routes: { "/": route({ cache: { query: ["page"] } }, () => "") } })).not.toThrow();
   });
 
   it("P39: a visitor's answer is kept, and the next visitor gets it without the handler running; browsers keep nothing", async () => {
@@ -633,13 +636,31 @@ describe("Pages: caching", () => {
     expect(edge.size).toBe(0);
   });
 
-  it("P42: each deploy starts with nothing kept, and each query string is kept apart", async () => {
+  it("P42: each deploy starts with nothing kept", async () => {
     edge.clear();
     runs = 0;
     await visit("/news");
     expect((await visit("/news", {}, "v2")).state).toBe("miss");
-    expect((await visit("/news?page=2")).state).toBe("miss");
-    expect((await visit("/news?page=2")).state).toBe("hit");
+    expect(runs).toBe(2);
+  });
+
+  it("P47: a query parameter the route does not name, such as a cache buster, gets the kept copy", async () => {
+    edge.clear();
+    runs = 0;
+    await visit("/news");
+    expect((await visit("/news?v=1")).state).toBe("hit");
+    expect((await visit("/news?v=2&utm_source=x")).state).toBe("hit");
+    expect(runs).toBe(1);
+  });
+
+  it("P48: each value of a named parameter is kept apart, in any order, and the handler sees only the named ones", async () => {
+    edge.clear();
+    runs = 0;
+    expect(await visit("/news/paged?v=1&page=2")).toMatchObject({ state: "miss", body: "<p>1 ?page=2</p>" });
+    expect(await visit("/news/paged?page=2&v=2")).toMatchObject({ state: "hit", body: "<p>1 ?page=2</p>" });
+    expect(await visit("/news/paged?page=3")).toMatchObject({ state: "miss", body: "<p>2 ?page=3</p>" });
+    expect(await visit("/news/paged?q=a&page=3")).toMatchObject({ state: "miss", body: "<p>3 ?page=3&q=a</p>" });
+    expect(await visit("/news/paged?page=3&q=a")).toMatchObject({ state: "hit" });
     expect(runs).toBe(3);
   });
 
@@ -661,7 +682,11 @@ describe("Pages: caching", () => {
     await run("invalidate", "/news");
     await later();
     expect(await hit("/news")).toBe("miss");
-    expect(await hit("/news?page=3")).toBe("miss");
+    expect(await hit("/news/paged?page=3")).toBe("miss");
+    expect(await hit("/news/paged?page=3")).toBe("hit");
+    await run("invalidate", "/news/paged");
+    await later();
+    expect(await hit("/news/paged?page=3")).toBe("miss");
     expect(await hit("/news")).toBe("hit");
     await run("clear");
     await later();
