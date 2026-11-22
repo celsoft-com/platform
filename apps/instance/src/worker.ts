@@ -2,9 +2,10 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { handle } from "./routes.ts";
+import type { Secrets } from "./complete.ts";
 import type { InstanceRecord, Store } from "./setup.ts";
 
-export interface Env {
+export interface Env extends Secrets {
   STATE: DurableObjectNamespace<InstanceState>;
   CF_VERSION_METADATA: WorkerVersionMetadata;
 }
@@ -27,6 +28,8 @@ function store(env: Env): Store {
 
 export default {
   fetch(request, env) {
-    return handle(request, store(env), { version: env.CF_VERSION_METADATA.id, deployedAt: env.CF_VERSION_METADATA.timestamp, host: new URL(request.url).host });
+    const self = { version: env.CF_VERSION_METADATA.id, deployedAt: env.CF_VERSION_METADATA.timestamp, host: new URL(request.url).host };
+    const { CLOUDFLARE_API_TOKEN, GITHUB_APP, NEON_API_KEY, RESEND_API_KEY } = env;
+    return handle(request, { store: store(env), self, secrets: { CLOUDFLARE_API_TOKEN, GITHUB_APP, NEON_API_KEY, RESEND_API_KEY }, fetcher: fetch });
   },
 } satisfies ExportedHandler<Env>;

@@ -12,6 +12,18 @@ export interface InstanceRecord {
   script: string;
   authDomain: string;
   aud: string;
+  admins?: string[];
+  setup?: Progress;
+}
+
+// Complete setup's steps, each kept once the instance has confirmed it.
+export interface Progress {
+  token?: boolean;
+  domains?: string[];
+  githubState?: string;
+  github?: { slug: string; owner: string; installations: string[] };
+  neon?: boolean;
+  resend?: boolean;
 }
 
 export interface Store {
@@ -29,7 +41,9 @@ export interface Self {
 export const ADMIN_PATH = "/admin";
 export const TOKEN_SECRET = "CLOUDFLARE_API_TOKEN";
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export const policyName = (script: string) => `${script} super admin`;
 
 // Each step it finishes is added to `done`, in words for the person setting up, so a failure shows how far it got.
 export async function reserve(store: Store, self: Self, input: { token: string; email: string }, done: string[] = [], fetcher: typeof fetch = fetch): Promise<InstanceRecord> {
@@ -45,16 +59,19 @@ export async function reserve(store: Store, self: Self, input: { token: string; 
   done.push(`Cloudflare Access is on for the account, team ${org.auth_domain}.`);
   const idp = (await cf.identityProviders(account)).find((p) => p.type === "onetimepin") ?? (await cf.createOneTimePin(account));
   done.push("Sign-in with an emailed code is on.");
-  const policyName = `${script} super admin`;
-  const policy = await cf.savePolicy(account, (await cf.policies(account)).find((p) => p.name === policyName)?.id, policyName, email);
-  done.push(`Only ${email} may sign in.`);
+  // A reset keeps complete setup's progress and the platform admins, who keep signing in.
+  const before = await store.get();
+  const admins = before?.admins ?? [];
+  const name = policyName(script);
+  const policy = await cf.savePolicy(account, (await cf.policies(account)).find((p) => p.name === name)?.id, name, [email, ...admins]);
+  done.push(admins.length ? `Only ${email} and the platform admins may sign in.` : `Only ${email} may sign in.`);
   const domain = `${self.host}${ADMIN_PATH}`;
   const app = await cf.saveApp(account, (await cf.apps(account)).find((a) => a.domain === domain)?.id, { name: script, domain, idp: idp.id, policy: policy.id });
   if (!(await cf.apps(account)).some((a) => a.domain === domain)) throw new SetupError(`Cloudflare accepted the Access application for ${domain} but does not list it; submit again.`);
   done.push(`Cloudflare Access protects ${domain}.`);
 
   // Saved before the token: saving the token deploys a new version of this Worker, which restarts its storage.
-  const record: InstanceRecord = { state: "reserved", email, account, script, authDomain: org.auth_domain, aud: app.aud };
+  const record: InstanceRecord = { ...before, state: "reserved", email, account, script, authDomain: org.auth_domain, aud: app.aud };
   await store.put(record);
   if ((await store.get())?.email !== email) throw new SetupError("The reservation could not be saved in this instance's storage; submit again.");
   done.push(`Reserved for ${email}.`);
@@ -75,13 +92,22 @@ async function findSelf(cf: Cloudflare, version: string): Promise<{ account: str
   throw new SetupError("This token does not reach the Cloudflare account running this instance; create it in that account.");
 }
 
-// The super admin's email when the request carries Cloudflare Access's signature for it, claiming
-// a reserved instance on that email's first sign-in; undefined for anyone else.
-export async function signedIn(store: Store, header: string | null, fetcher: typeof fetch = fetch, now = Date.now()): Promise<string | undefined> {
+export interface Viewer {
+  email: string;
+  role: "super" | "platform";
+}
+
+// Who is signed in, when the request carries Cloudflare Access's signature for this instance: the
+// super admin, claiming a reserved instance on their first sign-in, or a platform admin.
+export async function viewer(store: Store, header: string | null, fetcher: typeof fetch = fetch, now = Date.now()): Promise<Viewer | undefined> {
   const record = await store.get();
   if (!record) return undefined;
   const email = await accessEmail(header, record, fetcher, now);
-  if (email !== record.email) return undefined;
-  if (record.state === "reserved") await store.put({ ...record, state: "claimed" });
-  return email;
+  if (!email) return undefined;
+  if (email === record.email) {
+    if (record.state === "reserved") await store.put({ ...record, state: "claimed" });
+    return { email, role: "super" };
+  }
+  if (record.state === "claimed" && record.admins?.includes(email)) return { email, role: "platform" };
+  return undefined;
 }

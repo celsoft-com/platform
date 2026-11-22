@@ -8,7 +8,16 @@ export const PERMISSIONS = {
   organizations: "Access: Organizations, Identity Providers, and Groups Edit",
 } as const;
 
-type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+// What deploying apps adds, asked for by complete setup's wider token.
+export const APP_PERMISSIONS = {
+  hyperdrive: "Hyperdrive Edit",
+  r2: "Workers R2 Storage Edit",
+  zones: "Zone Read",
+  dns: "DNS Edit",
+  routes: "Workers Routes Edit",
+} as const;
+
+type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS] | (typeof APP_PERMISSIONS)[keyof typeof APP_PERMISSIONS];
 
 export class SetupError extends Error {}
 
@@ -58,6 +67,12 @@ export interface IdentityProvider {
 }
 
 export interface Policy {
+  id: string;
+  name: string;
+  include?: { email?: { email: string } }[];
+}
+
+export interface Zone {
   id: string;
   name: string;
 }
@@ -144,8 +159,12 @@ export class Cloudflare {
     return this.call<Policy[]>(PERMISSIONS.apps, "GET", `/accounts/${account}/access/policies?per_page=1000`);
   }
 
-  savePolicy(account: string, id: string | undefined, name: string, email: string) {
-    const body = { name, decision: "allow", include: [{ email: { email } }] };
+  policy(account: string, id: string) {
+    return this.call<Policy>(PERMISSIONS.apps, "GET", `/accounts/${account}/access/policies/${id}`);
+  }
+
+  savePolicy(account: string, id: string | undefined, name: string, emails: string[]) {
+    const body = { name, decision: "allow", include: emails.map((email) => ({ email: { email } })) };
     return id
       ? this.call<Policy>(PERMISSIONS.apps, "PUT", `/accounts/${account}/access/policies/${id}`, body)
       : this.call<Policy>(PERMISSIONS.apps, "POST", `/accounts/${account}/access/policies`, body);
@@ -168,5 +187,25 @@ export class Cloudflare {
     return id
       ? this.call<AccessApp>(PERMISSIONS.apps, "PUT", `/accounts/${account}/access/apps/${id}`, body)
       : this.call<AccessApp>(PERMISSIONS.apps, "POST", `/accounts/${account}/access/apps`, body);
+  }
+
+  hyperdrives(account: string) {
+    return this.call<unknown[]>(APP_PERMISSIONS.hyperdrive, "GET", `/accounts/${account}/hyperdrive/configs`);
+  }
+
+  buckets(account: string) {
+    return this.call<unknown>(APP_PERMISSIONS.r2, "GET", `/accounts/${account}/r2/buckets`);
+  }
+
+  zones(account: string) {
+    return this.call<Zone[]>(APP_PERMISSIONS.zones, "GET", `/zones?account.id=${account}&per_page=50`);
+  }
+
+  dnsRecords(zone: string) {
+    return this.call<unknown[]>(APP_PERMISSIONS.dns, "GET", `/zones/${zone}/dns_records?per_page=1`);
+  }
+
+  routes(zone: string) {
+    return this.call<unknown[]>(APP_PERMISSIONS.routes, "GET", `/zones/${zone}/workers/routes`);
   }
 }

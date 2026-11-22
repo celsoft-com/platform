@@ -492,4 +492,13 @@ The direction the platform is taking: instead of each app deploying the platform
     5. **Wrong email, a restart while waiting, or an expired code**: submit a token with the right email again, or ask Cloudflare's sign-in for a new code.
     6. **Someone else opens the address**: without a token for the account they can do nothing.
     7. **Signed out later**: sign in again with a new code.
-12. **Later**: complete setup, the GitHub App, apps and their scopes, instance updates, and how today's per-app CLI and skills fit the instance.
+12. **Complete setup**: once claimed, the super admin's home at `/admin` is a checklist of six steps, each on its own page under `/admin/`, each confirmed by the instance before it shows ✓, and each listing what it did or where it stopped.
+    1. **Wider token**: a token with the setup permissions plus Hyperdrive Edit, Workers R2 Storage Edit, Zone Read, DNS Edit and Workers Routes Edit on all zones, checked against every domain the account has, replaces the setup token's secret.
+    2. **Domains**: the super admin ticks the account's domains apps may use; each is checked for DNS and routes.
+    3. **GitHub App**: the instance sends GitHub a manifest from the browser, under the super admin's account or a named org, with a one-time state it checks on return; GitHub's code becomes the app's credentials, kept as the secret `GITHUB_APP`; installing it brings the super admin back to see where it is installed. Its webhook, at `/github/webhook`, is accepted only with a valid signature and does nothing yet.
+    4. **Database**: a Neon organization API key, checked by listing the organization's projects, kept as `NEON_API_KEY`.
+    5. **Email**: a Resend API key with full access, kept as `RESEND_API_KEY`; a send-only key is refused, saying so.
+    6. **Platform admins**: their emails join the super admin's in the Access rule; signing in, they see their own page, and every setup page refuses them.
+    7. **Redeploys**: saving a secret deploys a new version; a step that reaches the old version in the seconds after says to wait and reload.
+    8. **Kept through a reset**: resetting the super admin keeps every step's progress and the platform admins.
+13. **Later**: adding and deploying apps, apps and their scopes, instance updates, and how today's per-app CLI and skills fit the instance.

@@ -12,7 +12,12 @@ const KEYS = [
   { key: "access_acct", type: "edit" },
 ];
 
-export const TOKEN_URL = `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(JSON.stringify(KEYS))}&name=${encodeURIComponent("platform setup")}`;
+// Cloudflare's account token page, opened with these permissions filled in.
+export const tokenUrl = (keys: { key: string; type: string }[], name: string) =>
+  `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(JSON.stringify(keys))}&name=${encodeURIComponent(name)}`;
+
+export const SETUP_KEYS = KEYS;
+export const TOKEN_URL = tokenUrl(KEYS, "platform setup");
 
 // Which deploy is serving, so whoever reports a problem can say what they were running.
 function build(self: Self): string {
@@ -20,7 +25,7 @@ function build(self: Self): string {
   return `<footer class="instance-build">Build ${escape(self.version.slice(0, 8))}${escape(when)}</footer>`;
 }
 
-function page(self: Self, title: string, body: string, status = 200): Response {
+export function page(self: Self, title: string, body: string, status = 200): Response {
   const html = htmlDocument({ title, appName: "Platform", style: STYLE + EXTRA, page: "instance", body: `<main class="platform-card">\n<p class="platform-app">Platform</p>\n${body}\n</main>\n${build(self)}` });
   return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
@@ -30,6 +35,10 @@ const EXTRA = `.platform-intro ul{margin:8px 0 0;padding-left:20px}.platform-lin
 .instance-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
 .instance-done::before{content:"✓ ";color:var(--platform-accent);font-weight:700}
 .instance-failed{color:var(--platform-error)}.instance-failed::before{content:"✗ ";font-weight:700}
+.instance-todo::before{content:"○ ";color:var(--platform-muted);font-weight:700}
+.instance-steps a{color:var(--platform-accent)}
+.instance-check{display:flex;gap:8px;align-items:center;font-size:15px}
+textarea.platform-input{min-height:96px;resize:vertical}
 .instance-action{display:block;text-align:center;text-decoration:none}
 .instance-more{display:flex;flex-direction:column;gap:12px;font-size:14px}.instance-more summary{cursor:pointer;color:var(--platform-accent)}
 .instance-more[open]>*+*{margin-top:12px}`;
@@ -43,7 +52,7 @@ export interface Result {
 
 const empty: Result = { email: "", done: [] };
 
-function steps(result: Result): string {
+export function steps(result: Result): string {
   if (!result.done.length && !result.error) return "";
   const lines = result.done.map((d) => `<li class="instance-done">${escape(d)}</li>`);
   if (result.error) lines.push(`<li class="instance-failed" role="alert">${escape(result.error)}</li>`);
@@ -99,21 +108,6 @@ export function resetPage(self: Self, result: Result = empty): Response {
 ${steps(result)}
 ${tokenForm("/reset", "Reset", result)}`,
     result.error ? 400 : 200,
-  );
-}
-
-export function homePage(self: Self, email: string): Response {
-  return page(
-    self,
-    "Home",
-    `<h1 class="platform-title">Initial setup is complete</h1>
-<p class="platform-intro">You are the super admin of this instance, signed in as <strong>${escape(email)}</strong>.</p>
-<ul class="instance-steps">
-<li class="instance-done">Cloudflare Access guards this page; only ${escape(email)} can sign in.</li>
-<li class="instance-done">The instance holds its Cloudflare token as a secret.</li>
-</ul>
-<p class="platform-intro">Next comes complete setup, which lets this instance deploy apps. It is not built yet; it arrives in a later version of the repo you deployed from.</p>
-<nav class="platform-links"><a href="/cdn-cgi/access/logout">Sign out</a></nav>`,
   );
 }
 
