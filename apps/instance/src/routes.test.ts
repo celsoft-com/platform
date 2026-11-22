@@ -90,6 +90,12 @@ const rsa = () => crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulus
 let cf: FakeCloudflare;
 let store: MemoryStore;
 
+// Like Workers' fetch, refuses to run as another object's method.
+function strict(this: unknown, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (this !== undefined && this !== globalThis) throw new TypeError("Illegal invocation: function called with incorrect `this` reference.");
+  return cf.fetch(input, init);
+}
+
 const request = (path: string, init?: { form?: Record<string, string>; jwt?: string }) =>
   handle(
     new Request(`https://${HOST}${path}`, {
@@ -99,7 +105,7 @@ const request = (path: string, init?: { form?: Record<string, string>; jwt?: str
     }),
     store,
     { version: VERSION, host: HOST },
-    cf.fetch,
+    strict as typeof fetch,
   );
 
 const submit = (email: string, token = TOKEN, path = "/") => request(path, { form: { token, email } });

@@ -69,7 +69,9 @@ export class Cloudflare {
   ) {}
 
   private async call<T>(permission: Permission, method: string, path: string, body?: unknown): Promise<T> {
-    const response = await this.fetcher(`https://api.cloudflare.com/client/v4${path}`, {
+    // Called unbound: Workers' fetch throws "Illegal invocation" when called as another object's method.
+    const fetcher = this.fetcher;
+    const response = await fetcher(`https://api.cloudflare.com/client/v4${path}`, {
       method,
       headers: { authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
