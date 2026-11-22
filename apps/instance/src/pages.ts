@@ -5,11 +5,12 @@ import { STYLE } from "../../../packages/platform/src/runtime/screens.ts";
 import { PERMISSIONS } from "./cloudflare.ts";
 import { ADMIN_PATH, type Self } from "./setup.ts";
 
+// Cloudflare's permission group IDs, which its token page always resolves; short names it does not know are dropped.
 const KEYS = [
-  { key: "workers_scripts", type: "edit" },
-  { key: "account_settings", type: "read" },
-  { key: "access", type: "edit" },
-  { key: "access_acct", type: "edit" },
+  { key: "e086da7e2179491d91ee5f35b3ca210a", type: "edit" }, // Workers Scripts Write
+  { key: "c1fde68c7bcc44588cbb6ddbc16d6480", type: "read" }, // Account Settings Read
+  { key: "1e13c5124ca64b72b1969a67e8829049", type: "edit" }, // Access: Apps and Policies Write
+  { key: "bfe0d8686a584fa680f4c53b5eb0de6d", type: "edit" }, // Access: Organizations, Identity Providers, and Groups Write
 ];
 
 // Cloudflare's account token page, opened with these permissions filled in.

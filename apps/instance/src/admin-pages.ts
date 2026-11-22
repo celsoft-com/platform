@@ -5,7 +5,14 @@ import { APP_PERMISSIONS, PERMISSIONS, REVOKED, type Zone } from "./cloudflare.t
 import { page, SETUP_KEYS, steps, tokenUrl, type Result } from "./pages.ts";
 import type { InstanceRecord, Self } from "./setup.ts";
 
-const APP_KEYS = [...SETUP_KEYS, { key: "hyperdrive", type: "edit" }, { key: "workers_r2", type: "edit" }, { key: "zone", type: "read" }, { key: "dns", type: "edit" }, { key: "workers_routes", type: "edit" }];
+const APP_KEYS = [
+  ...SETUP_KEYS,
+  { key: "721b2f51fba74871bd361de65aeb7e03", type: "edit" }, // Hyperdrive Write
+  { key: "bf7481a1826f439697cb59a20b22293e", type: "edit" }, // Workers R2 Storage Write
+  { key: "c8fed203ed3043cba015a93ad1616f1f", type: "read" }, // Zone Read
+  { key: "4755a26eedb94da69e1066d98aa820be", type: "edit" }, // DNS Write
+  { key: "28f4b596e7d643029c524985477ae49a", type: "edit" }, // Workers Routes Write
+];
 const WIDER_TOKEN_URL = tokenUrl(APP_KEYS, "platform");
 
 const noResult: Result = { email: "", done: [] };
@@ -85,7 +92,7 @@ export function tokenStep(self: Self, result: Result = noResult, tokenWorks = tr
     `<form class="platform-form" method="post">
 <ul class="platform-intro">${permissions}</ul>
 <nav class="platform-links"><a href="${escape(WIDER_TOKEN_URL)}" target="_blank" rel="noopener">Create token</a></nav>
-<p class="platform-intro">Cloudflare's page cannot fill in Hyperdrive: before creating the token, add <strong>Account, Hyperdrive, Edit</strong> yourself, and anything else its notice says it could not add.</p>
+<p class="platform-intro">If Cloudflare's page says it could not add a permission, add it there by hand before creating the token.</p>
 ${secretField("token", "Token")}
 <button class="platform-button" type="submit">Check and save</button></form>`,
     result,
