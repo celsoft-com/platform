@@ -46,8 +46,8 @@ you want.
    email again, or ask Cloudflare's sign-in for a new code.
 6. **Access not switched on:** if the form says so, open **Zero Trust** in the dashboard, click
    **Enable Access**, choose the Free plan, and submit again.
-7. **Lost access to your email later:** open `/reset` on the instance and submit a fresh token
-   with your new email.
+7. **Lost access to your email later:** open the instance's address, click **Lost access to your
+   sign-in email?**, and submit a fresh token with your new email.
 
 ## Keep it safe
 

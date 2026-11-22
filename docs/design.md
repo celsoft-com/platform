@@ -473,7 +473,7 @@ The direction the platform is taking: instead of each app deploying the platform
     2. **Reserved**: a valid token and an email were submitted; the page shows which email it waits for, and the setup form stays open below it.
     3. **Claimed**: the reserved email signed in; the address leads to the home page behind Cloudflare Access.
     4. **Moves**: a valid token and email move Unclaimed to Reserved, and in Reserved replace the reservation; the reserved email's first sign-in moves Reserved to Claimed.
-    5. **Reset**: in Claimed, the reset form at `/reset` takes a valid token and an email and moves the instance back to Reserved for that email, so a super admin who loses their email recovers through the Cloudflare account.
+    5. **Reset**: in Claimed, the instance's address shows **Sign in** and a "Lost access to your sign-in email?" link to the reset form at `/reset`, which takes a valid token and an email and moves the instance back to Reserved for that email, so a super admin who loses their email recovers through the Cloudflare account.
 9. **Valid token**: checked on every submit, which carries its own token, so claiming never rests on a cookie.
     1. **Same account**: the token must reach the account running this very Worker, found by the Worker's running version; a token for any other account is refused.
     2. **Permissions**: Workers Scripts Edit, Account Settings Read, Access: Apps and Policies Edit, and Access: Organizations, Identity Providers, and Groups Edit, all on the account; a token missing one is refused, naming it. **Create token** opens Cloudflare's account token page with them filled in, and the form lists them too.

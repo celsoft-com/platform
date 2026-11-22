@@ -27,7 +27,6 @@
     if ('error' in answer) return (failed = answer.error);
     state = answer;
     onbuild(answer.build);
-    if (state.stage === 'claimed' && !resetting) location.href = '/admin';
     if (state.stage !== 'claimed' && resetting) location.href = '/';
   }
   load();
@@ -48,7 +47,12 @@
     {#if failed}
       <p class="sd-field-error">{failed}</p>
     {:else if state}
-      {#if state.stage === 'reserved' && !replacing}
+      {#if state.stage === 'claimed' && !resetting}
+        <h1 class="display">Platform</h1>
+        <p class="body intro">This instance is set up. Sign in with the code Cloudflare emails you.</p>
+        <Button variant="primary" block onclick={() => (location.href = '/admin')}>Sign in</Button>
+        <Button variant="quiet" block onclick={() => (location.href = '/reset')}>Lost access to your sign-in email?</Button>
+      {:else if state.stage === 'reserved' && !replacing}
         <h1 class="display">One step left: sign in</h1>
         <p class="body intro">Sign in as <strong>{state.reserved}</strong>, the email you entered. Cloudflare emails a code to that address; enter it on Cloudflare's sign-in page and you become the super admin.</p>
         <Report {done} />
@@ -71,6 +75,7 @@
         <Report {done} {error} />
         <Button variant="primary" block onclick={() => reserve()}>{resetting ? 'Reset' : 'Reserve'}</Button>
         {#if replacing}<Button variant="quiet" block onclick={() => (replacing = false)}>Back</Button>{/if}
+        {#if resetting}<Button variant="quiet" block onclick={() => (location.href = '/')}>Back</Button>{/if}
       {/if}
     {/if}
   </section>
