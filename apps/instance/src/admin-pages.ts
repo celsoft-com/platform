@@ -39,8 +39,8 @@ function checklist(record: InstanceRecord, tokenWorks: boolean): Step[] {
     {
       path: "github",
       name: "GitHub App",
-      done: !!github?.installations.length,
-      says: github?.installations.length ? `${github.slug}, installed on ${github.installations.join(", ")}.` : github ? `${github.slug} is created; install it on GitHub.` : "Create the instance's own GitHub App.",
+      done: !!github,
+      says: github ? `${github.slug}, owned by ${github.owner}; each app's repo is added to it when the app is added.` : "Create the instance's own GitHub App.",
     },
     { path: "database", name: "Database", done: !!setup.neon, says: setup.neon ? "Neon is connected." : "Connect Neon, where apps' databases live." },
     { path: "email", name: "Email", done: !!setup.resend, says: setup.resend ? "Resend is connected." : "Connect Resend, which sends apps' email." },
@@ -115,13 +115,12 @@ ${secretField("token", "Token")}
 export function githubStep(self: Self, record: InstanceRecord, result: Result = noResult): Response {
   const github = record.setup?.github;
   const body = github
-    ? `<p class="platform-intro">Install <strong>${escape(github.slug)}</strong> on the GitHub account or org whose repos hold apps. GitHub brings you back here when it is done.</p>
-<a class="platform-button instance-action" href="https://github.com/apps/${encodeURIComponent(github.slug)}/installations/new">Install on GitHub</a>
-<nav class="platform-links"><a href="/admin/github/installed">Check installations again</a></nav>`
+    ? `<p class="platform-intro"><strong>${escape(github.slug)}</strong> belongs to ${escape(github.owner)}. When an app is added, it is installed on that app's repo only.</p>`
     : `<form class="platform-form" method="post">
-<label class="platform-field"><span class="platform-label">GitHub org (empty for your own account)</span><input class="platform-input" name="owner" autocomplete="off"></label>
+<p class="platform-intro">The app is private, so GitHub only lets it be installed where it belongs: name the org your app repos live in, or leave it empty if they are in your own account.</p>
+<label class="platform-field"><span class="platform-label">GitHub org where your app repos live</span><input class="platform-input" name="owner" autocomplete="off"></label>
 <button class="platform-button" type="submit">Next</button></form>`;
-  return stepPage(self, "GitHub App", "The instance gets its own GitHub App, which reads app repos and hears their pushes and pull requests.", body, result, !!github?.installations.length && result.done.length > 0 && !result.error);
+  return stepPage(self, "GitHub App", "The instance gets its own GitHub App, which reads app repos and hears their pushes and pull requests.", body, result);
 }
 
 // GitHub's manifest flow takes a form posted from the browser, so this page posts it.

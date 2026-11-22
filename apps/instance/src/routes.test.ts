@@ -394,7 +394,7 @@ describe("complete setup", () => {
     expect(await home()).toContain('<li class="instance-done"><a href="/admin/token">');
   });
 
-  test("the GitHub App is created from a manifest, saved, installed and its webhooks checked", async () => {
+  test("the GitHub App is created from a manifest and saved, and its webhooks checked", async () => {
     const key = await githubStyleKey();
     let installed: string[] = [];
     elsewhere = async (url, init) => {
@@ -418,16 +418,14 @@ describe("complete setup", () => {
     expect(await (await admin(`github/created?code=stale&state=${state}`)).text()).toContain("GitHub refused to finish creating the app");
     const created = await (await admin(`github/created?code=good-code&state=${state}`)).text();
     expect(created).toContain("GitHub App platform-acme created under acme.");
-    expect(created).toContain("https://github.com/apps/platform-acme/installations/new");
-    expect(created).not.toContain("Next: Database");
+    expect(created).toContain('href="/admin/database">Next: Database</a>');
     expect(JSON.parse(cf.secrets.GITHUB_APP!).id).toBe(7);
+    expect(await home()).toContain('<li class="instance-done"><a href="/admin/github">GitHub App</a>: platform-acme, owned by acme;');
 
-    expect(await (await admin("github/installed")).text()).toContain("not installed anywhere yet");
+    // Installing waits for adding an app; the page GitHub returns to after an install still lists where it is.
+    expect(await (await admin("github/installed")).text()).toContain("not installed on any repo yet");
     installed = ["acme"];
-    const installedPage = await (await admin("github/installed")).text();
-    expect(installedPage).toContain("Installed on acme.");
-    expect(installedPage).toContain('href="/admin/database">Next: Database</a>');
-    expect(await home()).toContain('<li class="instance-done"><a href="/admin/github">GitHub App</a>: platform-acme, installed on acme.');
+    expect(await (await admin("github/installed")).text()).toContain("Installed on acme.");
 
     const event = JSON.stringify({ zen: "hi" });
     expect((await request("/github/webhook", { method: "POST", body: event, headers: { "x-hub-signature-256": `sha256=${await hmac("hook", event)}` } })).status).toBe(202);

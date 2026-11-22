@@ -131,7 +131,7 @@ export async function githubInstalled(ctx: Context, done: string[]): Promise<voi
   if (!secret) throw new SetupError("The GitHub App's credentials are still deploying; wait a few seconds, then reload this page.");
   const found = await installations(JSON.parse(secret) as GitHubApp, ctx.fetcher);
   await progress(ctx, record, { github: { ...record.setup.github, installations: found } });
-  if (!found.length) throw new SetupError(`${record.setup.github.slug} is not installed anywhere yet; click Install on GitHub.`);
+  if (!found.length) throw new SetupError(`${record.setup.github.slug} is not installed on any repo yet; that happens when an app is added.`);
   done.push(`Installed on ${found.join(", ")}.`);
 }
 

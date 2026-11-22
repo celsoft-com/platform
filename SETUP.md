@@ -28,8 +28,8 @@ and shows ✓ when it is done, or says what stopped it.
 
 1. **Wider token:** create a token with the listed permissions, the zone ones on all zones, and
    paste it. It replaces the setup token.
-2. **GitHub App:** name the GitHub org, or leave it empty for your own account, create the app on
-   GitHub, then install it where your app repos live.
+2. **GitHub App:** name the GitHub org your app repos live in, or leave it empty for your own
+   account, then create the app on GitHub. Installing it on a repo happens when you add that app.
 3. **Database:** paste a Neon organization API key.
 4. **Email:** paste a Resend API key with Full access.
 5. **Platform admins:** list the emails of the people who will manage apps.
