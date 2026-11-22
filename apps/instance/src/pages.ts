@@ -12,7 +12,7 @@ const KEYS = [
   { key: "access_acct", type: "edit" },
 ];
 
-export const TOKEN_URL = `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(JSON.stringify(KEYS))}&name=platform`;
+export const TOKEN_URL = `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(JSON.stringify(KEYS))}&name=${encodeURIComponent("platform setup")}`;
 
 function page(title: string, body: string, status = 200): Response {
   const html = htmlDocument({ title, appName: "Platform", style: STYLE + EXTRA, page: "instance", body: `<main class="platform-card">\n<p class="platform-app">Platform</p>\n${body}\n</main>` });
@@ -26,6 +26,7 @@ function tokenForm(action: string, button: string, error?: string, email = ""): 
   return `<form class="platform-form" method="post" action="${action}">
 <p class="platform-intro">Create a token on this Cloudflare account with these account permissions:<ul>${permissions}</ul></p>
 <nav class="platform-links"><a href="${escape(TOKEN_URL)}" target="_blank" rel="noopener">Create token</a></nav>
+<p class="platform-intro">Paste the token this link makes, named <strong>platform setup</strong>. The build token Cloudflare made for this Worker won't work.</p>
 <label class="platform-field"><span class="platform-label">Token</span><input class="platform-input" name="token" type="password" autocomplete="off" required></label>
 <label class="platform-field"><span class="platform-label">Your email</span><input class="platform-input" name="email" type="email" autocomplete="email" value="${escape(email)}" required></label>
 ${error ? `<p class="platform-error" role="alert">${escape(error)}</p>` : ""}
