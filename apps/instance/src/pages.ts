@@ -29,7 +29,10 @@ const EXTRA = `.platform-intro ul{margin:8px 0 0;padding-left:20px}.platform-lin
 .instance-build{position:fixed;right:12px;bottom:8px;font-size:12px;color:var(--platform-muted)}
 .instance-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
 .instance-done::before{content:"✓ ";color:var(--platform-accent);font-weight:700}
-.instance-failed{color:var(--platform-error)}.instance-failed::before{content:"✗ ";font-weight:700}`;
+.instance-failed{color:var(--platform-error)}.instance-failed::before{content:"✗ ";font-weight:700}
+.instance-action{display:block;text-align:center;text-decoration:none}
+.instance-more{display:flex;flex-direction:column;gap:12px;font-size:14px}.instance-more summary{cursor:pointer;color:var(--platform-accent)}
+.instance-more[open]>*+*{margin-top:12px}`;
 
 // What the last submit did: the steps it finished, the error that stopped it, and the email typed, kept for a retry.
 export interface Result {
@@ -71,16 +74,18 @@ ${tokenForm("/", "Reserve", result)}`,
 }
 
 export function waitingPage(self: Self, reserved: string, result: Result = empty): Response {
+  const who = escape(reserved);
   return page(
     self,
-    "Waiting for sign-in",
-    `<h1 class="platform-title">Waiting for sign-in</h1>
-<p class="platform-intro">Reserved for <strong>${escape(reserved)}</strong>. Sign in with the code Cloudflare emails to that address to become the super admin.</p>
+    "Sign in",
+    `<h1 class="platform-title">One step left: sign in</h1>
+<p class="platform-intro">Sign in as <strong>${who}</strong>, the email you entered. Cloudflare emails a code to that address; enter it on Cloudflare's sign-in page and you become the super admin.</p>
 ${result.error ? "" : steps(result)}
-<nav class="platform-links"><a href="${ADMIN_PATH}">Sign in</a></nav>
-<p class="platform-intro">Wrong email, or no code coming? Submit a token with the right email to replace the reservation.</p>
+<a class="platform-button instance-action" href="${ADMIN_PATH}">Sign in as ${who}</a>
+<details class="instance-more"${result.error ? " open" : ""}><summary>Wrong email, or no code arriving?</summary>
+<p class="platform-intro">Submit a token with the right email; it replaces the reservation for ${who}.</p>
 ${result.error ? steps(result) : ""}
-${tokenForm("/", "Reserve again", result)}`,
+${tokenForm("/", "Reserve again", result)}</details>`,
     result.error ? 400 : 200,
   );
 }
@@ -101,8 +106,13 @@ export function homePage(self: Self, email: string): Response {
   return page(
     self,
     "Home",
-    `<h1 class="platform-title">Initial setup is done</h1>
-<p class="platform-intro">You are the super admin of this instance, signed in as <strong>${escape(email)}</strong>. Complete setup, which enables apps, comes next.</p>
+    `<h1 class="platform-title">Initial setup is complete</h1>
+<p class="platform-intro">You are the super admin of this instance, signed in as <strong>${escape(email)}</strong>.</p>
+<ul class="instance-steps">
+<li class="instance-done">Cloudflare Access guards this page; only ${escape(email)} can sign in.</li>
+<li class="instance-done">The instance holds its Cloudflare token as a secret.</li>
+</ul>
+<p class="platform-intro">Next comes complete setup, which lets this instance deploy apps. It is not built yet; it arrives in a later version of the repo you deployed from.</p>
 <nav class="platform-links"><a href="/cdn-cgi/access/logout">Sign out</a></nav>`,
   );
 }

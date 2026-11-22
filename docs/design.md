@@ -467,7 +467,7 @@ The direction the platform is taking: instead of each app deploying the platform
     4. **Create**: confirm the repo and Worker names, `platform` by default, and click **Create and deploy**; the build runs on Cloudflare, about two minutes.
     5. **Open it**: visit the Worker's address, which shows the setup form.
     6. **Reserve it**: click **Create token**, which opens the Cloudflare dashboard with the token's permissions filled in; create it, paste it into the form with your email, and submit.
-    7. **Claim it**: the page says it is waiting for that email's sign-in, with the form still below; sign in with the code Cloudflare emails you, and you are the super admin, on a home page saying initial setup is done.
+    7. **Claim it**: the page lists each step setup finished and says one step is left, with a **Sign in as** button naming the reserved email and the form behind a "Wrong email, or no code arriving?" toggle; sign in with the code Cloudflare emails to that address, and you are the super admin, on a home page saying initial setup is complete and that complete setup is not built yet.
 8. **States**: the instance is always in one, and its address shows the page for it.
     1. **Unclaimed**: the setup form.
     2. **Reserved**: a valid token and an email were submitted; the page shows which email it waits for, and the setup form stays open below it.

@@ -145,8 +145,9 @@ describe("unclaimed", () => {
     expect(cf.policies).toEqual([expect.objectContaining({ include: [{ email: { email: "ann@example.com" } }], decision: "allow" })]);
     expect(cf.apps).toEqual([expect.objectContaining({ domain: `${HOST}${ADMIN_PATH}`, policies: [{ id: cf.policies[0]!.id, precedence: 1 }] })]);
     const waiting = await (await request("/")).text();
-    expect(waiting).toContain("Waiting for sign-in");
-    expect(waiting).toContain("ann@example.com");
+    expect(waiting).toContain("One step left: sign in");
+    expect(waiting).toContain(`href="${ADMIN_PATH}">Sign in as ann@example.com</a>`);
+    expect(waiting).toContain("Wrong email, or no code arriving?");
     expect(waiting).toContain("Reserve again");
   });
 
@@ -239,7 +240,9 @@ describe("reserved", () => {
 
   test("the reserved email's sign-in claims it", async () => {
     const response = await request(ADMIN_PATH, { jwt: await jwt(cf.keys!, { email: "ann@exmaple.com" }) });
-    expect(await response.text()).toContain("Initial setup is done");
+    const home = await response.text();
+    expect(home).toContain("Initial setup is complete");
+    expect(home).toContain("Next comes complete setup");
     expect(store.record?.state).toBe("claimed");
   });
 

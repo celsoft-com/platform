@@ -18,8 +18,8 @@ section 16 is the full design, including what happens in each state.
 4. **Open it:** visit the Worker's address, which shows the setup form.
 5. **Reserve it:** click **Create token**. The Cloudflare dashboard opens with the token's
    permissions filled in; create it, copy it, paste it into the form with your email, and submit.
-6. **Claim it:** the page says it is waiting for your sign-in, with the form still below. Sign in
-   with the code Cloudflare emails you; you are now the super admin.
+6. **Claim it:** the page lists what setup did and says one step is left. Click **Sign in as**
+   your email, enter the code Cloudflare emails to that same address, and you are the super admin.
 
 ## Getting back in
 
