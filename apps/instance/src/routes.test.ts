@@ -5,6 +5,8 @@ import { handle } from "./routes.ts";
 import { ADMIN_PATH, TOKEN_SECRET, type InstanceRecord, type Self, type Store } from "./setup.ts";
 
 const TOKEN = "good-token";
+// A setup token whose characters can only appear in a reply if the token itself leaked.
+const TOKEN_LIKE = "Tq8wE3rY6uI1oP4aS7dF";
 // A token with the permissions deploying apps adds, which the setup token lacks.
 const WIDE = "wide-token";
 const VERSION = "0f1e2d3c-4b5a-4687-9a1b-2c3d4e5f6071";
@@ -21,6 +23,7 @@ class FakeCloudflare {
   policies: { id: string; name: string; include: unknown }[] = [];
   apps: { id: string; domain: string; aud: string; policies: unknown }[] = [];
   secrets: Secrets & Record<string, string> = {};
+  tokens = new Set<string>();
   zones = [
     { id: "z1", name: "acme.dev" },
     { id: "z2", name: "acme.app" },
@@ -35,12 +38,12 @@ class FakeCloudflare {
       return Response.json({ keys: [{ ...jwk, kid: "k1" }] });
     }
     const auth = new Headers(init?.headers).get("authorization");
-    if (auth !== `Bearer ${TOKEN}` && auth !== `Bearer ${WIDE}`) return Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 401 });
+    if (![TOKEN, TOKEN_LIKE, WIDE, ...this.tokens].some((t) => auth === `Bearer ${t}`)) return Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 401 });
     const method = init?.method ?? "GET";
     const path = url.pathname.replace("/client/v4", "");
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     const ok = (result: unknown) => Response.json({ success: true, errors: [], result });
-    const narrow = auth === `Bearer ${TOKEN}`;
+    const narrow = auth === `Bearer ${TOKEN}` || auth === `Bearer ${TOKEN_LIKE}`;
     const deny = (permission: string) =>
       (this.denied.has(permission) || (narrow && (Object.values(APP_PERMISSIONS) as string[]).includes(permission))) && Response.json({ success: false, errors: [{ code: 10000, message: "Authentication error" }] }, { status: 403 });
     const id = () => `id-${++this.next}`;
@@ -441,18 +444,42 @@ describe("setup and settings", () => {
     expect(after).toMatchObject({ configured: { neonKey: true, resendKey: true }, settings: { database: { neonKey: "" }, email: { resendKey: "" } } });
   });
 
-  test("no response ever carries a stored secret or any part of one", async () => {
-    elsewhere = async (url) => (url.host === "console.neon.tech" || url.host === "api.resend.com" ? Response.json({}) : undefined);
+  test("no response from any endpoint ever carries a secret or any part of one", async () => {
     // Random-looking secrets, so any run of their characters in a reply can only have come from them.
-    const secrets = ["Zq7xKp9WmT3vLr8NjQ2b", "Hw4cRt6YuB1nMx5EkV9s", "re_Gf3Dp8LsA2qJw7ZtX4"];
-    cf.secrets[TOKEN_SECRET] = secrets[0]!;
-    const replies = [
-      await (await admin("settings", { category: "database", changes: { neonKey: secrets[1] } })).text(),
-      await (await admin("settings", { category: "email", changes: { resendKey: secrets[2] } })).text(),
-      await (await admin("state")).text(),
-      await (await request("/api/state")).text(),
-    ];
-    for (const reply of replies) for (const secret of secrets) for (let i = 0; i + 4 <= secret.length; i++) expect(reply).not.toContain(secret.slice(i, i + 4));
+    const wide = "Zq7xKp9WmT3vLr8NjQ2b";
+    const neonKey = "Hw4cRt6YuB1nMx5EkV9s";
+    const resendKey = "re_Gf3Dp8LsA2qJw7ZtX4";
+    const key = await githubStyleKey();
+    const app = { webhook: "Wb5hN2kQ8rT4yU7iO1pL", client: "Cs9vB3nM6xZ2aS8dF4gH" };
+    elsewhere = async (url) => {
+      if (url.host === "console.neon.tech" || url.host === "api.resend.com") return Response.json({});
+      if (url.pathname === "/app-manifests/code/conversions") return Response.json({ id: 7, slug: "platform-acme", owner: { login: "acme" }, pem: key.pem, webhook_secret: app.webhook, client_id: "c", client_secret: app.client });
+      if (url.pathname === "/app/installations") return Response.json([]);
+      return undefined;
+    };
+    cf.tokens.add(wide);
+    const secrets = [TOKEN_LIKE, wide, neonKey, resendKey, app.webhook, app.client, key.pem.split("\n")[1]!];
+    const replies: string[] = [];
+    const keep = async (response: Promise<Response> | Response) => replies.push(await (await response).text());
+
+    await keep(request("/api/state"));
+    await keep(request("/api/reserve", { json: { token: TOKEN_LIKE, email: "ann@example.com" } }));
+    await keep(admin("state"));
+    await keep(admin("token", { token: wide }));
+    await keep(admin("settings", { category: "cloudflare", changes: { token: wide } }));
+    await keep(admin("settings", { category: "database", changes: { neonKey } }));
+    await keep(admin("settings", { category: "email", changes: { resendKey } }));
+    const started = await answer<{ action: string }>(admin("github/start", { owner: "acme" }));
+    replies.push(JSON.stringify(started));
+    await keep(admin("github/created", { code: "code", state: new URL(started.action).searchParams.get("state") }));
+    await keep(admin("github/installed", {}));
+    await keep(admin("settings", { category: "admins", changes: { emails: ["bob@example.com"] } }));
+    await keep(admin("state"));
+    await keep(request("/api/state"));
+    await keep(request("/api/reset", { json: { token: TOKEN_LIKE, email: "ann@example.com" } }));
+    await keep(request("/api/reserve", { json: { token: "Kj3mN8bV2cX7zL5qW9eR", email: "eve@example.com" } }));
+
+    for (const reply of replies) for (const secret of secrets) for (let i = 0; i + 6 <= secret.length; i++) expect(reply).not.toContain(secret.slice(i, i + 6));
   });
 
   test("platform admins see only who they are and never reach setup, and a reset keeps them", async () => {
