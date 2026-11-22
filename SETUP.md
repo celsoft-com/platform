@@ -31,8 +31,8 @@ section 16 is the full design, including what happens in each state.
 4. **Token refused:** the form says why; fix it and submit again.
 5. **Mistyped email, restarted while waiting, or the code expired:** submit a token with the right
    email again, or ask Cloudflare's sign-in for a new code.
-6. **Zero Trust onboarding:** if the form says the account must finish Zero Trust onboarding,
-   open **Zero Trust** in the dashboard, choose the Free plan, and submit again.
+6. **Access not switched on:** if the form says so, open **Zero Trust** in the dashboard, click
+   **Enable Access**, choose the Free plan, and submit again.
 7. **Lost access to your email later:** open `/reset` on the instance and submit a fresh token
    with your new email.
 

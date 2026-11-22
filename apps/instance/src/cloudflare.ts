@@ -28,10 +28,13 @@ export class CloudflareFailure extends SetupError {
   }
 }
 
-// Raised when Cloudflare will not make a Zero Trust organization until the account finishes onboarding.
+// Access is off for the account, which Cloudflare answers with a 403 like a missing permission.
+export class AccessNotEnabled extends SetupError {}
+
+// Raised when Access is off and Cloudflare will not switch it on through the API.
 export class ZeroTrustOnboarding extends SetupError {
   constructor() {
-    super("This account must finish Zero Trust onboarding first: open Zero Trust in the Cloudflare dashboard, choose the Free plan, then submit again.");
+    super("Access is not switched on for this Cloudflare account. In the Cloudflare dashboard, open Zero Trust, click Enable Access and choose the Free plan, then submit again.");
   }
 }
 
@@ -82,6 +85,7 @@ export class Cloudflare {
     const envelope = (await response.json().catch(() => undefined)) as Envelope<T> | undefined;
     if (response.status === 401) throw new SetupError("Cloudflare did not accept this token; check it was copied whole and has not expired.");
     const said = envelope?.errors?.map((e) => `${e.code} ${e.message}`).join("; ") ?? "";
+    if (envelope?.errors?.some((e) => e.message.includes("access.api.error.not_enabled"))) throw new AccessNotEnabled(said);
     if (response.status === 403) throw new MissingPermission(permission, said);
     if (!response.ok || !envelope?.success) throw new CloudflareFailure(method, path, response.status, said);
     return envelope.result;
@@ -110,7 +114,7 @@ export class Cloudflare {
       const org = await this.call<Organization | null>(PERMISSIONS.organizations, "GET", `/accounts/${account}/access/organizations`);
       return org?.auth_domain ? org : undefined;
     } catch (error) {
-      if (error instanceof CloudflareFailure) return undefined;
+      if (error instanceof CloudflareFailure || error instanceof AccessNotEnabled) return undefined;
       throw error;
     }
   }
@@ -119,7 +123,7 @@ export class Cloudflare {
     try {
       return await this.call<Organization>(PERMISSIONS.organizations, "POST", `/accounts/${account}/access/organizations`, {});
     } catch (error) {
-      if (error instanceof CloudflareFailure) throw new ZeroTrustOnboarding();
+      if (error instanceof CloudflareFailure || error instanceof AccessNotEnabled) throw new ZeroTrustOnboarding();
       throw error;
     }
   }

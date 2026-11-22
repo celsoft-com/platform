@@ -12,6 +12,7 @@ const TEAM = "acme.cloudflareaccess.com";
 class FakeCloudflare {
   denied = new Set<string>();
   onboarded = true;
+  accessOn = false;
   organization: { auth_domain: string } | undefined;
   idps: { id: string; type: string }[] = [];
   policies: { id: string; name: string; include: unknown }[] = [];
@@ -43,8 +44,11 @@ class FakeCloudflare {
     if (rest === "/workers/scripts/platform/secrets" && method === "PUT") return deny(PERMISSIONS.scripts) || ((this.secrets[body.name] = body.text), ok({ name: body.name }));
     if (rest === "/access/organizations") {
       if (deny(PERMISSIONS.organizations)) return deny(PERMISSIONS.organizations) as Response;
-      if (method === "GET") return this.organization ? ok(this.organization) : Response.json({ success: false, errors: [{ code: 12130, message: "access.api.error.not_found" }] }, { status: 404 });
-      if (!this.onboarded) return Response.json({ success: false, errors: [{ code: 12100, message: "zero trust not enabled" }] }, { status: 400 });
+      // Cloudflare answers every Access call with this 403 until Access is switched on.
+      const notEnabled = Response.json({ success: false, errors: [{ code: 9999, message: "access.api.error.not_enabled: Access is not enabled." }] }, { status: 403 });
+      if (method === "GET") return this.organization ? ok(this.organization) : this.accessOn ? Response.json({ success: false, errors: [{ code: 12130, message: "access.api.error.not_found" }] }, { status: 404 }) : notEnabled;
+      if (!this.onboarded) return notEnabled;
+      this.accessOn = true;
       return ok((this.organization = { auth_domain: TEAM }));
     }
     if (rest === "/access/identity_providers") return deny(PERMISSIONS.organizations) || (method === "GET" ? ok(this.idps) : ok(this.idps[this.idps.push({ id: id(), type: body.type }) - 1]));
@@ -144,6 +148,12 @@ describe("unclaimed", () => {
     expect(waiting).toContain("Reserve again");
   });
 
+  test("switches Access on when the account has never used it", async () => {
+    expect((await submit("ann@example.com")).status).toBe(303);
+    expect(cf.accessOn).toBe(true);
+    expect(store.record?.authDomain).toBe(TEAM);
+  });
+
   test("reuses a Zero Trust organization and one-time PIN login the account already has", async () => {
     cf.organization = { auth_domain: "existing.cloudflareaccess.com" };
     cf.idps.push({ id: "otp", type: "onetimepin" });
@@ -174,9 +184,12 @@ describe("refused tokens", () => {
     expect(store.record).toBeUndefined();
   });
 
-  test("an account that has not finished Zero Trust onboarding", async () => {
+  test("an account whose Access is off and that Cloudflare will not switch on says to click Enable Access", async () => {
     cf.onboarded = false;
-    expect(await (await submit("ann@example.com")).text()).toContain("finish Zero Trust onboarding");
+    const html = await (await submit("ann@example.com")).text();
+    expect(html).toContain("Access is not switched on for this Cloudflare account");
+    expect(html).toContain("click Enable Access");
+    expect(html).not.toContain("missing the");
     expect(store.record).toBeUndefined();
   });
 

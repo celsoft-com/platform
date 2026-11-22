@@ -482,7 +482,7 @@ The direction the platform is taking: instead of each app deploying the platform
     1. **Set up by the instance**: reserving creates what is missing, using the token: the Zero Trust organization, the one-time PIN login, and an Access application covering the instance's `/admin` path with one rule allowing the reserved email.
     2. **Email codes**: Cloudflare sends the codes itself, so no email service is needed.
     3. **Checked twice**: Access stops anyone else before the Worker, and the Worker also checks the `Cf-Access-Jwt-Assertion` header on every `/admin` request: Cloudflare's signature, the application's audience, and that the email is the super admin's.
-    4. **Onboarding**: if Cloudflare refuses to create the Zero Trust organization until the account finishes onboarding in the dashboard, the form says to open Zero Trust there, choose the Free plan, and submit again.
+    4. **Access off**: an account that has never used Access answers every Access call with a 403, `access.api.error.not_enabled`, which the instance tells apart from a missing permission; it then tries to create the Zero Trust organization itself, and if Cloudflare refuses, the form says to open Zero Trust in the dashboard, click **Enable Access**, choose the Free plan, and submit again.
     5. **Outside `/admin`**: the setup and reset forms stay public, since each needs a token for the account.
 11. **Getting back in**: each case and what the super admin does.
     1. **Before Create and deploy**: click the button again.
