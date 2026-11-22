@@ -356,12 +356,22 @@ describe("complete setup", () => {
     for (const step of ["token", "domains", "github", "database", "email", "admins"]) expect(html).toContain(`<li class="instance-todo"><a href="/admin/${step}">`);
   });
 
-  test("the setup token is refused as the wider token, naming what it lacks after what it reached", async () => {
+  test("the setup token is refused as the wider token, listing everything it lacks at once and how to add it", async () => {
     const html = await (await admin("token", { token: TOKEN })).text();
     expect(html).toContain('<li class="instance-done">Workers: reachable.');
     expect(html).toContain('<li class="instance-done">Cloudflare Access: reachable.');
-    expect(html).toContain(`missing the ${APP_PERMISSIONS.hyperdrive} permission`);
+    expect(html).toContain(`The token is missing ${APP_PERMISSIONS.hyperdrive}, ${APP_PERMISSIONS.r2}, ${APP_PERMISSIONS.zones}.`);
+    expect(html).toContain(`${APP_PERMISSIONS.dns} and ${APP_PERMISSIONS.routes} could not be checked`);
+    expect(html).toContain("paste the same token here again");
     expect(store.record?.setup?.token).toBeUndefined();
+  });
+
+  test("a token missing only some zone permissions names just those", async () => {
+    cf.denied.add(APP_PERMISSIONS.routes);
+    const html = await (await admin("token", { token: WIDE })).text();
+    expect(html).toContain('<li class="instance-done">Hyperdrive: reachable.');
+    expect(html).toContain(`The token is missing ${APP_PERMISSIONS.routes}. In Cloudflare`);
+    expect(cf.secrets[TOKEN_SECRET]).toBe(TOKEN);
   });
 
   test("a wider token is checked on every domain and replaces the setup token", async () => {

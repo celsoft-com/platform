@@ -1,7 +1,7 @@
 // Complete setup: the six steps the super admin takes on the admin page so the instance can
 // deploy apps. Each step checks its own work and adds what it confirmed to `done`.
 
-import { Cloudflare, MissingPermission, SetupError, type Zone } from "./cloudflare.ts";
+import { APP_PERMISSIONS, Cloudflare, MissingPermission, SetupError, type Zone } from "./cloudflare.ts";
 import { convert, installations, manifest, manifestAction, type GitHubApp } from "./github.ts";
 import { EMAIL, policyName, TOKEN_SECRET, type InstanceRecord, type Progress, type Self, type Store } from "./setup.ts";
 
@@ -53,22 +53,43 @@ export async function widerToken(ctx: Context, input: string, done: string[]): P
   const cf = new Cloudflare(token, ctx.fetcher);
   if (!(await cf.accounts()).some((a) => a.id === record.account)) throw new SetupError("This token does not reach the Cloudflare account running this instance; create it in that account.");
   done.push("Reaches the account running this instance.");
-  await cf.servingVersions(record.account, record.script);
-  done.push("Workers: reachable.");
-  await cf.identityProviders(record.account);
-  await cf.apps(record.account);
-  done.push("Cloudflare Access: reachable.");
-  await cf.hyperdrives(record.account);
-  done.push("Hyperdrive: reachable.");
-  await cf.buckets(record.account);
-  done.push("R2 storage: reachable.");
-  const zones = await cf.zones(record.account);
-  if (!zones.length) throw new SetupError("The token reaches none of this account's domains; give Zone Read, DNS Edit and Workers Routes Edit to all zones.");
-  for (const zone of zones) {
-    await cf.dnsRecords(zone.id);
-    await cf.routes(zone.id);
+
+  // Every permission is checked, so one edit of the token can fix all that is missing.
+  const missing = new Set<string>();
+  const check = async (label: string, run: () => Promise<unknown>): Promise<boolean> => {
+    try {
+      await run();
+      if (label) done.push(`${label}: reachable.`);
+      return true;
+    } catch (error) {
+      if (!(error instanceof MissingPermission)) throw error;
+      missing.add(error.permission);
+      return false;
+    }
+  };
+  await check("Workers", () => cf.servingVersions(record.account, record.script));
+  await check("Cloudflare Access", async () => {
+    await cf.identityProviders(record.account);
+    await cf.apps(record.account);
+  });
+  await check("Hyperdrive", () => cf.hyperdrives(record.account));
+  await check("R2 storage", () => cf.buckets(record.account));
+  let zones: Zone[] = [];
+  if (await check("", async () => (zones = await cf.zones(record.account)))) {
+    if (!zones.length) throw new SetupError("The token reaches none of this account's domains; edit it in Cloudflare so its zone permissions cover all zones, then paste it again.");
+    let reached = true;
+    for (const zone of zones) {
+      reached = (await check("", () => cf.dnsRecords(zone.id))) && reached;
+      reached = (await check("", () => cf.routes(zone.id))) && reached;
+    }
+    if (reached) done.push(`DNS and Worker routes: reachable on all ${zones.length} domains (${zones.map((z) => z.name).join(", ")}).`);
   }
-  done.push(`DNS and Worker routes: reachable on all ${zones.length} domains (${zones.map((z) => z.name).join(", ")}).`);
+  if (missing.size) {
+    const unchecked = missing.has(APP_PERMISSIONS.zones) ? ` Without ${APP_PERMISSIONS.zones}, ${APP_PERMISSIONS.dns} and ${APP_PERMISSIONS.routes} could not be checked; make sure it has those too.` : "";
+    throw new SetupError(
+      `The token is missing ${[...missing].join(", ")}.${unchecked} In Cloudflare, open Manage Account, then Account API Tokens, edit this token, add ${missing.size === 1 ? "that permission" : "those permissions"} (zone ones on all zones), save, and paste the same token here again; editing keeps its value.`,
+    );
+  }
   await saveSecret(cf, record, TOKEN_SECRET, token, done, "the wider token");
   await progress(ctx, record, { token: true });
 }
