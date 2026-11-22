@@ -4,4 +4,5 @@ set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 pnpm exec tsc -b
 pnpm exec tsc -p apps/demo
+pnpm exec tsc -p apps/instance
 node packages/platform/dist/write-schema.js

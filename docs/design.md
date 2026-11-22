@@ -458,7 +458,8 @@ The direction the platform is taking: instead of each app deploying the platform
     2. **Every push deploys**: Workers Builds deploys each push to the copy's `main`; the org decides when and how it takes this repo's changes into its copy.
     3. **Push is super admin power**: whoever can push to the copy's `main` controls the instance's code and the token it holds, so push access belongs to super admins only, like membership in the Cloudflare account.
     4. **Its own storage**: the instance keeps its state in a Durable Object the deploy creates, so the button needs nothing filled in.
-    5. **No package**: nothing is published to npm; the instance builds from the code in its own copy of the repo.
+    5. **Where it lives**: `wrangler.jsonc` at the root deploys `apps/instance`, which reuses the platform's screen styles from `packages/platform`.
+    6. **No package**: nothing is published to npm; the instance builds from the code in its own copy of the repo.
 7. **Initial setup**: what the super admin does, all in the browser.
     1. **Prerequisites**: a Cloudflare account on Workers Paid and a GitHub account.
     2. **Start**: on the repo's GitHub page, click **Deploy to Cloudflare**.
@@ -475,7 +476,7 @@ The direction the platform is taking: instead of each app deploying the platform
     5. **Reset**: in Claimed, the reset form at `/reset` takes a valid token and an email and moves the instance back to Reserved for that email, so a super admin who loses their email recovers through the Cloudflare account.
 9. **Valid token**: checked on every submit, which carries its own token, so claiming never rests on a cookie.
     1. **Same account**: the token must reach the account running this very Worker, found by the Worker's running version; a token for any other account is refused.
-    2. **Permissions**: Workers Scripts Edit, Access: Apps and Policies Edit, and Access: Organizations, Identity Providers, and Groups Edit, all on the account; a token missing one is refused, naming it.
+    2. **Permissions**: Workers Scripts Edit, Account Settings Read, Access: Apps and Policies Edit, and Access: Organizations, Identity Providers, and Groups Edit, all on the account; a token missing one is refused, naming it. **Create token** opens Cloudflare's account token page with them filled in, and the form lists them too.
     3. **Kept**: the accepted token becomes the Worker's own secret, replacing any earlier one; it is never shown again and goes nowhere but Cloudflare's API.
 10. **Sign-in**: Cloudflare Access, from the Zero Trust part of the account, free for up to 50 users.
     1. **Set up by the instance**: reserving creates what is missing, using the token: the Zero Trust organization, the one-time PIN login, and an Access application covering the instance's `/admin` path with one rule allowing the reserved email.
