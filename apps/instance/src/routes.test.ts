@@ -170,6 +170,13 @@ describe("refused tokens", () => {
     expect(store.record).toBeUndefined();
   });
 
+  test("an unexpected failure shows on the form instead of an error page", async () => {
+    const broken: typeof fetch = async (input, init) => (String(input).includes("/deployments") ? Response.json({ success: true, result: null }) : cf.fetch(input, init));
+    const response = await handle(new Request(`https://${HOST}/`, { method: "POST", body: new URLSearchParams({ token: TOKEN, email: "ann@example.com" }) }), store, { version: VERSION, host: HOST }, broken);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Something went wrong that setup did not expect: TypeError");
+  });
+
   test("an invalid email, keeping what was typed", async () => {
     const html = await (await submit("not-an-email")).text();
     expect(html).toContain("Enter a valid email address");

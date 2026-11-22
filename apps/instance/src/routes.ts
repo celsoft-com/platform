@@ -22,7 +22,9 @@ export async function handle(request: Request, state: Store, self: Self, fetcher
       await reserve(state, self, { token: String(form.get("token") ?? ""), email }, fetcher);
     } catch (error) {
       if (error instanceof SetupError) return show(error.message);
-      throw error;
+      // Anything else is a bug; show it on the form, rather than Cloudflare's error page, so it can be reported.
+      console.error(error);
+      return show(`Something went wrong that setup did not expect: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
     }
     return redirect("/");
   }
