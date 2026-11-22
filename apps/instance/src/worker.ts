@@ -27,6 +27,6 @@ function store(env: Env): Store {
 
 export default {
   fetch(request, env) {
-    return handle(request, store(env), { version: env.CF_VERSION_METADATA.id, host: new URL(request.url).host });
+    return handle(request, store(env), { version: env.CF_VERSION_METADATA.id, deployedAt: env.CF_VERSION_METADATA.timestamp, host: new URL(request.url).host });
   },
 } satisfies ExportedHandler<Env>;

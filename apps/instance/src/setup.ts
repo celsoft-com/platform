@@ -19,9 +19,10 @@ export interface Store {
   put(record: InstanceRecord): Promise<void>;
 }
 
-// What the Worker knows about itself: the version serving this request and the address it was reached at.
+// What the Worker knows about itself: the version serving this request, when it was deployed, and the address it was reached at.
 export interface Self {
   version: string;
+  deployedAt?: string;
   host: string;
 }
 

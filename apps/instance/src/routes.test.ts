@@ -4,7 +4,7 @@ import { handle } from "./routes.ts";
 import { ADMIN_PATH, TOKEN_SECRET, type InstanceRecord, type Store } from "./setup.ts";
 
 const TOKEN = "good-token";
-const VERSION = "version-1";
+const VERSION = "0f1e2d3c-4b5a-4687-9a1b-2c3d4e5f6071";
 const HOST = "platform.acme.workers.dev";
 const TEAM = "acme.cloudflareaccess.com";
 
@@ -104,7 +104,7 @@ const request = (path: string, init?: { form?: Record<string, string>; jwt?: str
       headers: init?.jwt ? { "cf-access-jwt-assertion": init.jwt } : {},
     }),
     store,
-    { version: VERSION, host: HOST },
+    { version: VERSION, deployedAt: "2026-11-22T20:15:42.123Z", host: HOST },
     strict as typeof fetch,
   );
 
@@ -124,6 +124,10 @@ describe("unclaimed", () => {
     expect(html).toContain("Set up this instance");
     expect(html).toContain("permissionGroupKeys");
     for (const permission of Object.values(PERMISSIONS)) expect(html).toContain(permission.replace(/&/g, "&amp;"));
+  });
+
+  test("every page shows which build is serving", async () => {
+    expect(await (await request("/")).text()).toContain("Build 0f1e2d3c · 2026-11-22 20:15 UTC");
   });
 
   test("a valid token and email reserve it and set up Access for that email alone", async () => {

@@ -1,7 +1,7 @@
 // Routing: initial setup at /, recovery at /reset, and the super admin's home at /admin behind Cloudflare Access.
 
 import { SetupError } from "./cloudflare.ts";
-import { homePage, resetPage, setupPage, waitingPage } from "./pages.ts";
+import { homePage, refusedPage, resetPage, setupPage, waitingPage } from "./pages.ts";
 import { ADMIN_PATH, reserve, signedIn, type Self, type Store } from "./setup.ts";
 
 const redirect = (to: string) => new Response(null, { status: 303, headers: { location: to } });
@@ -16,7 +16,7 @@ export async function handle(request: Request, state: Store, self: Self, fetcher
     if (resetting !== (record?.state === "claimed")) return redirect(resetting ? "/" : ADMIN_PATH);
     const form = request.method === "POST" ? await request.formData() : undefined;
     const email = String(form?.get("email") ?? "");
-    const show = (error?: string) => (resetting ? resetPage(error, email) : record ? waitingPage(record.email, error, email) : setupPage(error, email));
+    const show = (error?: string) => (resetting ? resetPage(self, error, email) : record ? waitingPage(self, record.email, error, email) : setupPage(self, error, email));
     if (!form) return show();
     try {
       await reserve(state, self, { token: String(form.get("token") ?? ""), email }, fetcher);
@@ -31,9 +31,9 @@ export async function handle(request: Request, state: Store, self: Self, fetcher
 
   if (pathname === ADMIN_PATH) {
     const email = await signedIn(state, request.headers.get("cf-access-jwt-assertion"), fetcher);
-    if (email) return homePage(email);
+    if (email) return homePage(self, email);
     // Access stops anyone else before the Worker, so this is a forged or stale request; sending it to / would loop back here.
-    return record?.state === "claimed" ? new Response("Not signed in as the super admin", { status: 403 }) : redirect("/");
+    return record?.state === "claimed" ? refusedPage(self) : redirect("/");
   }
 
   return new Response("Not found", { status: 404 });
