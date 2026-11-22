@@ -1,97 +1,143 @@
-// Routing: initial setup at /, recovery at /reset, the admin pages under /admin behind Cloudflare
-// Access, and the GitHub App's webhook.
+// The Worker's routes: a JSON API for the pages (/api/ for claiming, /admin/api/ behind Cloudflare
+// Access), the GitHub App's webhook, and the built pages for every other path.
 
-import { adminsStep, databaseStep, emailStep, githubSend, githubStep, platformHome, superHome, tokenStep } from "./admin-pages.ts";
-import { SetupError } from "./cloudflare.ts";
+import { APP_PERMISSIONS, PERMISSIONS, SetupError } from "./cloudflare.ts";
 import * as complete from "./complete.ts";
 import { webhookSigned, type GitHubApp } from "./github.ts";
-import { refusedPage, resetPage, setupPage, waitingPage, type Result } from "./pages.ts";
-import { ADMIN_PATH, reserve, viewer, type InstanceRecord } from "./setup.ts";
+import { reserve, viewer, type InstanceRecord, type Viewer } from "./setup.ts";
+import { SETUP_TOKEN_URL, WIDER_TOKEN_URL } from "./token-links.ts";
 
-export type Context = complete.Context;
+export interface Context extends complete.Context {
+  // The built pages; absent in tests.
+  assets?: { fetch: (request: Request) => Promise<Response> };
+}
 
-const redirect = (to: string) => new Response(null, { status: 303, headers: { location: to } });
+// What a step reports: what it confirmed, and the sentence that stopped it.
+export interface StepResult {
+  done: string[];
+  error?: string;
+}
 
-// Runs a step, turning its failure into the error the page shows: a setup error as written, anything else as a bug to report.
-async function attempt(done: string[], step: () => Promise<unknown>): Promise<Result> {
+const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
+
+// Runs a step, turning its failure into the sentence the page shows: a setup error as written, anything else as a bug to report.
+async function attempt(step: (done: string[]) => Promise<unknown>): Promise<Response> {
+  const done: string[] = [];
   try {
-    await step();
-    return { email: "", done };
+    await step(done);
+    return json({ done } satisfies StepResult);
   } catch (error) {
-    if (error instanceof SetupError) return { email: "", done, error: error.message };
+    if (error instanceof SetupError) return json({ done, error: error.message } satisfies StepResult, 400);
     console.error(error);
-    return { email: "", done, error: `Something went wrong that setup did not expect: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}` };
+    return json({ done, error: `Something went wrong that setup did not expect: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}` } satisfies StepResult, 400);
   }
 }
+
+async function body(request: Request): Promise<Record<string, unknown>> {
+  return ((await request.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
+}
+
+const text = (value: unknown) => (typeof value === "string" ? value : "");
+
+// A saved secret is never sent back; its last four characters let the person recognize it.
+const hint = (secret: string | undefined) => (secret ? `••••${secret.slice(-4)}` : "");
+
+const build = (ctx: Context) => ({ version: ctx.self.version, deployedAt: ctx.self.deployedAt });
 
 export async function handle(request: Request, ctx: Context): Promise<Response> {
   const url = new URL(request.url);
   const { pathname } = url;
   const { store, self, fetcher } = ctx;
+  const post = request.method === "POST";
   const record = await store.get();
+  const stage = record?.state ?? "unclaimed";
 
-  if (pathname === "/" || pathname === "/reset") {
-    const resetting = pathname === "/reset";
-    // Setup belongs before the claim and reset after it.
-    if (resetting !== (record?.state === "claimed")) return redirect(resetting ? "/" : ADMIN_PATH);
-    const form = request.method === "POST" ? await request.formData() : undefined;
-    const email = String(form?.get("email") ?? "");
-    const done: string[] = [];
-    const show = (result: Result) => (resetting ? resetPage(self, result) : record ? waitingPage(self, record.email, result) : setupPage(self, result));
-    if (!form) return show({ email, done });
-    const result = await attempt(done, () => reserve(store, self, { token: String(form.get("token") ?? ""), email }, done, fetcher));
-    if (result.error) return show({ ...result, email });
-    // Shown right away rather than redirected, so the steps it took stay on screen.
-    return waitingPage(self, (await store.get())!.email, result);
+  if (pathname === "/api/state") {
+    return json({ build: build(ctx), stage, reserved: record?.state === "reserved" ? record.email : undefined, tokenUrl: SETUP_TOKEN_URL, permissions: Object.values(PERMISSIONS) });
+  }
+  if ((pathname === "/api/reserve" || pathname === "/api/reset") && post) {
+    // Reserving belongs before the claim and resetting after it.
+    if ((pathname === "/api/reset") !== (stage === "claimed")) {
+      const error = stage === "claimed" ? "This instance is already claimed; sign in, or reset it at /reset." : "This instance is not claimed yet; reserve it at /.";
+      return json({ done: [], error } satisfies StepResult, 409);
+    }
+    const input = await body(request);
+    return attempt((done) => reserve(store, self, { token: text(input.token), email: text(input.email) }, done, fetcher));
   }
 
-  if (pathname === "/github/webhook" && request.method === "POST") {
+  if (pathname === "/github/webhook" && post) {
     if (!ctx.secrets.GITHUB_APP) return new Response("No GitHub App", { status: 404 });
-    const body = await request.text();
-    const signed = await webhookSigned(JSON.parse(ctx.secrets.GITHUB_APP) as GitHubApp, body, request.headers.get("x-hub-signature-256"));
+    const event = await request.text();
+    const signed = await webhookSigned(JSON.parse(ctx.secrets.GITHUB_APP) as GitHubApp, event, request.headers.get("x-hub-signature-256"));
     // Accepted and ignored until apps are deployed from their repos.
     return new Response(null, { status: signed ? 202 : 401 });
   }
 
-  if (pathname !== ADMIN_PATH && !pathname.startsWith(`${ADMIN_PATH}/`)) return new Response("Not found", { status: 404 });
+  if (pathname.startsWith("/admin/api/")) {
+    const who = await viewer(store, request.headers.get("cf-access-jwt-assertion"), fetcher);
+    if (!who) return json({ error: "Not signed in to this instance." }, 401);
+    return admin(request, pathname.slice("/admin/api/".length), who, ctx);
+  }
 
-  const who = await viewer(store, request.headers.get("cf-access-jwt-assertion"), fetcher);
-  // Access stops anyone else before the Worker, so this is a forged or stale request; sending a claimed instance to / would loop back here.
-  if (!who) return record?.state === "claimed" ? refusedPage(self) : redirect("/");
-  const latest = async () => (await store.get()) as InstanceRecord;
-  if (pathname === ADMIN_PATH) return who.role === "super" ? superHome(self, who.email, await latest(), await complete.tokenWorks(ctx)) : platformHome(self, who.email);
-  if (who.role !== "super") return refusedPage(self);
+  if (pathname.startsWith("/api/")) return json({ error: "Not found." }, 404);
+  return ctx.assets ? ctx.assets.fetch(request) : new Response("Not found", { status: 404 });
+}
 
-  const step = pathname.slice(ADMIN_PATH.length + 1);
-  const form = request.method === "POST" ? await request.formData() : undefined;
-  const done: string[] = [];
-  const field = (name: string) => String(form?.get(name) ?? "");
+async function admin(request: Request, route: string, who: Viewer, ctx: Context): Promise<Response> {
+  const record = (await ctx.store.get()) as InstanceRecord;
 
-  switch (step) {
+  if (route === "state") {
+    const base = { build: build(ctx), viewer: who };
+    if (who.role !== "super") return json(base);
+    const setup = record.setup ?? {};
+    const github = setup.github ? { slug: setup.github.slug, owner: setup.github.owner } : undefined;
+    return json({
+      ...base,
+      setup: { token: !!setup.token, tokenWorks: await complete.tokenWorks(ctx), github },
+      settings: {
+        cloudflare: { token: hint(ctx.secrets.CLOUDFLARE_API_TOKEN) },
+        github: { app: github?.slug ?? "", owner: github?.owner ?? "" },
+        database: { neonKey: hint(ctx.secrets.NEON_API_KEY) },
+        email: { resendKey: hint(ctx.secrets.RESEND_API_KEY) },
+        admins: { emails: record.admins ?? [] },
+      },
+      tokenUrl: WIDER_TOKEN_URL,
+      permissions: [...Object.values(PERMISSIONS), ...Object.values(APP_PERMISSIONS)],
+    });
+  }
+
+  if (who.role !== "super") return json({ error: "Only the super admin can change this instance's setup." }, 403);
+  if (request.method !== "POST") return json({ error: "Not found." }, 404);
+  const input = await body(request);
+
+  switch (route) {
     case "token":
-      return form ? tokenStep(self, await attempt(done, () => complete.widerToken(ctx, field("token"), done))) : tokenStep(self, undefined, await complete.tokenWorks(ctx));
-    case "github": {
-      if (!form) return githubStep(self, await latest());
-      let sent: { action: string; manifest: string } | undefined;
-      const result = await attempt(done, async () => (sent = await complete.githubStart(ctx, field("owner"))));
-      return sent ? githubSend(self, sent.action, sent.manifest) : githubStep(self, await latest(), result);
-    }
-    case "github/created": {
-      const result = await attempt(done, () => complete.githubCreated(ctx, url.searchParams.get("code") ?? "", url.searchParams.get("state") ?? "", done));
-      return githubStep(self, await latest(), result);
-    }
-    case "github/installed": {
-      const result = await attempt(done, () => complete.githubInstalled(ctx, done));
-      return githubStep(self, await latest(), result);
-    }
-    case "database":
-      return databaseStep(self, form ? await attempt(done, () => complete.neon(ctx, field("key"), done)) : undefined);
-    case "email":
-      return emailStep(self, form ? await attempt(done, () => complete.resend(ctx, field("key"), done)) : undefined);
-    case "admins": {
-      const result = form ? await attempt(done, () => complete.admins(ctx, field("emails"), done)) : undefined;
-      return adminsStep(self, await latest(), result);
+      return attempt((done) => complete.widerToken(ctx, text(input.token), done));
+    case "github/start":
+      try {
+        return json(await complete.githubStart(ctx, text(input.owner)));
+      } catch (error) {
+        if (error instanceof SetupError) return json({ done: [], error: error.message } satisfies StepResult, 400);
+        throw error;
+      }
+    case "github/created":
+      return attempt((done) => complete.githubCreated(ctx, text(input.code), text(input.state), done));
+    case "github/installed":
+      return attempt((done) => complete.githubInstalled(ctx, done));
+    case "settings": {
+      const changes = (input.changes ?? {}) as Record<string, unknown>;
+      switch (input.category) {
+        case "cloudflare":
+          return attempt((done) => complete.widerToken(ctx, text(changes.token), done));
+        case "database":
+          return attempt((done) => complete.neon(ctx, text(changes.neonKey), done));
+        case "email":
+          return attempt((done) => complete.resend(ctx, text(changes.resendKey), done));
+        case "admins":
+          return attempt((done) => complete.admins(ctx, (Array.isArray(changes.emails) ? changes.emails : []).map(String).join("\n"), done));
+      }
+      return json({ done: [], error: "That setting cannot be changed here." } satisfies StepResult, 400);
     }
   }
-  return new Response("Not found", { status: 404 });
+  return json({ error: "Not found." }, 404);
 }

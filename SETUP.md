@@ -21,18 +21,18 @@ section 16 is the full design, including what happens in each state.
 6. **Claim it:** the page lists what setup did and says one step is left. Click **Sign in as**
    your email, enter the code Cloudflare emails to that same address, and you are the super admin.
 
-## Complete setup
+## After you sign in
 
-Once you are signed in, your home page is a checklist. Work down it; each step checks its own work
-and shows ✓ when it is done, or says what stopped it.
+Setup has two steps; each checks its own work and says what it confirmed, or what stopped it.
 
-1. **Wider token:** create a token with the listed permissions, the zone ones on all zones, and
-   paste it. It replaces the setup token.
+1. **Token:** create a token with the listed permissions, the zone ones on all zones, and paste
+   it. It replaces the setup token.
 2. **GitHub App:** name the GitHub org your app repos live in, or leave it empty for your own
    account, then create the app on GitHub. Installing it on a repo happens when you add that app.
-3. **Database:** paste a Neon organization API key.
-4. **Email:** paste a Resend API key with Full access.
-5. **Platform admins:** list the emails of the people who will manage apps.
+
+Then you are in the admin interface: Apps, and Settings, where you connect Neon (a Neon
+organization API key) and Resend (an API key with Full access) and name platform admins whenever
+you want.
 
 ## Getting back in
 

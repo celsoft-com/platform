@@ -121,7 +121,7 @@ const SELF: Self = { version: VERSION, deployedAt: "2026-11-22T20:15:42.123Z", h
 let elsewhere: (url: URL, init?: RequestInit) => Promise<Response | undefined> | undefined = () => undefined;
 
 // The Worker sees the secrets Cloudflare holds for it, as a new version would after each one is saved.
-const context = (over: Partial<{ store: Store; self: Self; fetcher: typeof fetch }> = {}) => ({
+const context = (over: Partial<{ store: Store; self: Self; fetcher: typeof fetch; assets: { fetch: (r: Request) => Promise<Response> } }> = {}) => ({
   store,
   self: SELF,
   secrets: cf.secrets,
@@ -129,17 +129,19 @@ const context = (over: Partial<{ store: Store; self: Self; fetcher: typeof fetch
   ...over,
 });
 
-const request = (path: string, init?: { form?: Record<string, string> | URLSearchParams; jwt?: string; method?: string; body?: string; headers?: Record<string, string> }) =>
+const request = (path: string, init?: { json?: unknown; jwt?: string; method?: string; body?: string; headers?: Record<string, string> }) =>
   handle(
     new Request(`https://${HOST}${path}`, {
-      method: init?.method ?? (init?.form ? "POST" : "GET"),
-      ...(init?.form ? { body: new URLSearchParams(init.form) } : init?.body ? { body: init.body } : {}),
+      method: init?.method ?? (init?.json !== undefined ? "POST" : "GET"),
+      ...(init?.json !== undefined ? { body: JSON.stringify(init.json) } : init?.body ? { body: init.body } : {}),
       headers: { ...(init?.jwt ? { "cf-access-jwt-assertion": init.jwt } : {}), ...init?.headers },
     }),
     context(),
   );
 
-const submit = (email: string, token = TOKEN, path = "/") => request(path, { form: { token, email } });
+type Step = { done: string[]; error?: string };
+const answer = async <T = Step>(response: Promise<Response> | Response) => (await (await response).json()) as T;
+const submit = (email: string, token = TOKEN, path = "/api/reserve") => request(path, { json: { token, email } });
 
 beforeEach(async () => {
   cf = new FakeCloudflare();
@@ -149,40 +151,30 @@ beforeEach(async () => {
 });
 
 describe("unclaimed", () => {
-  test("shows the setup form with a link that creates the token", async () => {
-    const response = await request("/");
-    const html = await response.text();
-    expect(response.status).toBe(200);
-    expect(html).toContain("Set up this instance");
-    expect(html).toContain("permissionGroupKeys");
-    for (const permission of Object.values(PERMISSIONS)) expect(html).toContain(permission.replace(/&/g, "&amp;"));
-  });
-
-  test("every page shows which build is serving", async () => {
-    expect(await (await request("/")).text()).toContain("Build 0f1e2d3c · 2026-11-22 20:15 UTC");
+  test("the state names the stage, the build serving, and the link that creates the token", async () => {
+    const state = await answer<{ stage: string; build: { version: string }; tokenUrl: string; permissions: string[] }>(request("/api/state"));
+    expect(state.stage).toBe("unclaimed");
+    expect(state.build.version).toBe(VERSION);
+    expect(state.tokenUrl).toContain("permissionGroupKeys");
+    expect(state.permissions).toEqual(Object.values(PERMISSIONS));
   });
 
   test("a valid token and email reserve it and set up Access for that email alone", async () => {
     const response = await submit("Ann@Example.com");
     expect(response.status).toBe(200);
-    const shown = await response.text();
-    for (const step of ["Token accepted", "Cloudflare Access is on", "Sign-in with an emailed code is on", "Only ann@example.com may sign in", "Cloudflare Access protects", "Reserved for ann@example.com", "Token saved"]) expect(shown).toContain(step);
+    const { done } = await answer(response);
+    for (const step of ["Token accepted", "Cloudflare Access is on", "Sign-in with an emailed code is on", "Only ann@example.com may sign in", "Cloudflare Access protects", "Reserved for ann@example.com", "Token saved"]) expect(done.join("\n")).toContain(step);
     expect(store.record).toEqual({ state: "reserved", email: "ann@example.com", account: "acct", script: "platform", authDomain: TEAM, aud: "aud-1" });
     expect(cf.secrets[TOKEN_SECRET]).toBe(TOKEN);
     expect(cf.idps).toEqual([{ id: expect.any(String), type: "onetimepin" }]);
     expect(cf.policies).toEqual([expect.objectContaining({ include: [{ email: { email: "ann@example.com" } }], decision: "allow" })]);
     expect(cf.apps).toEqual([expect.objectContaining({ domain: `${HOST}${ADMIN_PATH}`, policies: [{ id: cf.policies[0]!.id, precedence: 1 }] })]);
-    const waiting = await (await request("/")).text();
-    expect(waiting).toContain("One step left: sign in");
-    expect(waiting).toContain(`href="${ADMIN_PATH}">Sign in as ann@example.com</a>`);
-    expect(waiting).toContain("Wrong email, or no code arriving?");
-    expect(waiting).toContain("Reserve again");
+    expect(await answer(request("/api/state"))).toMatchObject({ stage: "reserved", reserved: "ann@example.com" });
   });
 
   test("switches Access on when the account has never used it", async () => {
     expect((await submit("ann@example.com")).status).toBe(200);
     expect(cf.accessOn).toBe(true);
-    expect(store.record?.authDomain).toBe(TEAM);
   });
 
   test("reuses a Zero Trust organization and one-time PIN login the account already has", async () => {
@@ -192,64 +184,66 @@ describe("unclaimed", () => {
     expect(store.record?.authDomain).toBe("existing.cloudflareaccess.com");
     expect(cf.idps).toHaveLength(1);
   });
+
+  test("every other path is the built pages", async () => {
+    const pages = { fetch: async (r: Request) => new Response(`page ${new URL(r.url).pathname}`) };
+    expect(await (await handle(new Request(`https://${HOST}/admin/settings`), context({ assets: pages }))).text()).toBe("page /admin/settings");
+    expect((await request("/api/nothing")).status).toBe(404);
+  });
 });
 
 describe("refused tokens", () => {
   test("a token Cloudflare does not accept", async () => {
     const response = await submit("ann@example.com", "typo");
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("Cloudflare did not accept this token");
+    expect((await answer(response)).error).toContain("Cloudflare did not accept this token");
     expect(store.record).toBeUndefined();
   });
 
   test.each(Object.values(PERMISSIONS))("a token missing %s names it", async (permission) => {
     cf.denied.add(permission);
-    const html = await (await submit("ann@example.com")).text();
-    expect(html).toContain(`missing the ${permission.replace(/&/g, "&amp;")} permission (Cloudflare said: 10000 Authentication error)`);
+    expect((await answer(submit("ann@example.com"))).error).toContain(`missing the ${permission} permission`);
     expect(store.record).toBeUndefined();
   });
 
   test("a token for an account not running this instance", async () => {
-    const response = await handle(new Request(`https://${HOST}/`, { method: "POST", body: new URLSearchParams({ token: TOKEN, email: "ann@example.com" }) }), context({ self: { version: "not-deployed-here", host: HOST } }));
-    expect(await response.text()).toContain("does not reach the Cloudflare account running this instance");
+    const response = await handle(new Request(`https://${HOST}/api/reserve`, { method: "POST", body: JSON.stringify({ token: TOKEN, email: "ann@example.com" }) }), context({ self: { version: "not-deployed-here", host: HOST } }));
+    expect((await answer(response)).error).toContain("does not reach the Cloudflare account running this instance");
     expect(store.record).toBeUndefined();
   });
 
-  test("a failure shows the steps that finished and the one that stopped it", async () => {
+  test("a failure reports the steps that finished and the one that stopped it", async () => {
     cf.denied.add(PERMISSIONS.apps);
-    const html = await (await submit("ann@example.com")).text();
-    expect(html).toContain('<li class="instance-done">Token accepted');
-    expect(html).toContain('<li class="instance-done">Sign-in with an emailed code is on.');
-    expect(html).toContain(`<li class="instance-failed" role="alert">The token is missing the ${PERMISSIONS.apps}`);
+    const { done, error } = await answer(submit("ann@example.com"));
+    expect(done[0]).toContain("Token accepted");
+    expect(done).toContain("Sign-in with an emailed code is on.");
+    expect(error).toContain(`The token is missing the ${PERMISSIONS.apps}`);
   });
 
   test("a reservation the instance cannot read back is reported, not lost", async () => {
     const forgetful: Store = { get: async () => undefined, put: async () => {} };
-    const response = await handle(new Request(`https://${HOST}/`, { method: "POST", body: new URLSearchParams({ token: TOKEN, email: "ann@example.com" }) }), context({ store: forgetful }));
-    expect(await response.text()).toContain("could not be saved in this instance");
+    const response = await handle(new Request(`https://${HOST}/api/reserve`, { method: "POST", body: JSON.stringify({ token: TOKEN, email: "ann@example.com" }) }), context({ store: forgetful }));
+    expect((await answer(response)).error).toContain("could not be saved in this instance's storage");
     expect(cf.secrets[TOKEN_SECRET]).toBeUndefined();
   });
 
   test("an account whose Access is off and that Cloudflare will not switch on says to click Enable Access", async () => {
     cf.onboarded = false;
-    const html = await (await submit("ann@example.com")).text();
-    expect(html).toContain("Access is not switched on for this Cloudflare account");
-    expect(html).toContain("click Enable Access");
-    expect(html).not.toContain("missing the");
+    const { error } = await answer(submit("ann@example.com"));
+    expect(error).toContain("Access is not switched on for this Cloudflare account");
+    expect(error).toContain("click Enable Access");
     expect(store.record).toBeUndefined();
   });
 
-  test("an unexpected failure shows on the form instead of an error page", async () => {
+  test("an unexpected failure is reported as one", async () => {
     const broken: typeof fetch = async (input, init) => (String(input).includes("/deployments") ? Response.json({ success: true, result: null }) : cf.fetch(input, init));
-    const response = await handle(new Request(`https://${HOST}/`, { method: "POST", body: new URLSearchParams({ token: TOKEN, email: "ann@example.com" }) }), context({ fetcher: broken }));
+    const response = await handle(new Request(`https://${HOST}/api/reserve`, { method: "POST", body: JSON.stringify({ token: TOKEN, email: "ann@example.com" }) }), context({ fetcher: broken }));
     expect(response.status).toBe(400);
-    expect(await response.text()).toContain("Something went wrong that setup did not expect: TypeError");
+    expect((await answer(response)).error).toContain("Something went wrong that setup did not expect: TypeError");
   });
 
-  test("an invalid email, keeping what was typed", async () => {
-    const html = await (await submit("not-an-email")).text();
-    expect(html).toContain("Enter a valid email address");
-    expect(html).toContain('value="not-an-email"');
+  test("an invalid email", async () => {
+    expect((await answer(submit("not-an-email"))).error).toBe("Enter a valid email address.");
   });
 });
 
@@ -267,33 +261,29 @@ describe("reserved", () => {
   });
 
   test("the reserved email's sign-in claims it", async () => {
-    const response = await request(ADMIN_PATH, { jwt: await jwt(cf.keys!, { email: "ann@exmaple.com" }) });
-    const home = await response.text();
-    expect(home).toContain("Complete setup");
-    expect(home).toContain("Signed in as <strong>ann@exmaple.com</strong>, the super admin");
+    const state = await answer<{ viewer: { email: string; role: string } }>(request("/admin/api/state", { jwt: await jwt(cf.keys!, { email: "ann@exmaple.com" }) }));
+    expect(state.viewer).toEqual({ email: "ann@exmaple.com", role: "super" });
     expect(store.record?.state).toBe("claimed");
   });
 
   test("any other sign-in leaves it reserved", async () => {
-    const response = await request(ADMIN_PATH, { jwt: await jwt(cf.keys!, { email: "eve@example.com" }) });
-    expect(response.status).toBe(303);
+    expect((await request("/admin/api/state", { jwt: await jwt(cf.keys!, { email: "eve@example.com" }) })).status).toBe(401);
     expect(store.record?.state).toBe("reserved");
   });
 
-  test("/reset is only for a claimed instance", async () => {
-    expect((await request("/reset")).headers.get("location")).toBe("/");
+  test("reset is only for a claimed instance", async () => {
+    expect((await submit("eve@example.com", TOKEN, "/api/reset")).status).toBe(409);
   });
 });
 
 describe("claimed", () => {
   beforeEach(async () => {
     await submit("ann@example.com");
-    await request(ADMIN_PATH, { jwt: await jwt(cf.keys!, { email: "ann@example.com" }) });
+    await request("/admin/api/state", { jwt: await jwt(cf.keys!, { email: "ann@example.com" }) });
   });
 
-  test("the setup form is gone: / leads to the home page and a submit to it changes nothing", async () => {
-    expect((await request("/")).headers.get("location")).toBe(ADMIN_PATH);
-    expect((await submit("eve@example.com")).headers.get("location")).toBe(ADMIN_PATH);
+  test("reserving again is refused and changes nothing", async () => {
+    expect((await submit("eve@example.com")).status).toBe(409);
     expect(store.record?.email).toBe("ann@example.com");
   });
 
@@ -304,21 +294,19 @@ describe("claimed", () => {
     ["one from another team", async () => jwt(cf.keys!, { email: "ann@example.com", iss: "https://evil.cloudflareaccess.com" })],
     ["one signed by another key", async () => jwt(await rsa(), { email: "ann@example.com" })],
     ["another email", async () => jwt(cf.keys!, { email: "eve@example.com" })],
-  ])("home refuses %s", async (_, header) => {
+  ])("the admin API refuses %s", async (_, header) => {
     const token = await header();
-    const response = await request(ADMIN_PATH, token ? { jwt: token } : undefined);
-    expect(response.status).toBe(403);
+    expect((await request("/admin/api/state", token ? { jwt: token } : undefined)).status).toBe(401);
   });
 
-  test("a fresh token at /reset reserves it again for a new email", async () => {
-    expect((await request("/reset")).status).toBe(200);
-    expect((await submit("ann@new.example", TOKEN, "/reset")).status).toBe(200);
+  test("a fresh token at reset reserves it again for a new email", async () => {
+    expect((await submit("ann@new.example", TOKEN, "/api/reset")).status).toBe(200);
     expect(store.record).toMatchObject({ state: "reserved", email: "ann@new.example" });
     expect(cf.policies[0]!.include).toEqual([{ email: { email: "ann@new.example" } }]);
   });
 
-  test("/reset refuses a token that is not valid", async () => {
-    expect((await submit("eve@example.com", "stolen-cookie", "/reset")).status).toBe(400);
+  test("reset refuses a token that is not valid", async () => {
+    expect((await submit("eve@example.com", "stolen-cookie", "/api/reset")).status).toBe(400);
     expect(store.record?.state).toBe("claimed");
   });
 });
@@ -340,58 +328,61 @@ async function hmac(secret: string, body: string): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-describe("complete setup", () => {
+interface AdminState {
+  viewer: { email: string; role: string };
+  setup?: { token: boolean; tokenWorks: boolean; github?: { slug: string; owner: string } };
+  settings?: Record<string, Record<string, unknown>>;
+  tokenUrl?: string;
+}
+
+describe("setup and settings", () => {
   let ann: string;
-  const admin = (step: string, form?: Record<string, string> | URLSearchParams) => request(`${ADMIN_PATH}/${step}`, { jwt: ann, ...(form ? { form } : {}) });
-  const home = async () => (await request(ADMIN_PATH, { jwt: ann })).text();
+  const admin = (route: string, json?: unknown) => request(`/admin/api/${route}`, { jwt: ann, ...(json !== undefined ? { json } : {}) });
+  const state = () => answer<AdminState>(admin("state"));
 
   beforeEach(async () => {
     await submit("ann@example.com");
     ann = await jwt(cf.keys!, { email: "ann@example.com" });
-    await request(ADMIN_PATH, { jwt: ann });
+    await admin("state");
   });
 
-  test("home is a checklist of five steps, none done", async () => {
-    const html = await home();
-    for (const step of ["token", "github", "database", "email", "admins"]) expect(html).toContain(`<li class="instance-todo"><a href="/admin/${step}">`);
+  test("a new instance's setup has neither step done, and names the wider token's link", async () => {
+    const s = await state();
+    expect(s.setup).toEqual({ token: false, tokenWorks: true, github: undefined });
+    expect(s.tokenUrl).toContain("721b2f51fba74871bd361de65aeb7e03");
+    expect(s.settings?.cloudflare).toEqual({ token: "••••oken" });
   });
 
-  test("a revoked token is reported on the home page and every step that uses it, with the way to a new one", async () => {
+  test("a revoked token is reported by the state, and every step that uses it says so", async () => {
     cf.secrets[TOKEN_SECRET] = "revoked";
-    const html = await home();
-    expect(html).toContain("Cloudflare token no longer works");
-    expect(html).toContain('<a href="/admin/token">Create a new token</a>');
-    expect(await (await admin("token")).text()).toContain("token stopped working");
-    expect(await (await admin("admins", { emails: "bob@example.com" })).text()).toContain("Cloudflare token no longer works");
-    expect(await (await admin("token", { token: WIDE })).text()).toContain("Saved the wider token");
-    expect(await home()).not.toContain("no longer works");
+    expect((await state()).setup?.tokenWorks).toBe(false);
+    expect((await answer(admin("settings", { category: "admins", changes: { emails: ["bob@example.com"] } }))).error).toContain("Cloudflare token no longer works");
+    expect((await answer(admin("token", { token: WIDE }))).done.join("\n")).toContain("Saved the wider token");
+    expect((await state()).setup?.tokenWorks).toBe(true);
   });
 
   test("the setup token is refused as the wider token, listing everything it lacks at once and how to add it", async () => {
-    const html = await (await admin("token", { token: TOKEN })).text();
-    expect(html).toContain('<li class="instance-done">Workers: reachable.');
-    expect(html).toContain('<li class="instance-done">Cloudflare Access: reachable.');
-    expect(html).toContain(`The token is missing ${APP_PERMISSIONS.hyperdrive}, ${APP_PERMISSIONS.r2}, ${APP_PERMISSIONS.zones}.`);
-    expect(html).toContain(`${APP_PERMISSIONS.dns} and ${APP_PERMISSIONS.routes} could not be checked`);
-    expect(html).toContain("paste the same token here again");
+    const { done, error } = await answer(admin("token", { token: TOKEN }));
+    expect(done).toContain("Workers: reachable.");
+    expect(done).toContain("Cloudflare Access: reachable.");
+    expect(error).toContain(`The token is missing ${APP_PERMISSIONS.hyperdrive}, ${APP_PERMISSIONS.r2}, ${APP_PERMISSIONS.zones}.`);
+    expect(error).toContain(`${APP_PERMISSIONS.dns} and ${APP_PERMISSIONS.routes} could not be checked`);
     expect(store.record?.setup?.token).toBeUndefined();
   });
 
   test("a token missing only some zone permissions names just those", async () => {
     cf.denied.add(APP_PERMISSIONS.routes);
-    const html = await (await admin("token", { token: WIDE })).text();
-    expect(html).toContain('<li class="instance-done">Hyperdrive: reachable.');
-    expect(html).toContain(`The token is missing ${APP_PERMISSIONS.routes}. In Cloudflare`);
+    const { done, error } = await answer(admin("token", { token: WIDE }));
+    expect(done).toContain("Hyperdrive: reachable.");
+    expect(error).toMatch(new RegExp(`^The token is missing ${APP_PERMISSIONS.routes}\\. In Cloudflare`));
     expect(cf.secrets[TOKEN_SECRET]).toBe(TOKEN);
   });
 
-  test("a wider token is checked on every domain and replaces the setup token", async () => {
-    const html = await (await admin("token", { token: WIDE })).text();
-    expect(html).toContain("reachable on all 2 domains (acme.dev, acme.app)");
+  test("a wider token is checked on every domain and replaces the setup token, also from Settings", async () => {
+    expect((await answer(admin("token", { token: WIDE }))).done.join("\n")).toContain("reachable on all 2 domains (acme.dev, acme.app)");
     expect(cf.secrets[TOKEN_SECRET]).toBe(WIDE);
-    expect(html).toContain('href="/admin/github">Next: GitHub App</a>');
-    expect(html).not.toContain('name="token"');
-    expect(await home()).toContain('<li class="instance-done"><a href="/admin/token">');
+    expect((await state()).setup?.token).toBe(true);
+    expect((await answer(admin("settings", { category: "cloudflare", changes: { token: TOKEN } }))).error).toContain(`missing ${APP_PERMISSIONS.hyperdrive}`);
   });
 
   test("the GitHub App is created from a manifest and saved, and its webhooks checked", async () => {
@@ -409,54 +400,57 @@ describe("complete setup", () => {
       return Response.json({ message: "Not Found" }, { status: 404 });
     };
 
-    const send = await (await admin("github", { owner: "acme" })).text();
-    const state = send.match(/state=([0-9a-f]{32})/)![1]!;
-    expect(send).toContain('action="https://github.com/organizations/acme/settings/apps/new?state=');
-    expect(send).toContain(`redirect_url&#34;:&#34;https://${HOST}/admin/github/created`);
+    expect((await answer(admin("github/start", { owner: "not an org!" }))).error).toContain("Enter a GitHub org name");
+    const sent = await answer<{ action: string; manifest: string }>(admin("github/start", { owner: "acme" }));
+    const state_ = new URL(sent.action).searchParams.get("state")!;
+    expect(sent.action).toMatch(/^https:\/\/github\.com\/organizations\/acme\/settings\/apps\/new\?state=[0-9a-f]{32}$/);
+    expect(JSON.parse(sent.manifest)).toMatchObject({ redirect_url: `https://${HOST}/admin/github/created`, public: false });
 
-    expect(await (await admin(`github/created?code=good-code&state=forged`)).text()).toContain("did not come from this instance");
-    expect(await (await admin(`github/created?code=stale&state=${state}`)).text()).toContain("GitHub refused to finish creating the app");
-    const created = await (await admin(`github/created?code=good-code&state=${state}`)).text();
-    expect(created).toContain("GitHub App platform-acme created under acme.");
-    expect(created).toContain('href="/admin/database">Next: Database</a>');
+    expect((await answer(admin("github/created", { code: "good-code", state: "forged" }))).error).toContain("did not come from this instance");
+    expect((await answer(admin("github/created", { code: "stale", state: state_ }))).error).toContain("GitHub refused to finish creating the app");
+    expect((await answer(admin("github/created", { code: "good-code", state: state_ }))).done).toContain("GitHub App platform-acme created under acme.");
     expect(JSON.parse(cf.secrets.GITHUB_APP!).id).toBe(7);
-    expect(await home()).toContain('<li class="instance-done"><a href="/admin/github">GitHub App</a>: platform-acme, owned by acme;');
+    expect((await state()).setup?.github).toEqual({ slug: "platform-acme", owner: "acme" });
+    expect((await state()).settings?.github).toEqual({ app: "platform-acme", owner: "acme" });
 
     // Installing waits for adding an app; the page GitHub returns to after an install still lists where it is.
-    expect(await (await admin("github/installed")).text()).toContain("not installed on any repo yet");
+    expect((await answer(admin("github/installed", {}))).error).toContain("not installed on any repo yet");
     installed = ["acme"];
-    expect(await (await admin("github/installed")).text()).toContain("Installed on acme.");
+    expect((await answer(admin("github/installed", {}))).done).toContain("Installed on acme.");
 
     const event = JSON.stringify({ zen: "hi" });
     expect((await request("/github/webhook", { method: "POST", body: event, headers: { "x-hub-signature-256": `sha256=${await hmac("hook", event)}` } })).status).toBe(202);
     expect((await request("/github/webhook", { method: "POST", body: event, headers: { "x-hub-signature-256": `sha256=${await hmac("wrong", event)}` } })).status).toBe(401);
   });
 
-  test("Neon and Resend keys are checked before they are kept", async () => {
+  test("Neon and Resend keys are checked before they are kept, and only their last characters come back", async () => {
     elsewhere = async (url, init) => {
       const auth = new Headers(init?.headers).get("authorization");
       if (url.host === "console.neon.tech") return auth === "Bearer neon-good" ? Response.json({ projects: [] }) : Response.json({ message: "authorization failed" }, { status: 401 });
       if (url.host === "api.resend.com") return auth === "Bearer re_full" ? Response.json({ data: [] }) : auth === "Bearer re_send" ? Response.json({ name: "restricted_api_key", message: "This API key is restricted to only send emails" }, { status: 401 }) : Response.json({ name: "validation_error" }, { status: 400 });
       return undefined;
     };
-    expect(await (await admin("database", { key: "neon-typo" })).text()).toContain("Neon did not accept this key");
-    expect(await (await admin("database", { key: "neon-good" })).text()).toContain("Saved the Neon key as this instance&#39;s secret NEON_API_KEY.");
-    expect(await (await admin("email", { key: "re_send" })).text()).toContain("This key can only send email; create one with Full access.");
-    expect(await (await admin("email", { key: "re_full" })).text()).toContain("Resend accepted the key with full access.");
+    const save = (category: string, changes: Record<string, unknown>) => answer(admin("settings", { category, changes }));
+    expect((await save("database", { neonKey: "neon-typo" })).error).toContain("Neon did not accept this key");
+    expect((await save("database", { neonKey: "neon-good" })).done).toContain("Saved the Neon key as this instance's secret NEON_API_KEY.");
+    expect((await save("email", { resendKey: "re_send" })).error).toBe("This key can only send email; create one with Full access.");
+    expect((await save("email", { resendKey: "re_full" })).done).toContain("Resend accepted the key with full access.");
     expect(cf.secrets).toMatchObject({ NEON_API_KEY: "neon-good", RESEND_API_KEY: "re_full" });
-    expect(store.record?.setup).toMatchObject({ neon: true, resend: true });
+    expect((await state()).settings).toMatchObject({ database: { neonKey: "••••good" }, email: { resendKey: "••••full" } });
   });
 
-  test("platform admins sign in to their own page and never reach setup, and a reset keeps them", async () => {
-    expect(await (await admin("admins", { emails: "bob@example.com, not-an-email" })).text()).toContain("Not valid email addresses: not-an-email.");
-    expect(await (await admin("admins", { emails: "Bob@Example.com\nann@example.com" })).text()).toContain("lets in bob@example.com as platform admins");
+  test("platform admins see only who they are and never reach setup, and a reset keeps them", async () => {
+    const save = (emails: string[]) => answer(admin("settings", { category: "admins", changes: { emails } }));
+    expect((await save(["bob@example.com", "not-an-email"])).error).toBe("Not valid email addresses: not-an-email.");
+    expect((await save(["Bob@Example.com", "ann@example.com"])).done).toContain("Cloudflare Access lets in bob@example.com as platform admins.");
     expect(cf.policies[0]!.include).toEqual([{ email: { email: "ann@example.com" } }, { email: { email: "bob@example.com" } }]);
+    expect((await state()).settings?.admins).toEqual({ emails: ["bob@example.com"] });
 
     const bob = await jwt(cf.keys!, { email: "bob@example.com" });
-    expect(await (await request(ADMIN_PATH, { jwt: bob })).text()).toContain("You are a platform admin");
-    for (const step of ["token", "github", "database", "email", "admins"]) expect((await request(`${ADMIN_PATH}/${step}`, { jwt: bob })).status).toBe(403);
+    expect(await answer(request("/admin/api/state", { jwt: bob }))).toEqual({ build: { version: VERSION, deployedAt: SELF.deployedAt }, viewer: { email: "bob@example.com", role: "platform" } });
+    for (const route of ["token", "github/start", "settings"]) expect((await request(`/admin/api/${route}`, { jwt: bob, json: {} })).status).toBe(403);
 
-    await submit("ann@new.example", TOKEN, "/reset");
+    await submit("ann@new.example", TOKEN, "/api/reset");
     expect(store.record?.admins).toEqual(["bob@example.com"]);
     expect(cf.policies[0]!.include).toEqual([{ email: { email: "ann@new.example" } }, { email: { email: "bob@example.com" } }]);
   });

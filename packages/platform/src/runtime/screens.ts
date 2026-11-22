@@ -95,7 +95,7 @@ ${screen.intro ? `<p class="platform-intro">${screen.intro}</p>` : ""}
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
-export const STYLE = `
+const STYLE = `
 :root{--platform-bg:#f4f6f8;--platform-card:#fff;--platform-fg:#1b2430;--platform-muted:#5d6a78;--platform-line:#d5dce3;--platform-accent:#2554c7;--platform-on-accent:#fff;--platform-error:#b42318;color-scheme:light dark}
 @media (prefers-color-scheme:dark){:root{--platform-bg:#11161c;--platform-card:#19212a;--platform-fg:#e6ebf0;--platform-muted:#9aa7b4;--platform-line:#2c3742;--platform-accent:#7aa2ff;--platform-on-accent:#0b1220;--platform-error:#ff8a80}}
 *{box-sizing:border-box}

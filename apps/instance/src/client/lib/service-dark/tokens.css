@@ -1,0 +1,71 @@
+/* Service Dark: generated from tokens.json */
+:root, [data-theme="dark"] {
+  --bg-000: #0a0c0f;
+  --bg-100: #101317;
+  --bg-200: #161a20;
+  --bg-300: #1e232b;
+  --line-100: #242a33;
+  --line-200: #67717f;
+  --ink-100: #e9ecf0;
+  --ink-200: #a8b1bd;
+  --ink-300: #808a97;
+  --accent: #ff9a4d;
+  --accent-hover: #ffb27a;
+  --on-accent: #1c0e03;
+  --accent-soft: #2b1b0f;
+  --info: #6cc4ff;
+  --success: #56d68f;
+  --warning: #f0c44c;
+  --danger: #ff7272;
+  --focus: #6cc4ff;
+  --shadow-pop: 0 12px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04);
+}
+[data-theme="light"] {
+  --bg-000: #f3f4f6;
+  --bg-100: #ffffff;
+  --bg-200: #f8f9fb;
+  --bg-300: #eceff3;
+  --line-100: #e2e5ea;
+  --line-200: #7b8594;
+  --ink-100: #12161b;
+  --ink-200: #47505d;
+  --ink-300: #626b78;
+  --accent: #c2410c;
+  --accent-hover: #9a3412;
+  --on-accent: #ffffff;
+  --accent-soft: #fff0e5;
+  --info: #0a5fa3;
+  --success: #13733d;
+  --warning: #8a5a00;
+  --danger: #c0262d;
+  --focus: #0a5fa3;
+  --shadow-pop: 0 12px 32px rgba(16,24,40,0.14), 0 0 0 1px rgba(16,24,40,0.06);
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+  --sidebar-width: 240px;
+  --topbar-height: 48px;
+  --control-height: 32px;
+  --row-height: 40px;
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 32px; line-height: 38px; font-weight: 600; letter-spacing: -0.01em; }
+.title { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 600; }
+.heading { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 600; }
+.body { font-family: var(--font-sans); font-size: 14px; line-height: 20px; font-weight: 400; }
+.body-sm { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.mono { font-family: var(--font-mono); font-size: 13px; line-height: 20px; font-weight: 400; }
+.mono-sm { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 400; }
+.code-pair { font-family: var(--font-mono); font-size: 28px; line-height: 36px; font-weight: 500; letter-spacing: 0.18em; }

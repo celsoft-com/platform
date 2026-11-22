@@ -17,6 +17,9 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, in the app's own repo.
   ([docs/design.md](docs/design.md) section 16); nothing is published to npm any more.
 - **Guide:** [SETUP.md](SETUP.md) is an org's initial setup of its instance; keep it current
   with section 16.
+- **Instance pages:** `apps/instance/src/client/` is Svelte 5 built with Service Dark's kit, copied
+  unchanged into `src/client/lib/service-dark/` from the Service Dark design system; use its
+  components as they ship, never restyle or fork them, and ask for a kit change instead.
 - **Dogfood:** `apps/demo` is still set up and run as the
   [celsoft-platform-setup](packages/platform/skills/celsoft-platform-setup/SKILL.md) skill says,
   from the workspace; never build repo-only tooling that stands in for a user command.
