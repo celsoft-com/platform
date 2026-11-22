@@ -2,6 +2,14 @@
 
 What the platform gives an app, what the app writes itself, and how the two fit together.
 
+## The Platform Instance
+
+Each org deploys this repo once, as its own Platform Instance; [design.md](design.md#16-platform-instance) section 16 defines it.
+
+1. **Deploy:** the README's **Deploy to Cloudflare** button copies the repo into the org's GitHub and deploys its root; every push to the copy's `main` deploys again.
+2. **Claim:** the super admin pastes a Cloudflare token and their email into the instance's setup form, then signs in with the code Cloudflare Access emails them.
+3. **Next:** complete setup, which enables apps, is not built yet; until it is, the rest of this page describes the per-app deploy the demo uses, run from the workspace since nothing is published to npm.
+
 ## At a glance
 
 | Area | The platform provides | The app writes |

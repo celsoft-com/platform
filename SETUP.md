@@ -1,17 +1,44 @@
 # Setup
 
-Start every new app the same way, from the app's folder inside a clone of its GitHub repo:
+Initial setup of a Platform Instance, all in the browser. [docs/design.md](docs/design.md)
+section 16 is the full design, including what happens in each state.
 
-```sh
-npm install @celsoft/platform
-npx @celsoft/platform skills
-```
+## You need
 
-The first adds the package to `package.json`. The second copies the skills the package ships into
-`.claude/skills/` and points `AGENTS.md` at them.
+1. **Cloudflare:** an account on the Workers Paid plan.
+2. **GitHub:** an account, or an org, to hold your copy of this repo.
 
-Then follow the setup skill, step by step:
-[celsoft-platform-setup](packages/platform/skills/celsoft-platform-setup/SKILL.md), also at
-`.claude/skills/celsoft-platform-setup/SKILL.md` in the app. It covers the accounts, the Neon
-project, `npx @celsoft/platform new` to write the app's files, the API tokens, `init` and the
-first migration. An AI agent reads it and runs each command for you.
+## Steps
+
+1. **Start:** on this repo's GitHub page, click **Deploy to Cloudflare**.
+2. **Sign in:** sign in to Cloudflare. The first time, connect GitHub and pick the account or org
+   that will hold the copy.
+3. **Create:** confirm the repo and Worker names, `platform` by default, and click **Create and
+   deploy**. The build runs on Cloudflare and takes about two minutes.
+4. **Open it:** visit the Worker's address, which shows the setup form.
+5. **Reserve it:** click **Create token**. The Cloudflare dashboard opens with the token's
+   permissions filled in; create it, copy it, paste it into the form with your email, and submit.
+6. **Claim it:** the page says it is waiting for your sign-in, with the form still below. Sign in
+   with the code Cloudflare emails you; you are now the super admin.
+
+## Getting back in
+
+1. **Restarted before Create and deploy:** click the button again.
+2. **Restarted after it:** the build carries on without you; open the Worker's address from
+   **Workers & Pages** in the Cloudflare dashboard.
+3. **Lost the token before pasting it:** Cloudflare shows a token once, so create another and
+   delete the unused one.
+4. **Token refused:** the form says why; fix it and submit again.
+5. **Mistyped email, restarted while waiting, or the code expired:** submit a token with the right
+   email again, or ask Cloudflare's sign-in for a new code.
+6. **Zero Trust onboarding:** if the form says the account must finish Zero Trust onboarding,
+   open **Zero Trust** in the dashboard, choose the Free plan, and submit again.
+7. **Lost access to your email later:** open `/reset` on the instance and submit a fresh token
+   with your new email.
+
+## Keep it safe
+
+1. **Your copy of the repo:** Cloudflare deploys every push to its `main`, so give push access only
+   to super admins.
+2. **The Cloudflare account:** anyone who is a member can go around the instance, so keep members
+   to super admins.

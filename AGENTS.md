@@ -13,12 +13,13 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, in the app's own repo.
 
 ## Setup
 
-- **Guide:** [SETUP.md](SETUP.md) is the starting point for adopters: install the package,
-  run `platform skills`, then follow the
-  [celsoft-platform-setup](packages/platform/skills/celsoft-platform-setup/SKILL.md) skill,
-  which holds every setup step. Keep both current when setup changes.
-- **Dogfood:** this repo is set up and run exactly as the setup skill tells adopters, with
-  `apps/demo` as the app; never build repo-only tooling that stands in for a user command.
+- **Direction:** the repo is becoming a Platform Instance each org deploys once
+  ([docs/design.md](docs/design.md) section 16); nothing is published to npm any more.
+- **Guide:** [SETUP.md](SETUP.md) is an org's initial setup of its instance; keep it current
+  with section 16.
+- **Dogfood:** `apps/demo` is still set up and run as the
+  [celsoft-platform-setup](packages/platform/skills/celsoft-platform-setup/SKILL.md) skill says,
+  from the workspace; never build repo-only tooling that stands in for a user command.
 - **No workarounds in the demo:** the demo exists to prove the platform, so it uses every
   feature the platform's own way; when it cannot, stop and fix or track the platform gap,
   never hand-write around it in the demo.

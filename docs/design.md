@@ -2,19 +2,20 @@
 
 This document is the source of truth for the platform's design. The original [Workers App Platform design page](https://claude.ai/artifact/VLaqjzoBjJ8DFivh2G9QUu) is superseded background: where they differ (Terraform, 1Password, two orgs, a GitHub Action), this document wins.
 
+**Direction**: the platform is becoming a Platform Instance each org deploys once, which then deploys the org's apps; [section 16](#16-platform-instance) defines it. Sections 1 to 15 describe the per-app deploy that runs the demo today. Nothing is published to npm any more, so that per-app deploy runs only inside this repo until the instance takes it over.
+
 ## 1. Context
 
-Goal: an open-source platform any repo can adopt to deploy its apps on Cloudflare Workers with every feature from the [Workers App Platform design](https://claude.ai/artifact/VLaqjzoBjJ8DFivh2G9QUu), each app isolated from and independent of every other repo, adopters only wiring things up, and the maintainer's ongoing upkeep kept minimal.
+Goal: an open-source platform each org deploys once, as its own Platform Instance, to deploy its apps on Cloudflare Workers with every feature from the [Workers App Platform design](https://claude.ai/artifact/VLaqjzoBjJ8DFivh2G9QUu), each app isolated within its own scope, apps needing no wiring of their own, and the maintainer's ongoing upkeep kept minimal.
 
 ## 2. Approach
 
-A published CLI, runtime library and app template that create and reuse each app's cloud resources directly with no Terraform, using GitHub secrets as the secrets source.
+A repo each org copies and deploys as its Platform Instance (section 16). Inside it, a CLI, runtime library and app template create and reuse each app's cloud resources directly with no Terraform; until the instance takes them over, they deploy the demo using GitHub secrets as the secrets source.
 
 ## 3. Assumptions
 
 1. **Apex on Cloudflare**: the project's apex domain is a zone in the same Cloudflare account as its Workers.
 2. **GitHub hosted**: the project's repo is on GitHub, on a plan that allows Actions.
-3. **Range pin**: projects pin a major version range, such as `^1`, not an exact version.
 
 ## 4. Tech Stack
 
@@ -31,7 +32,7 @@ A published CLI, runtime library and app template that create and reuse each app
     3. **Wrangler**: Cloudflare's CLI, used to deploy Workers and load their secrets.
 3. **Platform**: what this repo is built with.
     1. **TypeScript on Node**: the language of the CLI and runtime library.
-    2. **npm**: publishes the CLI, runtime library and template.
+    2. **pnpm workspace**: builds the CLI, runtime library, template and instance in place; nothing is published.
     3. **Cloudflare and Neon SDKs**: official TypeScript clients the CLI uses to find, create and delete resources.
 
 ## 5. Responsibilities
@@ -120,12 +121,10 @@ A published CLI, runtime library and app template that create and reuse each app
 
 ## 8. Bootstrap
 
-0. **Starting point**: every app starts the same way, and both READMEs (the repo's and the npm package's) open with it, so an agent given only "make a @celsoft/platform app" lands on it.
-    1. **Install**: `npm install @celsoft/platform` adds the package to `package.json`.
-    2. **Skills**: `platform skills` copies the package's skills into the app, needing nothing else.
-    3. **Follow**: the `celsoft-platform-setup` skill walks every remaining step; each file is written by a command, so the agent never reasons out a config or workflow by hand.
-    4. **App files**: `platform new` writes the app's files in place, keeps any already there, fills in `package.json` and `.gitignore`, and installs dependencies; it refuses a folder with a `platform.jsonc`.
-    5. **`npm create @celsoft/platform-app`**: kept as a shortcut that runs those three commands in a new folder.
+0. **Starting point**: inside this repo only, since the package is no longer published; apps elsewhere will be set up through the Platform Instance (section 16).
+    1. **Run**: the demo runs the workspace's CLI with `mise run platform -- <command>`.
+    2. **Follow**: the `celsoft-platform-setup` skill walks every remaining step; each file is written by a command, so the agent never reasons out a config or workflow by hand.
+    3. **App files**: `platform new` writes the app's files in place, keeps any already there, fills in `package.json` and `.gitignore`, and installs dependencies; it refuses a folder with a `platform.jsonc`.
 1. **Project steps**: one time, by hand, before the platform can act.
     1. **Accounts**: create the Cloudflare (Workers Paid) and Neon accounts.
     2. **Neon project**: create the app's Neon project, on Postgres 18.
@@ -393,7 +392,7 @@ A published CLI, runtime library and app template that create and reuse each app
 ## 14. Upgrades
 
 1. **Versioning**: the CLI and runtime library release together under one version.
-    1. **One pin**: the project pins a major range of the platform package in `package.json`, the lockfile freezes the exact version, and the workflow runs that CLI version.
+    1. **One build**: the demo depends on the workspace's own build (`workspace:*`), so it always runs the CLI and runtime beside it in the repo.
     2. **Stable workflow**: the workflow holds no logic, so it rarely changes, and rerunning `init` updates it when it does.
     3. **Template**: used only to create an app, never rewritten; `upgrade` adds only the template's files and entries an app lacks.
     4. **One Drizzle**: `drizzle-orm` is a peer dependency, so the app and the platform share one installed copy.
@@ -424,9 +423,9 @@ A published CLI, runtime library and app template that create and reuse each app
         5. **Access**: personal notes shared by email and by link, with a list of notes shared with you.
     3. **Platform PRs**: each gets a demo preview deployed by that PR's CLI build.
     4. **Main**: a merge deploys the demo's prod.
-    5. **Release**: publishes to npm only after the main deploy succeeds, using npm trusted publishing. Deferred until an outside project adopts the platform; the first version is published by hand, since trusted publishing needs the package to exist.
+    5. **No release**: nothing is published; each org's copy of the repo is what it runs.
 2. **Fast tests**: resource modules run against in-memory fakes, covering every event's steps with no cloud account.
-3. **Upgrade test**: deploys the demo with the last published version, then the new build, proving the new one converges.
+3. **Upgrade test**: each demo deploy converges from what the previous commit deployed, since every merge to main deploys it.
 4. **Template test**: scaffolds an app from the template, builds it, and runs the test the template ships.
 5. **App tests**: `@celsoft/platform/testing` runs an app's real runtime in its own tests, never a mock of the platform.
     1. **Why the platform**: apps reach the database, files, email and auth only through `app`, so only the platform can build one for a test.
@@ -437,3 +436,59 @@ A published CLI, runtime library and app template that create and reuse each app
     6. **Tool versions**: through `package.json`, never a tool manager's files: Postgres from the app's `embedded-postgres` dev dependency, prebuilt for each machine, or else one on the `PATH`; Node 24 or later in the platform's `engines`, checked by every command.
     7. **Demo**: tests itself this way, as any app would.
 6. **Fork PRs**: get no secrets, so a maintainer runs the end-to-end tests before merging.
+
+## 16. Platform Instance
+
+The direction the platform is taking: instead of each app deploying the platform for itself, an org deploys the platform once, as its own Platform Instance, and the instance deploys the org's apps. Initial setup is defined here; complete setup, apps and updates come later.
+
+1. **What it is**: one deployment of this repo in an org's own Cloudflare account, which will create and deploy the org's apps from their GitHub repos, wired through a GitHub App of its own.
+2. **One per org**: every org runs its own instance; nothing is shared between instances, the GitHub App included, and there is no central service.
+3. **Roles**: top to bottom.
+    1. **Super admin**: installs and uninstalls the instance.
+    2. **Platform admin**: adds, updates and removes apps, and names each app's admin.
+    3. **App admin**: owns one app and everything it does.
+4. **Principles**: hold however the instance is built.
+    1. **Scoped security**: each role acts only within its scope, and nothing at a lower layer can gain the powers of a layer above it, an app reaching the Cloudflare account included.
+    2. **Visibility flows down**: every admin has full view of the layer below.
+    3. **Trust doesn't matter**: who writes an app's code is irrelevant; the scopes protect everything else.
+    4. **No per-app wiring**: pointing the instance at a repo is all an app will need.
+5. **Two setup phases**: initial setup, below, needs only Cloudflare and GitHub; complete setup, which enables apps, is separate and not defined yet.
+6. **Deploying the instance**: the repo's root is the instance.
+    1. **Deploy to Cloudflare**: the button in the README copies the whole repo into a new repo in the org's GitHub account and connects it to Workers Builds, which deploys the root.
+    2. **Every push deploys**: Workers Builds deploys each push to the copy's `main`; the org decides when and how it takes this repo's changes into its copy.
+    3. **Push is super admin power**: whoever can push to the copy's `main` controls the instance's code and the token it holds, so push access belongs to super admins only, like membership in the Cloudflare account.
+    4. **Its own storage**: the instance keeps its state in a Durable Object the deploy creates, so the button needs nothing filled in.
+    5. **No package**: nothing is published to npm; the instance builds from the code in its own copy of the repo.
+7. **Initial setup**: what the super admin does, all in the browser.
+    1. **Prerequisites**: a Cloudflare account on Workers Paid and a GitHub account.
+    2. **Start**: on the repo's GitHub page, click **Deploy to Cloudflare**.
+    3. **Sign in**: sign in to Cloudflare; the first time, connect GitHub and pick the account or org that will hold the copy.
+    4. **Create**: confirm the repo and Worker names, `platform` by default, and click **Create and deploy**; the build runs on Cloudflare, about two minutes.
+    5. **Open it**: visit the Worker's address, which shows the setup form.
+    6. **Reserve it**: click **Create token**, which opens the Cloudflare dashboard with the token's permissions filled in; create it, paste it into the form with your email, and submit.
+    7. **Claim it**: the page says it is waiting for that email's sign-in, with the form still below; sign in with the code Cloudflare emails you, and you are the super admin, on a home page saying initial setup is done.
+8. **States**: the instance is always in one, and its address shows the page for it.
+    1. **Unclaimed**: the setup form.
+    2. **Reserved**: a valid token and an email were submitted; the page shows which email it waits for, and the setup form stays open below it.
+    3. **Claimed**: the reserved email signed in; the address leads to the home page behind Cloudflare Access.
+    4. **Moves**: a valid token and email move Unclaimed to Reserved, and in Reserved replace the reservation; the reserved email's first sign-in moves Reserved to Claimed.
+    5. **Reset**: in Claimed, the reset form at `/reset` takes a valid token and an email and moves the instance back to Reserved for that email, so a super admin who loses their email recovers through the Cloudflare account.
+9. **Valid token**: checked on every submit, which carries its own token, so claiming never rests on a cookie.
+    1. **Same account**: the token must reach the account running this very Worker, found by the Worker's running version; a token for any other account is refused.
+    2. **Permissions**: Workers Scripts Edit, Access: Apps and Policies Edit, and Access: Organizations, Identity Providers, and Groups Edit, all on the account; a token missing one is refused, naming it.
+    3. **Kept**: the accepted token becomes the Worker's own secret, replacing any earlier one; it is never shown again and goes nowhere but Cloudflare's API.
+10. **Sign-in**: Cloudflare Access, from the Zero Trust part of the account, free for up to 50 users.
+    1. **Set up by the instance**: reserving creates what is missing, using the token: the Zero Trust organization, the one-time PIN login, and an Access application covering the instance's `/admin` path with one rule allowing the reserved email.
+    2. **Email codes**: Cloudflare sends the codes itself, so no email service is needed.
+    3. **Checked twice**: Access stops anyone else before the Worker, and the Worker also checks the `Cf-Access-Jwt-Assertion` header on every `/admin` request: Cloudflare's signature, the application's audience, and that the email is the super admin's.
+    4. **Onboarding**: if Cloudflare refuses to create the Zero Trust organization until the account finishes onboarding in the dashboard, the form says to open Zero Trust there, choose the Free plan, and submit again.
+    5. **Outside `/admin`**: the setup and reset forms stay public, since each needs a token for the account.
+11. **Getting back in**: each case and what the super admin does.
+    1. **Before Create and deploy**: click the button again.
+    2. **After Create and deploy**: the build carries on without the browser; open the Worker's address from **Workers & Pages** in the dashboard.
+    3. **Token lost before pasting**: Cloudflare shows a token once, so create another and delete the unused one.
+    4. **Token refused**: the form says why; fix it and submit again.
+    5. **Wrong email, a restart while waiting, or an expired code**: submit a token with the right email again, or ask Cloudflare's sign-in for a new code.
+    6. **Someone else opens the address**: without a token for the account they can do nothing.
+    7. **Signed out later**: sign in again with a new code.
+12. **Later**: complete setup, the GitHub App, apps and their scopes, instance updates, and how today's per-app CLI and skills fit the instance.
