@@ -164,7 +164,7 @@ describe("refused tokens", () => {
   test.each(Object.values(PERMISSIONS))("a token missing %s names it", async (permission) => {
     cf.denied.add(permission);
     const html = await (await submit("ann@example.com")).text();
-    expect(html).toContain(`missing the ${permission.replace(/&/g, "&amp;")} permission`);
+    expect(html).toContain(`missing the ${permission.replace(/&/g, "&amp;")} permission (Cloudflare said: 10000 Authentication error)`);
     expect(store.record).toBeUndefined();
   });
 

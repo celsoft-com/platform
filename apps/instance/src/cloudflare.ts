@@ -13,8 +13,11 @@ type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export class SetupError extends Error {}
 
 export class MissingPermission extends SetupError {
-  constructor(readonly permission: Permission) {
-    super(`The token is missing the ${permission} permission.`);
+  constructor(
+    readonly permission: Permission,
+    said: string,
+  ) {
+    super(`The token is missing the ${permission} permission${said ? ` (Cloudflare said: ${said})` : ""}.`);
   }
 }
 
@@ -78,10 +81,9 @@ export class Cloudflare {
     });
     const envelope = (await response.json().catch(() => undefined)) as Envelope<T> | undefined;
     if (response.status === 401) throw new SetupError("Cloudflare did not accept this token; check it was copied whole and has not expired.");
-    if (response.status === 403) throw new MissingPermission(permission);
-    if (!response.ok || !envelope?.success) {
-      throw new CloudflareFailure(method, path, response.status, envelope?.errors?.map((e) => `${e.code} ${e.message}`).join("; ") ?? "");
-    }
+    const said = envelope?.errors?.map((e) => `${e.code} ${e.message}`).join("; ") ?? "";
+    if (response.status === 403) throw new MissingPermission(permission, said);
+    if (!response.ok || !envelope?.success) throw new CloudflareFailure(method, path, response.status, said);
     return envelope.result;
   }
 
