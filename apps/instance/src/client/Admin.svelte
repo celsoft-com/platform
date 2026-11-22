@@ -1,6 +1,7 @@
 <!-- Signed in: the super admin's two setup steps, then the admin interface; a platform admin sees Apps only. -->
 <script lang="ts">
-  import { Button, Field, Settings, Sidebar } from './lib/service-dark';
+  import { Button, Dialog, Field, Settings, Sidebar } from './lib/service-dark';
+  import type { SettingsPage } from './lib/service-dark/components/Settings.svelte';
   import Report from './Report.svelte';
   import { InstanceSettings } from './settings';
   import { get, post, type Build, type StepResult } from './api';
@@ -10,6 +11,7 @@
     viewer: { email: string; role: 'super' | 'platform' };
     setup?: { token: boolean; tokenWorks: boolean; github?: { slug: string; owner: string } };
     settings?: InstanceSettings;
+    configured?: Record<string, boolean>;
     tokenUrl?: string;
     permissions?: string[];
   }
@@ -68,6 +70,28 @@
     if (result.error) return result.error;
     await load();
   }
+
+  // A key is write-only: typed into the dialog, sent once to the Worker, and never shown or sent back.
+  async function change({ path, value }: { path: string; value: unknown }) {
+    const [category, key] = path.split('.');
+    return save({ category: category!, changes: { [key!]: value } });
+  }
+
+  let replacing = $state<{ page: SettingsPage; key: string; title: string }>();
+  let draft = $state('');
+
+  function replace(page: SettingsPage, key: string, title: string) {
+    draft = '';
+    replacing = { page, key, title };
+  }
+
+  async function submitKey(): Promise<string | void | false> {
+    if (!replacing) return;
+    const error = await replacing.page.set(replacing.key, draft.trim());
+    draft = '';
+    if (error) return error;
+    replacing = undefined;
+  }
 </script>
 
 {#if failed || !state}
@@ -124,7 +148,15 @@
       <div class="body-area">
         <Report done={report.done} error={report.error} />
         {#if active === 'settings' && settings}
-          <Settings schema={InstanceSettings} bind:value={settings} bind:category label="Instance settings" onsave={save} />
+          <Settings
+            schema={InstanceSettings}
+            bind:value={settings}
+            bind:category
+            label="Instance settings"
+            onchange={change}
+            onsave={save}
+            pages={{ cloudflare: keyPage, database: keyPage, email: keyPage }}
+          />
         {:else}
           <section class="sd-panel">
             <div class="sd-panel-head"><h2 class="sd-panel-title">Apps</h2></div>
@@ -136,7 +168,35 @@
   </div>
 {/if}
 
+{#snippet keyPage(page: SettingsPage)}
+  {#each page.settings as s (s.key)}
+    {@const set = state?.configured?.[s.key]}
+    <div class="sd-setting">
+      <div class="sd-setting-text">
+        <span class="sd-setting-label">{s.title}</span>
+        {#if s.description}<span class="sd-setting-desc">{s.description}</span>{/if}
+      </div>
+      <div class="sd-setting-control key">
+        <span class="mono">{set ? '•••••••• set' : 'Not set'}</span>
+        <Button size="sm" onclick={() => replace(page, s.key, s.title)}>{set ? 'Replace' : 'Add'}</Button>
+      </div>
+      {#if page.errors[s.key]}<span class="sd-field-error">{page.errors[s.key]}</span>{/if}
+    </div>
+  {/each}
+{/snippet}
+
+{#if replacing}
+  <Dialog open title={replacing.title} description="It is checked, then kept as this instance's secret. It is never shown again." icon="key-round" onclose={() => (replacing = undefined)} onsubmit={submitKey}>
+    <Field label={replacing.title} bind:value={draft} mono autocomplete="off" />
+    {#snippet footer()}
+      <Button variant="quiet" onclick={() => (replacing = undefined)}>Cancel</Button>
+      <Button variant="primary" type="submit">Check and save</Button>
+    {/snippet}
+  </Dialog>
+{/if}
+
 <style>
+  .key { display: flex; align-items: center; gap: var(--space-3); }
   .page { min-height: 100vh; display: grid; place-items: center; padding: var(--space-6) var(--space-4); box-sizing: border-box; }
   .card { width: 100%; max-width: 480px; padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); box-shadow: var(--shadow-pop); }
   h1, .intro, .step { margin: 0; }

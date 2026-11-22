@@ -350,7 +350,8 @@ describe("setup and settings", () => {
     const s = await state();
     expect(s.setup).toEqual({ token: false, tokenWorks: true, github: undefined });
     expect(s.tokenUrl).toContain("721b2f51fba74871bd361de65aeb7e03");
-    expect(s.settings?.cloudflare).toEqual({ token: "••••oken" });
+    expect(s.settings?.cloudflare).toEqual({ token: "" });
+    expect(s).toMatchObject({ configured: { token: true, neonKey: false, resendKey: false } });
   });
 
   test("a revoked token is reported by the state, and every step that uses it says so", async () => {
@@ -436,7 +437,22 @@ describe("setup and settings", () => {
     expect((await save("email", { resendKey: "re_send" })).error).toBe("This key can only send email; create one with Full access.");
     expect((await save("email", { resendKey: "re_full" })).done).toContain("Resend accepted the key with full access.");
     expect(cf.secrets).toMatchObject({ NEON_API_KEY: "neon-good", RESEND_API_KEY: "re_full" });
-    expect((await state()).settings).toMatchObject({ database: { neonKey: "••••good" }, email: { resendKey: "••••full" } });
+    const after = await state();
+    expect(after).toMatchObject({ configured: { neonKey: true, resendKey: true }, settings: { database: { neonKey: "" }, email: { resendKey: "" } } });
+  });
+
+  test("no response ever carries a stored secret or any part of one", async () => {
+    elsewhere = async (url) => (url.host === "console.neon.tech" || url.host === "api.resend.com" ? Response.json({}) : undefined);
+    // Random-looking secrets, so any run of their characters in a reply can only have come from them.
+    const secrets = ["Zq7xKp9WmT3vLr8NjQ2b", "Hw4cRt6YuB1nMx5EkV9s", "re_Gf3Dp8LsA2qJw7ZtX4"];
+    cf.secrets[TOKEN_SECRET] = secrets[0]!;
+    const replies = [
+      await (await admin("settings", { category: "database", changes: { neonKey: secrets[1] } })).text(),
+      await (await admin("settings", { category: "email", changes: { resendKey: secrets[2] } })).text(),
+      await (await admin("state")).text(),
+      await (await request("/api/state")).text(),
+    ];
+    for (const reply of replies) for (const secret of secrets) for (let i = 0; i + 4 <= secret.length; i++) expect(reply).not.toContain(secret.slice(i, i + 4));
   });
 
   test("platform admins see only who they are and never reach setup, and a reset keeps them", async () => {

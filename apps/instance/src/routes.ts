@@ -39,9 +39,6 @@ async function body(request: Request): Promise<Record<string, unknown>> {
 
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
-// A saved secret is never sent back; its last four characters let the person recognize it.
-const hint = (secret: string | undefined) => (secret ? `••••${secret.slice(-4)}` : "");
-
 const build = (ctx: Context) => ({ version: ctx.self.version, deployedAt: ctx.self.deployedAt });
 
 export async function handle(request: Request, ctx: Context): Promise<Response> {
@@ -94,13 +91,15 @@ async function admin(request: Request, route: string, who: Viewer, ctx: Context)
     return json({
       ...base,
       setup: { token: !!setup.token, tokenWorks: await complete.tokenWorks(ctx), github },
+      // Secrets are write-only: no part of one ever leaves the Worker, only whether it is set.
       settings: {
-        cloudflare: { token: hint(ctx.secrets.CLOUDFLARE_API_TOKEN) },
+        cloudflare: { token: "" },
         github: { app: github?.slug ?? "", owner: github?.owner ?? "" },
-        database: { neonKey: hint(ctx.secrets.NEON_API_KEY) },
-        email: { resendKey: hint(ctx.secrets.RESEND_API_KEY) },
+        database: { neonKey: "" },
+        email: { resendKey: "" },
         admins: { emails: record.admins ?? [] },
       },
+      configured: { token: !!ctx.secrets.CLOUDFLARE_API_TOKEN, neonKey: !!ctx.secrets.NEON_API_KEY, resendKey: !!ctx.secrets.RESEND_API_KEY },
       tokenUrl: WIDER_TOKEN_URL,
       permissions: [...Object.values(PERMISSIONS), ...Object.values(APP_PERMISSIONS)],
     });

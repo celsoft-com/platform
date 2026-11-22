@@ -1,7 +1,8 @@
 // The super admin's settings, one category per connection, rendered by Service Dark's Settings.
 import { z } from "zod";
 
-const secret = (title: string, description: string, placeholder: string) => z.string().default("").meta({ title, description, secret: true, placeholder });
+// Write-only: the page never holds a saved key, so these are drawn by a custom page that shows only whether one is set.
+const secret = (title: string, description: string, placeholder: string) => z.string().default("").meta({ title, description, placeholder });
 
 export const InstanceSettings = z.object({
   cloudflare: z
