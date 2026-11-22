@@ -1,7 +1,7 @@
 // The admin pages: the super admin's Complete Setup checklist and its six steps, and a platform admin's home.
 
 import { escape } from "../../../packages/platform/src/runtime/html.ts";
-import { APP_PERMISSIONS, PERMISSIONS, type Zone } from "./cloudflare.ts";
+import { APP_PERMISSIONS, PERMISSIONS, REVOKED, type Zone } from "./cloudflare.ts";
 import { page, SETUP_KEYS, steps, tokenUrl, type Result } from "./pages.ts";
 import type { InstanceRecord, Self } from "./setup.ts";
 
@@ -19,11 +19,16 @@ interface Step {
   says: string;
 }
 
-function checklist(record: InstanceRecord): Step[] {
+function checklist(record: InstanceRecord, tokenWorks: boolean): Step[] {
   const setup = record.setup ?? {};
   const github = setup.github;
   return [
-    { path: "token", name: "Wider token", done: !!setup.token, says: setup.token ? "The token can deploy apps." : "Give the instance a token that can deploy apps." },
+    {
+      path: "token",
+      name: "Wider token",
+      done: !!setup.token && tokenWorks,
+      says: !tokenWorks ? "The token stopped working; create a new one." : setup.token ? "The token can deploy apps." : "Give the instance a token that can deploy apps.",
+    },
     { path: "domains", name: "Domains", done: !!setup.domains?.length, says: setup.domains?.length ? `Apps may use ${setup.domains.join(", ")}.` : setup.token ? "Pick the domains apps may use." : "Pick the domains apps may use, after the wider token." },
     {
       path: "github",
@@ -37,8 +42,8 @@ function checklist(record: InstanceRecord): Step[] {
   ];
 }
 
-export function superHome(self: Self, email: string, record: InstanceRecord): Response {
-  const list = checklist(record);
+export function superHome(self: Self, email: string, record: InstanceRecord, tokenWorks: boolean): Response {
+  const list = checklist(record, tokenWorks);
   const finished = list.every((s) => s.done);
   const items = list.map((s) => `<li class="${s.done ? "instance-done" : "instance-todo"}"><a href="/admin/${s.path}">${s.name}</a>: ${escape(s.says)}</li>`).join("");
   return page(
@@ -46,6 +51,7 @@ export function superHome(self: Self, email: string, record: InstanceRecord): Re
     "Complete setup",
     `<h1 class="platform-title">${finished ? "Setup is complete" : "Complete setup"}</h1>
 <p class="platform-intro">Signed in as <strong>${escape(email)}</strong>, the super admin. ${finished ? "Every step is done. Adding apps comes in a later version." : "Each step lets this instance deploy apps; do them in order."}</p>
+${tokenWorks ? "" : `<ul class="instance-steps"><li class="instance-failed" role="alert">${escape(REVOKED)} <a href="/admin/token">Create a new token</a></li></ul>`}
 <ul class="instance-steps">${items}</ul>
 ${signOut}`,
   );
@@ -68,16 +74,18 @@ function stepPage(self: Self, title: string, intro: string, form: string, result
 const secretField = (name: string, label: string) =>
   `<label class="platform-field"><span class="platform-label">${label}</span><input class="platform-input" name="${name}" type="password" autocomplete="off" required></label>`;
 
-export function tokenStep(self: Self, result: Result = noResult): Response {
+export function tokenStep(self: Self, result: Result = noResult, tokenWorks = true): Response {
   const permissions = [...Object.values(PERMISSIONS), ...Object.values(APP_PERMISSIONS)].map((p) => `<li>${escape(p)}</li>`).join("");
   return stepPage(
     self,
     "Wider token",
-    "Deploying apps needs more than setup did. Create a token with these permissions, the zone ones on all zones; it replaces the setup token.",
+    tokenWorks
+      ? "Deploying apps needs more than setup did. Create a token with these permissions, the zone ones on all zones; it replaces the setup token."
+      : "The instance's token stopped working: it was revoked, expired or deleted. Create a new one with these permissions, the zone ones on all zones, and paste it here.",
     `<form class="platform-form" method="post">
 <ul class="platform-intro">${permissions}</ul>
 <nav class="platform-links"><a href="${escape(WIDER_TOKEN_URL)}" target="_blank" rel="noopener">Create token</a></nav>
-<p class="platform-intro">If Cloudflare's page says it could not add a permission, add it there by hand.</p>
+<p class="platform-intro">Cloudflare's page cannot fill in Hyperdrive: before creating the token, add <strong>Account, Hyperdrive, Edit</strong> yourself, and anything else its notice says it could not add.</p>
 ${secretField("token", "Token")}
 <button class="platform-button" type="submit">Check and save</button></form>`,
     result,

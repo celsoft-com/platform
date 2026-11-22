@@ -37,6 +37,15 @@ export class CloudflareFailure extends SetupError {
   }
 }
 
+export const REVOKED = "This instance's Cloudflare token no longer works: it was revoked, expired or deleted. Create a new one on the Wider token step.";
+
+// The instance's own token stopped working, as opposed to a pasted one being wrong.
+export class TokenRevoked extends SetupError {
+  constructor() {
+    super(REVOKED);
+  }
+}
+
 // Access is off for the account, which Cloudflare answers with a 403 like a missing permission.
 export class AccessNotEnabled extends SetupError {}
 
@@ -84,9 +93,11 @@ export interface AccessApp {
 }
 
 export class Cloudflare {
+  // `stored` marks the instance's own token, kept as its secret, so a refusal says it stopped working rather than blaming what was pasted.
   constructor(
     private readonly token: string,
     private readonly fetcher: typeof fetch = fetch,
+    private readonly stored = false,
   ) {}
 
   private async call<T>(permission: Permission, method: string, path: string, body?: unknown): Promise<T> {
@@ -98,7 +109,7 @@ export class Cloudflare {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const envelope = (await response.json().catch(() => undefined)) as Envelope<T> | undefined;
-    if (response.status === 401) throw new SetupError("Cloudflare did not accept this token; check it was copied whole and has not expired.");
+    if (response.status === 401) throw this.stored ? new TokenRevoked() : new SetupError("Cloudflare did not accept this token; check it was copied whole and has not expired.");
     const said = envelope?.errors?.map((e) => `${e.code} ${e.message}`).join("; ") ?? "";
     if (envelope?.errors?.some((e) => e.message.includes("access.api.error.not_enabled"))) throw new AccessNotEnabled(said);
     if (response.status === 403) throw new MissingPermission(permission, said);

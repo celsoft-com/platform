@@ -59,7 +59,7 @@ export async function handle(request: Request, ctx: Context): Promise<Response> 
   // Access stops anyone else before the Worker, so this is a forged or stale request; sending a claimed instance to / would loop back here.
   if (!who) return record?.state === "claimed" ? refusedPage(self) : redirect("/");
   const latest = async () => (await store.get()) as InstanceRecord;
-  if (pathname === ADMIN_PATH) return who.role === "super" ? superHome(self, who.email, await latest()) : platformHome(self, who.email);
+  if (pathname === ADMIN_PATH) return who.role === "super" ? superHome(self, who.email, await latest(), await complete.tokenWorks(ctx)) : platformHome(self, who.email);
   if (who.role !== "super") return refusedPage(self);
 
   const step = pathname.slice(ADMIN_PATH.length + 1);
@@ -69,7 +69,7 @@ export async function handle(request: Request, ctx: Context): Promise<Response> 
 
   switch (step) {
     case "token":
-      return tokenStep(self, form ? await attempt(done, () => complete.widerToken(ctx, field("token"), done)) : undefined);
+      return form ? tokenStep(self, await attempt(done, () => complete.widerToken(ctx, field("token"), done))) : tokenStep(self, undefined, await complete.tokenWorks(ctx));
     case "domains": {
       const result = form ? await attempt(done, () => complete.domains(ctx, form.getAll("domain").map(String), done)) : undefined;
       let zones: Zone[] = [];

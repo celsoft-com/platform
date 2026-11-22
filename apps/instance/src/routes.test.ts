@@ -356,6 +356,17 @@ describe("complete setup", () => {
     for (const step of ["token", "domains", "github", "database", "email", "admins"]) expect(html).toContain(`<li class="instance-todo"><a href="/admin/${step}">`);
   });
 
+  test("a revoked token is reported on the home page and every step that uses it, with the way to a new one", async () => {
+    cf.secrets[TOKEN_SECRET] = "revoked";
+    const html = await home();
+    expect(html).toContain("Cloudflare token no longer works");
+    expect(html).toContain('<a href="/admin/token">Create a new token</a>');
+    expect(await (await admin("token")).text()).toContain("token stopped working");
+    expect(await (await admin("admins", { emails: "bob@example.com" })).text()).toContain("Cloudflare token no longer works");
+    expect(await (await admin("token", { token: WIDE })).text()).toContain("Saved the wider token");
+    expect(await home()).not.toContain("no longer works");
+  });
+
   test("the setup token is refused as the wider token, listing everything it lacks at once and how to add it", async () => {
     const html = await (await admin("token", { token: TOKEN })).text();
     expect(html).toContain('<li class="instance-done">Workers: reachable.');

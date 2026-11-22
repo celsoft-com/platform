@@ -30,8 +30,19 @@ async function claimed(ctx: Context): Promise<InstanceRecord> {
 
 function stored(ctx: Context): Cloudflare {
   const token = ctx.secrets.CLOUDFLARE_API_TOKEN;
-  if (!token) throw new SetupError("This instance has no Cloudflare token yet. If you just saved one, wait a few seconds for the new version to deploy, then reload.");
-  return new Cloudflare(token, ctx.fetcher);
+  if (!token) throw new SetupError("This instance has no Cloudflare token. If you just saved one, wait a few seconds for the new version to deploy, then reload; otherwise create one on the Wider token step.");
+  return new Cloudflare(token, ctx.fetcher, true);
+}
+
+// Whether the instance's own token still works for its account, checked on every visit to the home page.
+export async function tokenWorks(ctx: Context): Promise<boolean> {
+  const record = await claimed(ctx);
+  try {
+    return (await stored(ctx).accounts()).some((a) => a.id === record.account);
+  } catch (error) {
+    if (error instanceof SetupError) return false;
+    throw error;
+  }
 }
 
 async function progress(ctx: Context, record: InstanceRecord, change: Partial<Progress>, admins = record.admins): Promise<void> {

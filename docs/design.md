@@ -501,4 +501,5 @@ The direction the platform is taking: instead of each app deploying the platform
     6. **Platform admins**: their emails join the super admin's in the Access rule; signing in, they see their own page, and every setup page refuses them.
     7. **Redeploys**: saving a secret deploys a new version; a step that reaches the old version in the seconds after says to wait and reload.
     8. **Kept through a reset**: resetting the super admin keeps every step's progress and the platform admins.
+    9. **Revoked token**: the home page checks the instance's token on every visit; once it stops working, revoked, expired or deleted, the home page and every step that uses it say so and lead to the Wider token step, which takes a new one. Signing in never needs the token.
 13. **Later**: adding and deploying apps, apps and their scopes, instance updates, and how today's per-app CLI and skills fit the instance.
