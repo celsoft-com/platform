@@ -77,6 +77,14 @@
     return save({ category: category!, changes: { [key!]: value } });
   }
 
+  // Where each key is made: Cloudflare's token page with every permission filled in, and the other services' key pages.
+  const makers: Record<string, { label: string; url: () => string | undefined; note?: () => string[] | undefined }> = {
+    token: { label: 'Create token', url: () => state?.tokenUrl, note: () => state?.permissions },
+    neonKey: { label: 'Open Neon', url: () => 'https://console.neon.tech' },
+    resendKey: { label: 'Open Resend API keys', url: () => 'https://resend.com/api-keys' },
+  };
+  const open = (url: string | undefined) => void window.open(url, '_blank', 'noopener');
+
   let replacing = $state<{ page: SettingsPage; key: string; title: string }>();
   let draft = $state('');
 
@@ -178,6 +186,7 @@
       </div>
       <div class="sd-setting-control key">
         <span class="mono">{set ? '•••••••• set' : 'Not set'}</span>
+        <Button size="sm" variant="quiet" icon="link" onclick={() => open(makers[s.key]?.url())}>{makers[s.key]?.label}</Button>
         <Button size="sm" onclick={() => replace(page, s.key, s.title)}>{set ? 'Replace' : 'Add'}</Button>
       </div>
       {#if page.errors[s.key]}<span class="sd-field-error">{page.errors[s.key]}</span>{/if}
@@ -187,6 +196,9 @@
 
 {#if replacing}
   <Dialog open title={replacing.title} description="It is checked, then kept as this instance's secret. It is never shown again." icon="key-round" onclose={() => (replacing = undefined)} onsubmit={submitKey}>
+    {@const maker = makers[replacing.key]}
+    {#if maker?.note?.()}<ul class="body-sm permissions">{#each maker.note() ?? [] as p}<li>{p}</li>{/each}</ul>{/if}
+    {#if maker}<Button variant="secondary" icon="link" onclick={() => open(maker.url())}>{maker.label}</Button>{/if}
     <Field label={replacing.title} bind:value={draft} mono autocomplete="off" />
     {#snippet footer()}
       <Button variant="quiet" onclick={() => (replacing = undefined)}>Cancel</Button>
