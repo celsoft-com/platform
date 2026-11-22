@@ -19,7 +19,6 @@ export interface InstanceRecord {
 // Complete setup's steps, each kept once the instance has confirmed it.
 export interface Progress {
   token?: boolean;
-  domains?: string[];
   githubState?: string;
   github?: { slug: string; owner: string; installations: string[] };
   neon?: boolean;

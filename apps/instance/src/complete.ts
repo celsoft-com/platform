@@ -105,39 +105,6 @@ export async function widerToken(ctx: Context, input: string, done: string[]): P
   await progress(ctx, record, { token: true });
 }
 
-// Saving the wider token deploys a new version; until it serves, this request's version still holds the setup token.
-async function withWiderToken<T>(record: InstanceRecord, run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error) {
-    if (error instanceof MissingPermission && record.setup?.token) throw new SetupError("The wider token is still deploying to this instance; wait a few seconds, then reload this page.");
-    throw error;
-  }
-}
-
-export async function zones(ctx: Context): Promise<Zone[]> {
-  const record = await claimed(ctx);
-  if (!record.setup?.token) throw new SetupError("Finish the wider token step first.");
-  return withWiderToken(record, () => stored(ctx).zones(record.account));
-}
-
-export async function domains(ctx: Context, chosen: string[], done: string[]): Promise<void> {
-  const record = await claimed(ctx);
-  if (!record.setup?.token) throw new SetupError("Finish the wider token step first.");
-  const cf = stored(ctx);
-  const picked = (await withWiderToken(record, () => cf.zones(record.account))).filter((z) => chosen.includes(z.name));
-  if (!picked.length) throw new SetupError("Pick at least one domain.");
-  for (const zone of picked) {
-    await withWiderToken(record, async () => {
-      await cf.dnsRecords(zone.id);
-      await cf.routes(zone.id);
-    });
-    done.push(`${zone.name}: DNS and Worker routes reachable.`);
-  }
-  await progress(ctx, record, { domains: picked.map((z) => z.name) });
-  done.push(`Apps may use ${picked.map((z) => z.name).join(", ")}.`);
-}
-
 // The form that sends the manifest to GitHub, and the state GitHub must hand back with its code.
 export async function githubStart(ctx: Context, owner: string): Promise<{ action: string; manifest: string }> {
   const record = await claimed(ctx);

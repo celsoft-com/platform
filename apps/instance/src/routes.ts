@@ -1,8 +1,8 @@
 // Routing: initial setup at /, recovery at /reset, the admin pages under /admin behind Cloudflare
 // Access, and the GitHub App's webhook.
 
-import { adminsStep, databaseStep, domainsStep, emailStep, githubSend, githubStep, platformHome, superHome, tokenStep } from "./admin-pages.ts";
-import { SetupError, type Zone } from "./cloudflare.ts";
+import { adminsStep, databaseStep, emailStep, githubSend, githubStep, platformHome, superHome, tokenStep } from "./admin-pages.ts";
+import { SetupError } from "./cloudflare.ts";
 import * as complete from "./complete.ts";
 import { webhookSigned, type GitHubApp } from "./github.ts";
 import { refusedPage, resetPage, setupPage, waitingPage, type Result } from "./pages.ts";
@@ -70,12 +70,6 @@ export async function handle(request: Request, ctx: Context): Promise<Response> 
   switch (step) {
     case "token":
       return form ? tokenStep(self, await attempt(done, () => complete.widerToken(ctx, field("token"), done))) : tokenStep(self, undefined, await complete.tokenWorks(ctx));
-    case "domains": {
-      const result = form ? await attempt(done, () => complete.domains(ctx, form.getAll("domain").map(String), done)) : undefined;
-      let zones: Zone[] = [];
-      const listed = await attempt([], async () => (zones = await complete.zones(ctx)));
-      return domainsStep(self, zones, (await latest()).setup?.domains ?? [], result ?? (listed.error ? listed : undefined));
-    }
     case "github": {
       if (!form) return githubStep(self, await latest());
       let sent: { action: string; manifest: string } | undefined;

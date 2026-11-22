@@ -1,7 +1,7 @@
 // The admin pages: the super admin's Complete Setup checklist and its six steps, and a platform admin's home.
 
 import { escape } from "../../../packages/platform/src/runtime/html.ts";
-import { APP_PERMISSIONS, PERMISSIONS, REVOKED, type Zone } from "./cloudflare.ts";
+import { APP_PERMISSIONS, PERMISSIONS, REVOKED } from "./cloudflare.ts";
 import { page, SETUP_KEYS, steps, tokenUrl, type Result } from "./pages.ts";
 import type { InstanceRecord, Self } from "./setup.ts";
 
@@ -36,7 +36,6 @@ function checklist(record: InstanceRecord, tokenWorks: boolean): Step[] {
       done: !!setup.token && tokenWorks,
       says: !tokenWorks ? "The token stopped working; create a new one." : setup.token ? "The token can deploy apps." : "Give the instance a token that can deploy apps.",
     },
-    { path: "domains", name: "Domains", done: !!setup.domains?.length, says: setup.domains?.length ? `Apps may use ${setup.domains.join(", ")}.` : setup.token ? "Pick the domains apps may use." : "Pick the domains apps may use, after the wider token." },
     {
       path: "github",
       name: "GitHub App",
@@ -76,7 +75,6 @@ ${signOut}`,
 
 const ORDER = [
   ["token", "Wider token"],
-  ["domains", "Domains"],
   ["github", "GitHub App"],
   ["database", "Database"],
   ["email", "Email"],
@@ -110,17 +108,6 @@ export function tokenStep(self: Self, result: Result = noResult, tokenWorks = tr
 <p class="platform-intro">If Cloudflare's page says it could not add a permission, add it there by hand before creating the token.</p>
 ${secretField("token", "Token")}
 <button class="platform-button" type="submit">Check and save</button></form>`,
-    result,
-  );
-}
-
-export function domainsStep(self: Self, zones: Zone[], chosen: string[], result: Result = noResult): Response {
-  const boxes = zones.map((z) => `<label class="instance-check"><input type="checkbox" name="domain" value="${escape(z.name)}"${chosen.includes(z.name) ? " checked" : ""}> ${escape(z.name)}</label>`).join("");
-  return stepPage(
-    self,
-    "Domains",
-    "Pick the domains apps may use for their addresses. Each app will get a hostname on one of them.",
-    zones.length ? `<form class="platform-form" method="post">${boxes}<button class="platform-button" type="submit">Check and save</button></form>` : "",
     result,
   );
 }

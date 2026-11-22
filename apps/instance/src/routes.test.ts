@@ -351,9 +351,9 @@ describe("complete setup", () => {
     await request(ADMIN_PATH, { jwt: ann });
   });
 
-  test("home is a checklist of six steps, none done", async () => {
+  test("home is a checklist of five steps, none done", async () => {
     const html = await home();
-    for (const step of ["token", "domains", "github", "database", "email", "admins"]) expect(html).toContain(`<li class="instance-todo"><a href="/admin/${step}">`);
+    for (const step of ["token", "github", "database", "email", "admins"]) expect(html).toContain(`<li class="instance-todo"><a href="/admin/${step}">`);
   });
 
   test("a revoked token is reported on the home page and every step that uses it, with the way to a new one", async () => {
@@ -389,26 +389,9 @@ describe("complete setup", () => {
     const html = await (await admin("token", { token: WIDE })).text();
     expect(html).toContain("reachable on all 2 domains (acme.dev, acme.app)");
     expect(cf.secrets[TOKEN_SECRET]).toBe(WIDE);
-    expect(html).toContain('href="/admin/domains">Next: Domains</a>');
+    expect(html).toContain('href="/admin/github">Next: GitHub App</a>');
     expect(html).not.toContain('name="token"');
     expect(await home()).toContain('<li class="instance-done"><a href="/admin/token">');
-  });
-
-  test("domains wait for the wider token, then save the ones picked", async () => {
-    expect(await (await admin("domains", { domain: "acme.dev" })).text()).toContain("Finish the wider token step first");
-    await admin("token", { token: WIDE });
-    const page = await (await admin("domains")).text();
-    expect(page).toContain('value="acme.app"');
-    expect(await (await admin("domains", {})).text()).toContain("Pick at least one domain");
-    const html = await (await admin("domains", new URLSearchParams([["domain", "acme.dev"]]))).text();
-    expect(html).toContain("Apps may use acme.dev.");
-    expect(store.record?.setup?.domains).toEqual(["acme.dev"]);
-  });
-
-  test("right after the wider token is saved, a version still holding the setup token says to wait", async () => {
-    await admin("token", { token: WIDE });
-    cf.secrets[TOKEN_SECRET] = TOKEN;
-    expect(await (await admin("domains")).text()).toContain("The wider token is still deploying");
   });
 
   test("the GitHub App is created from a manifest, saved, installed and its webhooks checked", async () => {
@@ -473,7 +456,7 @@ describe("complete setup", () => {
 
     const bob = await jwt(cf.keys!, { email: "bob@example.com" });
     expect(await (await request(ADMIN_PATH, { jwt: bob })).text()).toContain("You are a platform admin");
-    for (const step of ["token", "domains", "github", "database", "email", "admins"]) expect((await request(`${ADMIN_PATH}/${step}`, { jwt: bob })).status).toBe(403);
+    for (const step of ["token", "github", "database", "email", "admins"]) expect((await request(`${ADMIN_PATH}/${step}`, { jwt: bob })).status).toBe(403);
 
     await submit("ann@new.example", TOKEN, "/reset");
     expect(store.record?.admins).toEqual(["bob@example.com"]);
