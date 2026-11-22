@@ -41,7 +41,7 @@ class FakeCloudflare {
     const [, account, rest] = match as unknown as [string, string, string];
     if (rest === "/workers/scripts") return deny(PERMISSIONS.scripts) || ok(account === "acct" ? [{ id: "blog" }, { id: "platform" }] : [{ id: "elsewhere" }]);
     if (rest.endsWith("/deployments")) return ok({ deployments: [{ versions: [{ version_id: rest.includes("/platform/") ? VERSION : "other-version" }] }] });
-    if (rest === "/workers/scripts/platform/secrets" && method === "PUT") return deny(PERMISSIONS.scripts) || ((this.secrets[body.name] = body.text), ok({ name: body.name }));
+    if (rest === "/workers/scripts/platform/secrets") return deny(PERMISSIONS.scripts) || (method === "PUT" ? ((this.secrets[body.name] = body.text), ok({ name: body.name })) : ok(Object.keys(this.secrets).map((name) => ({ name }))));
     if (rest === "/access/organizations") {
       if (deny(PERMISSIONS.organizations)) return deny(PERMISSIONS.organizations) as Response;
       // Cloudflare answers every Access call with this 403 until Access is switched on.
@@ -136,7 +136,9 @@ describe("unclaimed", () => {
 
   test("a valid token and email reserve it and set up Access for that email alone", async () => {
     const response = await submit("Ann@Example.com");
-    expect(response.status).toBe(303);
+    expect(response.status).toBe(200);
+    const shown = await response.text();
+    for (const step of ["Token accepted", "Cloudflare Access is on", "Sign-in with an emailed code is on", "Only ann@example.com may sign in", "Cloudflare Access protects", "Reserved for ann@example.com", "Token saved"]) expect(shown).toContain(step);
     expect(store.record).toEqual({ state: "reserved", email: "ann@example.com", account: "acct", script: "platform", authDomain: TEAM, aud: "aud-1" });
     expect(cf.secrets[TOKEN_SECRET]).toBe(TOKEN);
     expect(cf.idps).toEqual([{ id: expect.any(String), type: "onetimepin" }]);
@@ -149,7 +151,7 @@ describe("unclaimed", () => {
   });
 
   test("switches Access on when the account has never used it", async () => {
-    expect((await submit("ann@example.com")).status).toBe(303);
+    expect((await submit("ann@example.com")).status).toBe(200);
     expect(cf.accessOn).toBe(true);
     expect(store.record?.authDomain).toBe(TEAM);
   });
@@ -184,6 +186,21 @@ describe("refused tokens", () => {
     expect(store.record).toBeUndefined();
   });
 
+  test("a failure shows the steps that finished and the one that stopped it", async () => {
+    cf.denied.add(PERMISSIONS.apps);
+    const html = await (await submit("ann@example.com")).text();
+    expect(html).toContain('<li class="instance-done">Token accepted');
+    expect(html).toContain('<li class="instance-done">Sign-in with an emailed code is on.');
+    expect(html).toContain(`<li class="instance-failed" role="alert">The token is missing the ${PERMISSIONS.apps}`);
+  });
+
+  test("a reservation the instance cannot read back is reported, not lost", async () => {
+    const forgetful: Store = { get: async () => undefined, put: async () => {} };
+    const response = await handle(new Request(`https://${HOST}/`, { method: "POST", body: new URLSearchParams({ token: TOKEN, email: "ann@example.com" }) }), forgetful, { version: VERSION, host: HOST }, strict as typeof fetch);
+    expect(await response.text()).toContain("could not be saved in this instance");
+    expect(cf.secrets[TOKEN_SECRET]).toBeUndefined();
+  });
+
   test("an account whose Access is off and that Cloudflare will not switch on says to click Enable Access", async () => {
     cf.onboarded = false;
     const html = await (await submit("ann@example.com")).text();
@@ -213,7 +230,7 @@ describe("reserved", () => {
   });
 
   test("a new token and email replace the reservation without duplicating Access", async () => {
-    expect((await submit("ann@example.com")).status).toBe(303);
+    expect((await submit("ann@example.com")).status).toBe(200);
     expect(store.record?.email).toBe("ann@example.com");
     expect(cf.policies).toHaveLength(1);
     expect(cf.policies[0]!.include).toEqual([{ email: { email: "ann@example.com" } }]);
@@ -264,7 +281,7 @@ describe("claimed", () => {
 
   test("a fresh token at /reset reserves it again for a new email", async () => {
     expect((await request("/reset")).status).toBe(200);
-    expect((await submit("ann@new.example", TOKEN, "/reset")).status).toBe(303);
+    expect((await submit("ann@new.example", TOKEN, "/reset")).status).toBe(200);
     expect(store.record).toMatchObject({ state: "reserved", email: "ann@new.example" });
     expect(cf.policies[0]!.include).toEqual([{ email: { email: "ann@new.example" } }]);
   });

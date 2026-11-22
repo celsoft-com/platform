@@ -105,6 +105,10 @@ export class Cloudflare {
     return deployments[0]?.versions.map((v) => v.version_id) ?? [];
   }
 
+  secrets(account: string, script: string) {
+    return this.call<{ name: string }[]>(PERMISSIONS.scripts, "GET", `/accounts/${account}/workers/scripts/${encodeURIComponent(script)}/secrets`);
+  }
+
   setSecret(account: string, script: string, name: string, text: string) {
     return this.call<unknown>(PERMISSIONS.scripts, "PUT", `/accounts/${account}/workers/scripts/${encodeURIComponent(script)}/secrets`, { name, text, type: "secret_text" });
   }

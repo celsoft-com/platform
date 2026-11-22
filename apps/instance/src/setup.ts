@@ -31,24 +31,37 @@ export const TOKEN_SECRET = "CLOUDFLARE_API_TOKEN";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export async function reserve(store: Store, self: Self, input: { token: string; email: string }, fetcher: typeof fetch = fetch): Promise<InstanceRecord> {
+// Each step it finishes is added to `done`, in words for the person setting up, so a failure shows how far it got.
+export async function reserve(store: Store, self: Self, input: { token: string; email: string }, done: string[] = [], fetcher: typeof fetch = fetch): Promise<InstanceRecord> {
   const token = input.token.trim();
   const email = input.email.trim().toLowerCase();
   if (!token) throw new SetupError("Paste the token you created.");
   if (!EMAIL.test(email)) throw new SetupError("Enter a valid email address.");
   const cf = new Cloudflare(token, fetcher);
   const { account, script } = await findSelf(cf, self.version);
+  done.push(`Token accepted: it reaches the account running this instance, the Worker ${script}.`);
 
   const org = (await cf.organization(account)) ?? (await cf.createOrganization(account));
+  done.push(`Cloudflare Access is on for the account, team ${org.auth_domain}.`);
   const idp = (await cf.identityProviders(account)).find((p) => p.type === "onetimepin") ?? (await cf.createOneTimePin(account));
+  done.push("Sign-in with an emailed code is on.");
   const policyName = `${script} super admin`;
   const policy = await cf.savePolicy(account, (await cf.policies(account)).find((p) => p.name === policyName)?.id, policyName, email);
+  done.push(`Only ${email} may sign in.`);
   const domain = `${self.host}${ADMIN_PATH}`;
   const app = await cf.saveApp(account, (await cf.apps(account)).find((a) => a.domain === domain)?.id, { name: script, domain, idp: idp.id, policy: policy.id });
-  await cf.setSecret(account, script, TOKEN_SECRET, token);
+  if (!(await cf.apps(account)).some((a) => a.domain === domain)) throw new SetupError(`Cloudflare accepted the Access application for ${domain} but does not list it; submit again.`);
+  done.push(`Cloudflare Access protects ${domain}.`);
 
+  // Saved before the token: saving the token deploys a new version of this Worker, which restarts its storage.
   const record: InstanceRecord = { state: "reserved", email, account, script, authDomain: org.auth_domain, aud: app.aud };
   await store.put(record);
+  if ((await store.get())?.email !== email) throw new SetupError("The reservation could not be saved in this instance's storage; submit again.");
+  done.push(`Reserved for ${email}.`);
+
+  await cf.setSecret(account, script, TOKEN_SECRET, token);
+  if (!(await cf.secrets(account, script)).some((s) => s.name === TOKEN_SECRET)) throw new SetupError("Cloudflare accepted the token as this instance's secret but does not list it; submit again.");
+  done.push("Token saved as this instance's secret.");
   return record;
 }
 

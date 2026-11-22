@@ -16,17 +16,20 @@ export async function handle(request: Request, state: Store, self: Self, fetcher
     if (resetting !== (record?.state === "claimed")) return redirect(resetting ? "/" : ADMIN_PATH);
     const form = request.method === "POST" ? await request.formData() : undefined;
     const email = String(form?.get("email") ?? "");
-    const show = (error?: string) => (resetting ? resetPage(self, error, email) : record ? waitingPage(self, record.email, error, email) : setupPage(self, error, email));
+    const done: string[] = [];
+    const result = { email, done };
+    const show = (error?: string) => (resetting ? resetPage(self, { ...result, error }) : record ? waitingPage(self, record.email, { ...result, error }) : setupPage(self, { ...result, error }));
     if (!form) return show();
     try {
-      await reserve(state, self, { token: String(form.get("token") ?? ""), email }, fetcher);
+      const reserved = await reserve(state, self, { token: String(form.get("token") ?? ""), email }, done, fetcher);
+      // Shown right away rather than redirected, so the steps it took stay on screen.
+      return waitingPage(self, reserved.email, { email: "", done });
     } catch (error) {
       if (error instanceof SetupError) return show(error.message);
       // Anything else is a bug; show it on the form, rather than Cloudflare's error page, so it can be reported.
       console.error(error);
       return show(`Something went wrong that setup did not expect: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`);
     }
-    return redirect("/");
   }
 
   if (pathname === ADMIN_PATH) {

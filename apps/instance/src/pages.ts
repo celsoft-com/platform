@@ -26,52 +26,74 @@ function page(self: Self, title: string, body: string, status = 200): Response {
 }
 
 const EXTRA = `.platform-intro ul{margin:8px 0 0;padding-left:20px}.platform-links a{word-break:break-word}
-.instance-build{position:fixed;right:12px;bottom:8px;font-size:12px;color:var(--platform-muted)}`;
+.instance-build{position:fixed;right:12px;bottom:8px;font-size:12px;color:var(--platform-muted)}
+.instance-steps{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.instance-done::before{content:"✓ ";color:var(--platform-accent);font-weight:700}
+.instance-failed{color:var(--platform-error)}.instance-failed::before{content:"✗ ";font-weight:700}`;
 
-function tokenForm(action: string, button: string, error?: string, email = ""): string {
+// What the last submit did: the steps it finished, the error that stopped it, and the email typed, kept for a retry.
+export interface Result {
+  email: string;
+  done: string[];
+  error?: string;
+}
+
+const empty: Result = { email: "", done: [] };
+
+function steps(result: Result): string {
+  if (!result.done.length && !result.error) return "";
+  const lines = result.done.map((d) => `<li class="instance-done">${escape(d)}</li>`);
+  if (result.error) lines.push(`<li class="instance-failed" role="alert">${escape(result.error)}</li>`);
+  return `<ul class="instance-steps">${lines.join("")}</ul>`;
+}
+
+function tokenForm(action: string, button: string, result: Result): string {
   const permissions = Object.values(PERMISSIONS).map((p) => `<li>${escape(p)}</li>`).join("");
   return `<form class="platform-form" method="post" action="${action}">
 <p class="platform-intro">Create a token on this Cloudflare account with these account permissions:<ul>${permissions}</ul></p>
 <nav class="platform-links"><a href="${escape(TOKEN_URL)}" target="_blank" rel="noopener">Create token</a></nav>
 <p class="platform-intro">Paste the token this link makes, named <strong>platform setup</strong>. The build token Cloudflare made for this Worker won't work.</p>
 <label class="platform-field"><span class="platform-label">Token</span><input class="platform-input" name="token" type="password" autocomplete="off" required></label>
-<label class="platform-field"><span class="platform-label">Your email</span><input class="platform-input" name="email" type="email" autocomplete="email" value="${escape(email)}" required></label>
-${error ? `<p class="platform-error" role="alert">${escape(error)}</p>` : ""}
+<label class="platform-field"><span class="platform-label">Your email</span><input class="platform-input" name="email" type="email" autocomplete="email" value="${escape(result.email)}" required></label>
 <button class="platform-button" type="submit">${button}</button></form>`;
 }
 
-export function setupPage(self: Self, error?: string, email?: string): Response {
+export function setupPage(self: Self, result: Result = empty): Response {
   return page(
     self,
     "Set up",
     `<h1 class="platform-title">Set up this instance</h1>
 <p class="platform-intro">Paste a token for this Cloudflare account and your email. You become the super admin once you sign in with the code Cloudflare emails you.</p>
-${tokenForm("/", "Reserve", error, email)}`,
-    error ? 400 : 200,
+${steps(result)}
+${tokenForm("/", "Reserve", result)}`,
+    result.error ? 400 : 200,
   );
 }
 
-export function waitingPage(self: Self, reserved: string, error?: string, email?: string): Response {
+export function waitingPage(self: Self, reserved: string, result: Result = empty): Response {
   return page(
     self,
     "Waiting for sign-in",
     `<h1 class="platform-title">Waiting for sign-in</h1>
 <p class="platform-intro">Reserved for <strong>${escape(reserved)}</strong>. Sign in with the code Cloudflare emails to that address to become the super admin.</p>
+${result.error ? "" : steps(result)}
 <nav class="platform-links"><a href="${ADMIN_PATH}">Sign in</a></nav>
 <p class="platform-intro">Wrong email, or no code coming? Submit a token with the right email to replace the reservation.</p>
-${tokenForm("/", "Reserve again", error, email)}`,
-    error ? 400 : 200,
+${result.error ? steps(result) : ""}
+${tokenForm("/", "Reserve again", result)}`,
+    result.error ? 400 : 200,
   );
 }
 
-export function resetPage(self: Self, error?: string, email?: string): Response {
+export function resetPage(self: Self, result: Result = empty): Response {
   return page(
     self,
     "Reset the super admin",
     `<h1 class="platform-title">Reset the super admin</h1>
 <p class="platform-intro">For a super admin who lost their email. A token for this Cloudflare account and a new email reserve the instance again for that email.</p>
-${tokenForm("/reset", "Reset", error, email)}`,
-    error ? 400 : 200,
+${steps(result)}
+${tokenForm("/reset", "Reset", result)}`,
+    result.error ? 400 : 200,
   );
 }
 
