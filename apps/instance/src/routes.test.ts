@@ -389,6 +389,8 @@ describe("complete setup", () => {
     const html = await (await admin("token", { token: WIDE })).text();
     expect(html).toContain("reachable on all 2 domains (acme.dev, acme.app)");
     expect(cf.secrets[TOKEN_SECRET]).toBe(WIDE);
+    expect(html).toContain('href="/admin/domains">Next: Domains</a>');
+    expect(html).not.toContain('name="token"');
     expect(await home()).toContain('<li class="instance-done"><a href="/admin/token">');
   });
 
@@ -434,11 +436,14 @@ describe("complete setup", () => {
     const created = await (await admin(`github/created?code=good-code&state=${state}`)).text();
     expect(created).toContain("GitHub App platform-acme created under acme.");
     expect(created).toContain("https://github.com/apps/platform-acme/installations/new");
+    expect(created).not.toContain("Next: Database");
     expect(JSON.parse(cf.secrets.GITHUB_APP!).id).toBe(7);
 
     expect(await (await admin("github/installed")).text()).toContain("not installed anywhere yet");
     installed = ["acme"];
-    expect(await (await admin("github/installed")).text()).toContain("Installed on acme.");
+    const installedPage = await (await admin("github/installed")).text();
+    expect(installedPage).toContain("Installed on acme.");
+    expect(installedPage).toContain('href="/admin/database">Next: Database</a>');
     expect(await home()).toContain('<li class="instance-done"><a href="/admin/github">GitHub App</a>: platform-acme, installed on acme.');
 
     const event = JSON.stringify({ zen: "hi" });

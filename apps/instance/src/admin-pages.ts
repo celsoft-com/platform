@@ -74,8 +74,23 @@ ${signOut}`,
   );
 }
 
-function stepPage(self: Self, title: string, intro: string, form: string, result: Result): Response {
-  return page(self, title, `<h1 class="platform-title">${title}</h1>\n<p class="platform-intro">${intro}</p>\n${steps(result)}\n${form}\n${back}`, result.error ? 400 : 200);
+const ORDER = [
+  ["token", "Wider token"],
+  ["domains", "Domains"],
+  ["github", "GitHub App"],
+  ["database", "Database"],
+  ["email", "Email"],
+  ["admins", "Platform admins"],
+] as const;
+
+// A step that just finished drops its form and leads straight to the next one.
+function stepPage(self: Self, title: string, intro: string, form: string, result: Result, finished = result.done.length > 0 && !result.error): Response {
+  const at = ORDER.findIndex(([, name]) => name === title);
+  const next = ORDER[at + 1];
+  const onward = next
+    ? `<a class="platform-button instance-action" href="/admin/${next[0]}">Next: ${next[1]}</a>\n${back}`
+    : `<a class="platform-button instance-action" href="/admin">Back to complete setup</a>`;
+  return page(self, title, `<h1 class="platform-title">${title}</h1>\n<p class="platform-intro">${intro}</p>\n${steps(result)}\n${finished ? onward : `${form}\n${back}`}`, result.error ? 400 : 200);
 }
 
 const secretField = (name: string, label: string) =>
@@ -119,7 +134,7 @@ export function githubStep(self: Self, record: InstanceRecord, result: Result = 
     : `<form class="platform-form" method="post">
 <label class="platform-field"><span class="platform-label">GitHub org (empty for your own account)</span><input class="platform-input" name="owner" autocomplete="off"></label>
 <button class="platform-button" type="submit">Next</button></form>`;
-  return stepPage(self, "GitHub App", "The instance gets its own GitHub App, which reads app repos and hears their pushes and pull requests.", body, result);
+  return stepPage(self, "GitHub App", "The instance gets its own GitHub App, which reads app repos and hears their pushes and pull requests.", body, result, !!github?.installations.length && result.done.length > 0 && !result.error);
 }
 
 // GitHub's manifest flow takes a form posted from the browser, so this page posts it.
