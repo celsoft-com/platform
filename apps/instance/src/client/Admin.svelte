@@ -71,12 +71,6 @@
     await load();
   }
 
-  // A key is write-only: typed into the dialog, sent once to the Worker, and never shown or sent back.
-  async function change({ path, value }: { path: string; value: unknown }) {
-    const [category, key] = path.split('.');
-    return save({ category: category!, changes: { [key!]: value } });
-  }
-
   // Where each key is made: Cloudflare's token page with every permission filled in, and the other services' key pages.
   const makers: Record<string, { label: string; url: () => string | undefined; note?: () => string[] | undefined }> = {
     token: { label: 'Create token', url: () => state?.tokenUrl, note: () => state?.permissions },
@@ -85,18 +79,22 @@
   };
   const open = (url: string | undefined) => void window.open(url, '_blank', 'noopener');
 
-  let replacing = $state<{ page: SettingsPage; key: string; title: string }>();
+  // A key is write-only: typed into the dialog, sent once straight to the Worker, then cleared. It never
+  // enters Settings' values, and nothing ever sends it back.
+  let replacing = $state<{ category: string; key: string; title: string }>();
   let draft = $state('');
 
   function replace(page: SettingsPage, key: string, title: string) {
     draft = '';
-    replacing = { page, key, title };
+    replacing = { category: page.category, key, title };
   }
 
   async function submitKey(): Promise<string | void | false> {
     if (!replacing) return;
-    const error = await replacing.page.set(replacing.key, draft.trim());
+    const sent = draft.trim();
     draft = '';
+    if (!sent) return 'Paste the new key.';
+    const error = await save({ category: replacing.category, changes: { [replacing.key]: sent } });
     if (error) return error;
     replacing = undefined;
   }
@@ -161,7 +159,6 @@
             bind:value={settings}
             bind:category
             label="Instance settings"
-            onchange={change}
             onsave={save}
             pages={{ cloudflare: keyPage, database: keyPage, email: keyPage }}
           />
