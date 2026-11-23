@@ -132,7 +132,9 @@ export async function deploy(env: DeployEnv, app: App, run: Run, save: (run: Run
     const builder = env.builder(run.id);
     try {
       const step = async <T>(path: string, body?: BodyInit): Promise<T> => {
-        const response = await builder.fetch(new Request(`http://builder${path}`, { method: "POST", ...(body === undefined ? {} : { body }) }));
+        // A streamed body must say it is sent before the answer starts.
+        const init = { method: "POST", ...(body === undefined ? {} : { body }), ...(body instanceof ReadableStream ? { duplex: "half" } : {}) } as RequestInit;
+        const response = await builder.fetch(new Request(`http://builder${path}`, init));
         const result = (await response.json().catch(() => ({ error: `the build machine answered ${response.status}` }))) as T & { error?: string; log?: string[] };
         if (!response.ok || result.error) {
           run.log = result.log;
