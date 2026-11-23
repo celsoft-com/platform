@@ -1,6 +1,7 @@
 // Complete setup: the six steps the super admin takes on the admin page so the instance can
 // deploy apps. Each step checks its own work and adds what it confirmed to `done`.
 
+import { appAdmins, type AppStore } from "./apps.ts";
 import { APP_PERMISSIONS, Cloudflare, MissingPermission, SetupError, type Zone } from "./cloudflare.ts";
 import { convert, installations, manifest, manifestAction, type GitHubApp } from "./github.ts";
 import { EMAIL, policyName, TOKEN_SECRET, type InstanceRecord, type Progress, type Self, type Store } from "./setup.ts";
@@ -17,18 +18,19 @@ export interface Secrets {
 
 export interface Context {
   store: Store;
+  apps: AppStore;
   self: Self;
   secrets: Secrets;
   fetcher: typeof fetch;
 }
 
-async function claimed(ctx: Context): Promise<InstanceRecord> {
+export async function claimed(ctx: Context): Promise<InstanceRecord> {
   const record = await ctx.store.get();
   if (record?.state !== "claimed") throw new SetupError("This instance is not claimed yet.");
   return record;
 }
 
-function stored(ctx: Context): Cloudflare {
+export function stored(ctx: Context): Cloudflare {
   const token = ctx.secrets.CLOUDFLARE_API_TOKEN;
   if (!token) throw new SetupError("This instance has no Cloudflare token. If you just saved one, wait a few seconds for the new version to deploy, then reload; otherwise create one on the Wider token step.");
   return new Cloudflare(token, ctx.fetcher, true);
@@ -172,14 +174,20 @@ export async function admins(ctx: Context, input: string, done: string[]): Promi
   const emails = [...new Set(input.split(/[\s,]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))].filter((e) => e !== record.email);
   const bad = emails.filter((e) => !EMAIL.test(e));
   if (bad.length) throw new SetupError(`Not valid email addresses: ${bad.join(", ")}.`);
+  await syncAccess(ctx, record, emails);
+  done.push(emails.length ? `Cloudflare Access lets in ${emails.join(", ")} as platform admins.` : "No platform admins; only you can sign in.");
+  await progress(ctx, record, {}, emails);
+}
+
+// Cloudflare Access lets in exactly the super admin, the platform admins and every app's admins.
+export async function syncAccess(ctx: Context, record: InstanceRecord, platformAdmins = record.admins ?? []): Promise<void> {
   const cf = stored(ctx);
   const name = policyName(record.script);
   const policy = (await cf.policies(record.account)).find((p) => p.name === name);
   if (!policy) throw new SetupError("This instance's Access rule is missing; reset the super admin at /reset to make it again.");
-  await cf.savePolicy(record.account, policy.id, name, [record.email, ...emails]);
+  const everyone = [...new Set([record.email, ...platformAdmins, ...(await appAdmins(ctx.apps))])];
+  await cf.savePolicy(record.account, policy.id, name, everyone);
   const allowed = new Set((await cf.policy(record.account, policy.id)).include?.map((r) => r.email?.email));
-  const missing = [record.email, ...emails].filter((e) => !allowed.has(e));
+  const missing = everyone.filter((e) => !allowed.has(e));
   if (missing.length) throw new SetupError(`Cloudflare Access saved the rule but does not list ${missing.join(", ")}; try again.`);
-  done.push(emails.length ? `Cloudflare Access lets in ${emails.join(", ")} as platform admins.` : "No platform admins; only you can sign in.");
-  await progress(ctx, record, {}, emails);
 }

@@ -1,13 +1,15 @@
 // The Worker's routes: a JSON API for the pages (/api/ for claiming, /admin/api/ behind Cloudflare
 // Access), the GitHub App's webhook, and the built pages for every other path.
 
+import { appRoute, githubEvent, type AppContext } from "./app-routes.ts";
+import { appAdmins } from "./apps.ts";
 import { APP_PERMISSIONS, PERMISSIONS, SetupError } from "./cloudflare.ts";
 import * as complete from "./complete.ts";
 import { webhookSigned, type GitHubApp } from "./github.ts";
 import { reserve, viewer, type InstanceRecord, type Viewer } from "./setup.ts";
 import { SETUP_TOKEN_URL, WIDER_TOKEN_URL } from "./token-links.ts";
 
-export interface Context extends complete.Context {
+export interface Context extends AppContext {
   // The built pages; absent in tests.
   assets?: { fetch: (request: Request) => Promise<Response> };
 }
@@ -59,21 +61,26 @@ export async function handle(request: Request, ctx: Context): Promise<Response> 
       return json({ done: [], error } satisfies StepResult, 409);
     }
     const input = await body(request);
-    return attempt((done) => reserve(store, self, { token: text(input.token), email: text(input.email) }, done, fetcher));
+    return attempt(async (done) => reserve(store, self, { token: text(input.token), email: text(input.email), appAdmins: await appAdmins(ctx.apps) }, done, fetcher));
   }
 
   if (pathname === "/github/webhook" && post) {
     if (!ctx.secrets.GITHUB_APP) return new Response("No GitHub App", { status: 404 });
     const event = await request.text();
     const signed = await webhookSigned(JSON.parse(ctx.secrets.GITHUB_APP) as GitHubApp, event, request.headers.get("x-hub-signature-256"));
-    // Accepted and ignored until apps are deployed from their repos.
-    return new Response(null, { status: signed ? 202 : 401 });
+    if (!signed) return new Response(null, { status: 401 });
+    if (record?.state === "claimed") await githubEvent(ctx, request.headers.get("x-github-event"), JSON.parse(event) as Record<string, unknown>);
+    return new Response(null, { status: 202 });
   }
 
   if (pathname.startsWith("/admin/api/")) {
-    const who = await viewer(store, request.headers.get("cf-access-jwt-assertion"), fetcher);
+    const who = await viewer(store, request.headers.get("cf-access-jwt-assertion"), fetcher, Date.now(), () => appAdmins(ctx.apps));
     if (!who) return json({ error: "Not signed in to this instance." }, 401);
-    return admin(request, pathname.slice("/admin/api/".length), who, ctx);
+    // Scheduled checks have no request to learn the instance's address from.
+    if (record?.state === "claimed" && record.host !== self.host) await store.put({ ...(await store.get())!, host: self.host });
+    const route = pathname.slice("/admin/api/".length);
+    if (route === "apps" || route.startsWith("apps/")) return appRoute(request, route.slice("apps/".length), who, ctx);
+    return admin(request, route, who, ctx);
   }
 
   if (pathname.startsWith("/api/")) return json({ error: "Not found." }, 404);
@@ -106,6 +113,7 @@ async function admin(request: Request, route: string, who: Viewer, ctx: Context)
   }
 
   if (who.role !== "super") return json({ error: "Only the super admin can change this instance's setup." }, 403);
+
   if (request.method !== "POST") return json({ error: "Not found." }, 404);
   const input = await body(request);
 

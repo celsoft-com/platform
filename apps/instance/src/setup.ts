@@ -12,6 +12,8 @@ export interface InstanceRecord {
   script: string;
   authDomain: string;
   aud: string;
+  // The address the instance answers at, for the scheduled checks.
+  host?: string;
   admins?: string[];
   setup?: Progress;
 }
@@ -45,7 +47,7 @@ export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const policyName = (script: string) => `${script} super admin`;
 
 // Each step it finishes is added to `done`, in words for the person setting up, so a failure shows how far it got.
-export async function reserve(store: Store, self: Self, input: { token: string; email: string }, done: string[] = [], fetcher: typeof fetch = fetch): Promise<InstanceRecord> {
+export async function reserve(store: Store, self: Self, input: { token: string; email: string; appAdmins?: string[] }, done: string[] = [], fetcher: typeof fetch = fetch): Promise<InstanceRecord> {
   const token = input.token.trim();
   const email = input.email.trim().toLowerCase();
   if (!token) throw new SetupError("Paste the token you created.");
@@ -60,10 +62,10 @@ export async function reserve(store: Store, self: Self, input: { token: string; 
   done.push("Sign-in with an emailed code is on.");
   // A reset keeps complete setup's progress and the platform admins, who keep signing in.
   const before = await store.get();
-  const admins = before?.admins ?? [];
+  const admins = [...new Set([...(before?.admins ?? []), ...(input.appAdmins ?? [])])];
   const name = policyName(script);
   const policy = await cf.savePolicy(account, (await cf.policies(account)).find((p) => p.name === name)?.id, name, [email, ...admins]);
-  done.push(admins.length ? `Only ${email} and the platform admins may sign in.` : `Only ${email} may sign in.`);
+  done.push(admins.length ? `Only ${email} and the platform and app admins may sign in.` : `Only ${email} may sign in.`);
   const domain = `${self.host}${ADMIN_PATH}`;
   const app = await cf.saveApp(account, (await cf.apps(account)).find((a) => a.domain === domain)?.id, { name: script, domain, idp: idp.id, policy: policy.id });
   if (!(await cf.apps(account)).some((a) => a.domain === domain)) throw new SetupError(`Cloudflare accepted the Access application for ${domain} but does not list it; submit again.`);
@@ -93,12 +95,12 @@ async function findSelf(cf: Cloudflare, version: string): Promise<{ account: str
 
 export interface Viewer {
   email: string;
-  role: "super" | "platform";
+  role: "super" | "platform" | "app";
 }
 
 // Who is signed in, when the request carries Cloudflare Access's signature for this instance: the
-// super admin, claiming a reserved instance on their first sign-in, or a platform admin.
-export async function viewer(store: Store, header: string | null, fetcher: typeof fetch = fetch, now = Date.now()): Promise<Viewer | undefined> {
+// super admin, claiming a reserved instance on their first sign-in, a platform admin, or an app's admin.
+export async function viewer(store: Store, header: string | null, fetcher: typeof fetch = fetch, now = Date.now(), appAdmins: () => Promise<string[]> = async () => []): Promise<Viewer | undefined> {
   const record = await store.get();
   if (!record) return undefined;
   const email = await accessEmail(header, record, fetcher, now);
@@ -107,6 +109,8 @@ export async function viewer(store: Store, header: string | null, fetcher: typeo
     if (record.state === "reserved") await store.put({ ...record, state: "claimed" });
     return { email, role: "super" };
   }
-  if (record.state === "claimed" && record.admins?.includes(email)) return { email, role: "platform" };
+  if (record.state !== "claimed") return undefined;
+  if (record.admins?.includes(email)) return { email, role: "platform" };
+  if ((await appAdmins()).includes(email)) return { email, role: "app" };
   return undefined;
 }

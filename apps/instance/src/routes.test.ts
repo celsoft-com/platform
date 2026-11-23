@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import { APP_PERMISSIONS, PERMISSIONS } from "./cloudflare.ts";
 import type { Secrets } from "./complete.ts";
+import { MemoryApps } from "./memory-apps.ts";
 import { handle } from "./routes.ts";
 import { ADMIN_PATH, TOKEN_SECRET, type InstanceRecord, type Self, type Store } from "./setup.ts";
 
@@ -126,6 +127,7 @@ let elsewhere: (url: URL, init?: RequestInit) => Promise<Response | undefined> |
 // The Worker sees the secrets Cloudflare holds for it, as a new version would after each one is saved.
 const context = (over: Partial<{ store: Store; self: Self; fetcher: typeof fetch; assets: { fetch: (r: Request) => Promise<Response> } }> = {}) => ({
   store,
+  apps: new MemoryApps(),
   self: SELF,
   secrets: cf.secrets,
   fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => (await elsewhere(new URL(String(input)), init)) ?? strict(input, init)) as typeof fetch,

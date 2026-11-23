@@ -38,11 +38,15 @@ export function manifest(host: string, script: string): string {
 }
 
 // `what` names the call in an error, in words, so a refusal never shows a one-time code.
-async function github<T>(fetcher: typeof fetch, what: string, method: string, path: string, auth?: string): Promise<T> {
-  const response = await fetcher(`${API}${path}`, { method, headers: { ...HEADERS, ...(auth ? { authorization: auth } : {}) } });
-  const body = (await response.json().catch(() => undefined)) as (T & { message?: string }) | undefined;
-  if (!response.ok) throw new SetupError(`GitHub refused to ${what} (${response.status}${body?.message ? `: ${body.message}` : ""}).`);
-  return body as T;
+async function github<T>(fetcher: typeof fetch, what: string, method: string, path: string, auth?: string, body?: unknown): Promise<T> {
+  const response = await fetcher(`${API}${path}`, {
+    method,
+    headers: { ...HEADERS, ...(auth ? { authorization: auth } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const result = (await response.json().catch(() => undefined)) as (T & { message?: string }) | undefined;
+  if (!response.ok) throw new SetupError(`GitHub refused to ${what} (${response.status}${result?.message ? `: ${result.message}` : ""}).`);
+  return result as T;
 }
 
 // GitHub hands back a one-time code after the app is created; it is good for an hour.
@@ -91,4 +95,117 @@ export async function webhookSigned(app: GitHubApp, body: string, signature: str
   if (!/^[0-9a-f]{64}$/.test(hex)) return false;
   const bytes = new Uint8Array(hex.match(/../g)!.map((h) => parseInt(h, 16)));
   return crypto.subtle.verify("HMAC", key, bytes, new TextEncoder().encode(body));
+}
+
+// An app's repo: what it is, and reading it at a commit. Through the instance's GitHub App when
+// it is installed there, which reaches private repos and hears pushes; otherwise only a public
+// repo can be read.
+
+export interface Repo {
+  id: number;
+  owner: string;
+  ownerId: number;
+  name: string;
+  private: boolean;
+  defaultBranch: string;
+}
+
+// owner/name, or any github.com link to the repo.
+export function parseRepo(input: string): { owner: string; name: string } | undefined {
+  const text = input.trim().replace(/^git@github\.com:/, "https://github.com/");
+  const match = /^(?:https?:\/\/(?:www\.)?github\.com\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?(?:\/.*)?$/.exec(text);
+  return match ? { owner: match[1]!, name: match[2]! } : undefined;
+}
+
+export function installUrl(app: { slug: string }, repo: Repo): string {
+  return `https://github.com/apps/${app.slug}/installations/new/permissions?suggested_target_id=${repo.ownerId}&repository_ids[]=${repo.id}`;
+}
+
+export class Source {
+  private auth?: Promise<string | undefined>;
+
+  constructor(
+    readonly owner: string,
+    readonly name: string,
+    private readonly app: GitHubApp | undefined,
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly now = () => Date.now(),
+  ) {}
+
+  private get path() {
+    return `/repos/${encodeURIComponent(this.owner)}/${encodeURIComponent(this.name)}`;
+  }
+
+  // An installation token that reads this one repo, when the app is installed on it.
+  token(): Promise<string | undefined> {
+    this.auth ??= (async () => {
+      if (!this.app) return undefined;
+      const jwt = `Bearer ${await appJwt(this.app, this.now())}`;
+      const found = await (0, this.fetcher)(`${API}${this.path}/installation`, { headers: { ...HEADERS, authorization: jwt } });
+      if (found.status === 404) return undefined;
+      if (!found.ok) throw new SetupError(`GitHub refused to say whether the instance's app is installed on ${this.owner}/${this.name} (${found.status}).`);
+      const { id } = (await found.json()) as { id: number };
+      const made = await github<{ token: string }>(this.fetcher, `read ${this.owner}/${this.name}`, "POST", `/app/installations/${id}/access_tokens`, jwt, { repositories: [this.name], permissions: { contents: "read", metadata: "read", statuses: "write", pull_requests: "write" } });
+      return made.token;
+    })();
+    return this.auth;
+  }
+
+  async installed(): Promise<boolean> {
+    return (await this.token()) !== undefined;
+  }
+
+  private async get(path: string, accept = HEADERS.accept): Promise<Response> {
+    const token = await this.token();
+    return (0, this.fetcher)(`${API}${this.path}${path}`, { headers: { ...HEADERS, accept, ...(token ? { authorization: `token ${token}` } : {}) } });
+  }
+
+  async repo(): Promise<Repo> {
+    const response = await this.get("");
+    if (response.status === 404) {
+      throw new SetupError(`${this.owner}/${this.name} was not found. If it is private, install the instance's GitHub App on it first.`);
+    }
+    if (!response.ok) throw new SetupError(`GitHub refused to read ${this.owner}/${this.name} (${response.status}).`);
+    const r = (await response.json()) as { id: number; name: string; private: boolean; default_branch: string; owner: { login: string; id: number } };
+    return { id: r.id, owner: r.owner.login, ownerId: r.owner.id, name: r.name, private: r.private, defaultBranch: r.default_branch };
+  }
+
+  // A file's text at a ref, or undefined when it is not there.
+  async file(path: string, ref: string): Promise<string | undefined> {
+    const response = await this.get(`/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`, "application/vnd.github.raw+json");
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new SetupError(`GitHub refused to read ${path} from ${this.owner}/${this.name} (${response.status}).`);
+    return response.text();
+  }
+
+  async commit(ref: string): Promise<string> {
+    const response = await this.get(`/commits/${encodeURIComponent(ref)}`, "application/vnd.github.sha");
+    if (!response.ok) throw new SetupError(`GitHub has no commit ${ref} in ${this.owner}/${this.name} (${response.status}).`);
+    return (await response.text()).trim();
+  }
+
+  async latestRelease(): Promise<string | undefined> {
+    const response = await this.get("/releases/latest");
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new SetupError(`GitHub refused to read ${this.owner}/${this.name}'s releases (${response.status}).`);
+    return ((await response.json()) as { tag_name: string }).tag_name;
+  }
+
+  // The source at a commit, as GitHub's gzipped tarball.
+  async tarball(commit: string): Promise<ReadableStream> {
+    const response = await this.get(`/tarball/${commit}`);
+    if (!response.ok || !response.body) throw new SetupError(`GitHub refused the source of ${this.owner}/${this.name} at ${commit.slice(0, 7)} (${response.status}).`);
+    return response.body;
+  }
+
+  // Shows the deploy on the commit in GitHub; only possible where the app is installed.
+  async status(commit: string, state: "pending" | "success" | "failure", description: string, url: string): Promise<void> {
+    const token = await this.token();
+    if (!token) return;
+    await (0, this.fetcher)(`${API}${this.path}/statuses/${commit}`, {
+      method: "POST",
+      headers: { ...HEADERS, authorization: `token ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ state, description: description.slice(0, 140), target_url: url, context: "platform" }),
+    });
+  }
 }

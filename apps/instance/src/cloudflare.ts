@@ -32,7 +32,12 @@ export class MissingPermission extends SetupError {
 
 // Any other refusal, kept with what Cloudflare said so the form can show it.
 export class CloudflareFailure extends SetupError {
-  constructor(method: string, path: string, status: number, detail: string) {
+  constructor(
+    method: string,
+    path: string,
+    readonly status: number,
+    detail: string,
+  ) {
     super(`Cloudflare refused ${method} ${path.split("?")[0]} (${status}${detail ? `: ${detail}` : ""}).`);
   }
 }
@@ -103,10 +108,11 @@ export class Cloudflare {
   private async call<T>(permission: Permission, method: string, path: string, body?: unknown): Promise<T> {
     // Called unbound: Workers' fetch throws "Illegal invocation" when called as another object's method.
     const fetcher = this.fetcher;
+    const form = body instanceof FormData;
     const response = await fetcher(`https://api.cloudflare.com/client/v4${path}`, {
       method,
-      headers: { authorization: `Bearer ${this.token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      headers: { authorization: `Bearer ${this.token}`, ...(body === undefined || form ? {} : { "content-type": "application/json" }) },
+      ...(body === undefined ? {} : { body: form ? body : JSON.stringify(body) }),
     });
     const envelope = (await response.json().catch(() => undefined)) as Envelope<T> | undefined;
     if (response.status === 401) throw this.stored ? new TokenRevoked() : new SetupError("Cloudflare did not accept this token; check it was copied whole and has not expired.");
@@ -219,4 +225,120 @@ export class Cloudflare {
   routes(zone: string) {
     return this.call<unknown[]>(APP_PERMISSIONS.routes, "GET", `/zones/${zone}/workers/routes`);
   }
+
+  // What deploying apps does, each reached by the wider token.
+
+  scriptList(account: string) {
+    return this.call<{ id: string; migration_tag?: string }[]>(PERMISSIONS.scripts, "GET", `/accounts/${account}/workers/scripts`);
+  }
+
+  async script(account: string, name: string): Promise<{ id: string; migration_tag?: string } | undefined> {
+    return (await this.scriptList(account)).find((s) => s.id === name);
+  }
+
+  uploadScript(account: string, name: string, form: FormData) {
+    return this.call<{ id: string }>(PERMISSIONS.scripts, "PUT", `/accounts/${account}/workers/scripts/${encodeURIComponent(name)}`, form);
+  }
+
+  deleteScript(account: string, name: string) {
+    return this.call<unknown>(PERMISSIONS.scripts, "DELETE", `/accounts/${account}/workers/scripts/${encodeURIComponent(name)}?force=true`);
+  }
+
+  deleteSecret(account: string, script: string, name: string) {
+    return this.call<unknown>(PERMISSIONS.scripts, "DELETE", `/accounts/${account}/workers/scripts/${encodeURIComponent(script)}/secrets/${encodeURIComponent(name)}`);
+  }
+
+  setWorkersDev(account: string, script: string, enabled: boolean) {
+    return this.call<unknown>(PERMISSIONS.scripts, "POST", `/accounts/${account}/workers/scripts/${encodeURIComponent(script)}/subdomain`, { enabled });
+  }
+
+  assetsSession(account: string, script: string, manifest: Record<string, { hash: string; size: number }>) {
+    return this.call<{ jwt: string; buckets?: string[][] }>(PERMISSIONS.scripts, "POST", `/accounts/${account}/workers/scripts/${encodeURIComponent(script)}/assets-upload-session`, { manifest });
+  }
+
+  domains(account: string, hostname: string) {
+    return this.call<{ id: string; hostname: string; service: string; zone_id: string }[]>(APP_PERMISSIONS.routes, "GET", `/accounts/${account}/workers/domains?hostname=${encodeURIComponent(hostname)}`);
+  }
+
+  attachDomain(account: string, hostname: string, service: string, zone: string) {
+    return this.call<unknown>(APP_PERMISSIONS.routes, "PUT", `/accounts/${account}/workers/domains`, { environment: "production", hostname, service, zone_id: zone });
+  }
+
+  detachDomain(account: string, id: string) {
+    return this.call<unknown>(APP_PERMISSIONS.routes, "DELETE", `/accounts/${account}/workers/domains/${id}`);
+  }
+
+  hyperdriveList(account: string) {
+    return this.call<Hyperdrive[]>(APP_PERMISSIONS.hyperdrive, "GET", `/accounts/${account}/hyperdrive/configs`);
+  }
+
+  saveHyperdrive(account: string, id: string | undefined, name: string, uri: string) {
+    const url = new URL(uri);
+    const body = {
+      name,
+      origin: { scheme: "postgres", host: url.hostname, port: Number(url.port || 5432), database: decodeURIComponent(url.pathname.slice(1)), user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) },
+      // The platform caches pages itself; a cached query could serve a row another request just changed.
+      caching: { disabled: true },
+    };
+    return id
+      ? this.call<Hyperdrive>(APP_PERMISSIONS.hyperdrive, "PUT", `/accounts/${account}/hyperdrive/configs/${id}`, body)
+      : this.call<Hyperdrive>(APP_PERMISSIONS.hyperdrive, "POST", `/accounts/${account}/hyperdrive/configs`, body);
+  }
+
+  deleteHyperdrive(account: string, id: string) {
+    return this.call<unknown>(APP_PERMISSIONS.hyperdrive, "DELETE", `/accounts/${account}/hyperdrive/configs/${id}`);
+  }
+
+  async bucketExists(account: string, name: string): Promise<boolean> {
+    try {
+      await this.call<unknown>(APP_PERMISSIONS.r2, "GET", `/accounts/${account}/r2/buckets/${name}`);
+      return true;
+    } catch (error) {
+      if (error instanceof CloudflareFailure && error.status === 404) return false;
+      throw error;
+    }
+  }
+
+  createBucket(account: string, name: string) {
+    return this.call<unknown>(APP_PERMISSIONS.r2, "POST", `/accounts/${account}/r2/buckets`, { name });
+  }
+
+  expireBucket(account: string, name: string, days: number) {
+    const rule = { id: "previews expire", enabled: true, conditions: { prefix: "" }, deleteObjectsTransition: { condition: { type: "Age", maxAge: days * 86400 } } };
+    return this.call<unknown>(APP_PERMISSIONS.r2, "PUT", `/accounts/${account}/r2/buckets/${name}/lifecycle`, { rules: [rule] });
+  }
+
+  deleteBucket(account: string, name: string) {
+    return this.call<unknown>(APP_PERMISSIONS.r2, "DELETE", `/accounts/${account}/r2/buckets/${name}`);
+  }
+
+  records(zone: string, name: string) {
+    return this.call<DnsRecord[]>(APP_PERMISSIONS.dns, "GET", `/zones/${zone}/dns_records?name=${encodeURIComponent(name)}&per_page=100`);
+  }
+
+  commented(zone: string, comment: string) {
+    return this.call<DnsRecord[]>(APP_PERMISSIONS.dns, "GET", `/zones/${zone}/dns_records?comment=${encodeURIComponent(comment)}&per_page=100`);
+  }
+
+  createRecord(zone: string, record: { type: string; name: string; content: string; priority?: number }, comment: string) {
+    return this.call<DnsRecord>(APP_PERMISSIONS.dns, "POST", `/zones/${zone}/dns_records`, { ...record, ttl: 1, proxied: false, comment });
+  }
+
+  deleteRecord(zone: string, id: string) {
+    return this.call<unknown>(APP_PERMISSIONS.dns, "DELETE", `/zones/${zone}/dns_records/${id}`);
+  }
+}
+
+export interface Hyperdrive {
+  id: string;
+  name: string;
+  origin: { host: string; user: string; database: string };
+}
+
+export interface DnsRecord {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  comment?: string | null;
 }

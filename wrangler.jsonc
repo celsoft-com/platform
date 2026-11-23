@@ -10,7 +10,20 @@
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
-  "durable_objects": { "bindings": [{ "name": "STATE", "class_name": "InstanceState" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["InstanceState"] }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "STATE", "class_name": "InstanceState" },
+      { "name": "RUNS", "class_name": "AppRuns" },
+      { "name": "BUILDER", "class_name": "Builder" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["InstanceState"] },
+    { "tag": "v2", "new_sqlite_classes": ["AppRuns", "Builder"] }
+  ],
+  // The throwaway machine each app is built in, holding none of the instance's credentials.
+  "containers": [{ "class_name": "Builder", "image": "./apps/instance/builder/Dockerfile", "instance_type": "standard-1", "max_instances": 5 }],
+  // Checks apps that follow a branch or take releases for something new to deploy.
+  "triggers": { "crons": ["*/15 * * * *"] },
   "observability": { "enabled": true }
 }
