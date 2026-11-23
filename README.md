@@ -12,8 +12,9 @@ You need a Cloudflare account on Workers Paid and a GitHub account. The button c
 into your GitHub account and deploys it; [SETUP.md](SETUP.md) walks through the rest of initial
 setup, about five minutes in the browser.
 
-Apps can't be added to an instance yet; that comes with complete setup. Nothing is published to
-npm any more.
+Then add apps: in the instance's Apps, name an app's GitHub repo, give it an address and its
+admins, and the instance builds it, makes its database, files and email, and deploys it. Apps
+build on the framework, [`@celsoft/platform`](packages/platform/README.md) on npm.
 
 - **How it works:** [docs/how-it-works.md](docs/how-it-works.md)
 - **Design:** [docs/design.md](docs/design.md), the Platform Instance in section 16

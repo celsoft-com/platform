@@ -14,7 +14,11 @@ a new app with it, follow [SETUP.md](SETUP.md) instead, in the app's own repo.
 ## Setup
 
 - **Direction:** the repo is becoming a Platform Instance each org deploys once
-  ([docs/design.md](docs/design.md) section 16); nothing is published to npm any more.
+  ([docs/design.md](docs/design.md) section 16); the instance is deployed only from its repo, and
+  only the framework, `packages/platform`, is published to npm, for apps.
+- **Builds use the app's framework:** the instance's build machine (`apps/instance/builder/`) loads
+  `dist/config.js`, `dist/generate.js`, `dist/adapters/drizzle.js` and `dist/wrangler-config.js` from
+  the framework version an app installed; keep them, and their exports, working across versions.
 - **Guide:** [SETUP.md](SETUP.md) is an org's initial setup of its instance; keep it current
   with section 16.
 - **Instance pages:** `apps/instance/src/client/` is Svelte 5 built with Service Dark's kit, copied

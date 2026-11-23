@@ -34,6 +34,20 @@ Then you are in the admin interface: Apps, and Settings, where you connect Neon 
 organization API key) and Resend (an API key with Full access) and name platform admins whenever
 you want.
 
+## Adding an app
+
+1. **Open Apps** and click **Add app**.
+2. **Name the repo:** `owner/name` or its link, and its folder if the app is not at the root;
+   click **Read repo**. The page shows what the app needs and whether the instance's GitHub App is
+   on the repo.
+3. **Install the GitHub App, if you want pushes to deploy:** click **Install on this repo**, which
+   picks that repo alone, then **Check again**. Without it, the app deploys new releases or follows
+   its default branch.
+4. **Fill in:** a name, an address under one of your domains such as `notes.example.com`, the app's
+   admins, and how it updates. Leave the build commands empty to use the repo's own.
+5. **Click Add and deploy:** the app's page shows each step as it runs, and links to the app once
+   it is live. A database needs a Neon key in Settings, and email a Resend key.
+
 ## Getting back in
 
 1. **Restarted before Create and deploy:** click the button again.

@@ -11,13 +11,19 @@ app deploys, the `celsoft-platform` skill covers changing it.
 
 - **Never read `.env.secrets`:** the user pastes each token into it; `init` reports which are empty.
 - **No hand-written setup:** every file below is written by a command; never write them yourself, except a copied app's name and hostname (see **Copying an app**).
-- **The workspace's copy:** the package is no longer published to npm, so this skill applies only inside the platform repo, where the demo runs the workspace's CLI; a different version, such as one npx downloads, is refused.
+- **The app's own copy:** run every command from the app's folder after `npm install`; a different version, such as one npx downloads, is refused.
 
 ## 0. Start
 
-Inside the platform repo, the demo already depends on the workspace's package; `mise run platform
--- skills` copies its skills into the demo's `.claude/skills/` and points `AGENTS.md` at them. Apps
-outside the repo will be set up through the Platform Instance instead (`docs/design.md`, section 16).
+Already done if you are reading this from the app's `.claude/skills/`.
+
+```sh
+npm install @celsoft/platform
+npx @celsoft/platform skills
+```
+
+The first adds the package to `package.json`; the second copies its skills into `.claude/skills/`
+and points `AGENTS.md` at them.
 
 ## 1. Accounts and tools
 

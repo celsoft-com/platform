@@ -1,7 +1,6 @@
 {
   "name": "@celsoft/platform",
   "version": "0.58.1",
-  "private": true,
   "description": "Deploy apps to Cloudflare Workers with Neon Postgres, prod on push and a preview per pull request",
   "license": "MIT",
   "repository": {
@@ -10,6 +9,9 @@
     "directory": "packages/platform"
   },
   "homepage": "https://github.com/celsoft-com/platform#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"

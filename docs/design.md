@@ -2,7 +2,7 @@
 
 This document is the source of truth for the platform's design. The original [Workers App Platform design page](https://claude.ai/artifact/VLaqjzoBjJ8DFivh2G9QUu) is superseded background: where they differ (Terraform, 1Password, two orgs, a GitHub Action), this document wins.
 
-**Direction**: the platform is becoming a Platform Instance each org deploys once, which then deploys the org's apps; [section 16](#16-platform-instance) defines it. Sections 1 to 15 describe the per-app deploy that runs the demo today. Nothing is published to npm any more, so that per-app deploy runs only inside this repo until the instance takes it over.
+**Direction**: the platform is becoming a Platform Instance each org deploys once, which then deploys the org's apps; [section 16](#16-platform-instance) defines it. Sections 1 to 15 describe the per-app deploy that runs the demo today, which the instance is taking over. The framework, `@celsoft/platform`, is still published to npm for apps; the instance itself is only ever deployed from its repo.
 
 ## 1. Context
 
@@ -32,7 +32,7 @@ A repo each org copies and deploys as its Platform Instance (section 16). Inside
     3. **Wrangler**: Cloudflare's CLI, used to deploy Workers and load their secrets.
 3. **Platform**: what this repo is built with.
     1. **TypeScript on Node**: the language of the CLI and runtime library.
-    2. **pnpm workspace**: builds the CLI, runtime library, template and instance in place; nothing is published.
+    2. **pnpm workspace**: builds the CLI, runtime library, template and instance in place; only `@celsoft/platform` is published.
     3. **Cloudflare and Neon SDKs**: official TypeScript clients the CLI uses to find, create and delete resources.
 
 ## 5. Responsibilities
@@ -121,7 +121,7 @@ A repo each org copies and deploys as its Platform Instance (section 16). Inside
 
 ## 8. Bootstrap
 
-0. **Starting point**: inside this repo only, since the package is no longer published; apps elsewhere will be set up through the Platform Instance (section 16).
+0. **Starting point**: an app's folder after `npm install @celsoft/platform`; an app deployed by a Platform Instance (section 16) needs only the files and local tools, never this deploy.
     1. **Run**: the demo runs the workspace's CLI with `mise run platform -- <command>`.
     2. **Follow**: the `celsoft-platform-setup` skill walks every remaining step; each file is written by a command, so the agent never reasons out a config or workflow by hand.
     3. **App files**: `platform new` writes the app's files in place, keeps any already there, fills in `package.json` and `.gitignore`, and installs dependencies; it refuses a folder with a `platform.jsonc`.
@@ -423,7 +423,7 @@ A repo each org copies and deploys as its Platform Instance (section 16). Inside
         5. **Access**: personal notes shared by email and by link, with a list of notes shared with you.
     3. **Platform PRs**: each gets a demo preview deployed by that PR's CLI build.
     4. **Main**: a merge deploys the demo's prod.
-    5. **No release**: nothing is published; each org's copy of the repo is what it runs.
+    5. **Release**: once main's demo deploy passes, `@celsoft/platform` is published to npm when its version is new; the instance is never published, since each org's copy of the repo is what it runs.
 2. **Fast tests**: resource modules run against in-memory fakes, covering every event's steps with no cloud account.
 3. **Upgrade test**: each demo deploy converges from what the previous commit deployed, since every merge to main deploys it.
 4. **Template test**: scaffolds an app from the template, builds it, and runs the test the template ships.
@@ -439,7 +439,7 @@ A repo each org copies and deploys as its Platform Instance (section 16). Inside
 
 ## 16. Platform Instance
 
-The direction the platform is taking: instead of each app deploying the platform for itself, an org deploys the platform once, as its own Platform Instance, and the instance deploys the org's apps. Initial setup is defined here; complete setup, apps and updates come later.
+The direction the platform is taking: instead of each app deploying the platform for itself, an org deploys the platform once, as its own Platform Instance, and the instance deploys the org's apps from their repos. Setting it up and deploying apps are defined here; updating the instance itself comes later.
 
 1. **What it is**: one deployment of this repo in an org's own Cloudflare account, which will create and deploy the org's apps from their GitHub repos, wired through a GitHub App of its own.
 2. **One per org**: every org runs its own instance; nothing is shared between instances, the GitHub App included, and there is no central service.
@@ -452,14 +452,14 @@ The direction the platform is taking: instead of each app deploying the platform
     2. **Visibility flows down**: every admin has full view of the layer below.
     3. **Trust doesn't matter**: who writes an app's code is irrelevant; the scopes protect everything else.
     4. **No per-app wiring**: pointing the instance at a repo is all an app will need.
-5. **Two setup phases**: initial setup, below, needs only Cloudflare and GitHub; complete setup, which enables apps, is separate and not defined yet.
+5. **Two setup phases**: initial setup, below, needs only Cloudflare and GitHub; complete setup, on the admin page, gives the instance what deploying apps needs.
 6. **Deploying the instance**: the repo's root is the instance.
     1. **Deploy to Cloudflare**: the button in the README copies the whole repo into a new repo in the org's GitHub account and connects it to Workers Builds, which deploys the root.
     2. **Every push deploys**: Workers Builds deploys each push to the copy's `main`; the org decides when and how it takes this repo's changes into its copy.
     3. **Push is super admin power**: whoever can push to the copy's `main` controls the instance's code and the token it holds, so push access belongs to super admins only, like membership in the Cloudflare account.
     4. **Its own storage**: the instance keeps its state in a Durable Object the deploy creates, so the button needs nothing filled in.
     5. **Where it lives**: `wrangler.jsonc` at the root deploys `apps/instance`: its Worker in `src/`, its pages in `src/client/`.
-    6. **No package**: nothing is published to npm; the instance builds from the code in its own copy of the repo.
+    6. **The framework package**: the instance builds from the code in its own copy of the repo and is never installed from npm. Apps install the framework, `@celsoft/platform`, from npm: its runtime, testing and local tools, which the instance's build uses too; nothing in it deploys.
 7. **Initial setup**: what the super admin does, all in the browser.
     1. **Prerequisites**: a Cloudflare account on Workers Paid and a GitHub account.
     2. **Start**: on the repo's GitHub page, click **Deploy to Cloudflare**.
@@ -467,7 +467,7 @@ The direction the platform is taking: instead of each app deploying the platform
     4. **Create**: confirm the repo and Worker names, `platform` by default, and click **Create and deploy**; the build runs on Cloudflare, about two minutes.
     5. **Open it**: visit the Worker's address, which shows the setup form.
     6. **Reserve it**: click **Create token**, which opens the Cloudflare dashboard with the token's permissions filled in; create it, paste it into the form with your email, and submit.
-    7. **Claim it**: the page lists each step setup finished and says one step is left, with a **Sign in as** button naming the reserved email and the form behind a "Wrong email, or no code arriving?" toggle; sign in with the code Cloudflare emails to that address, and you are the super admin, on a home page saying initial setup is complete and that complete setup is not built yet.
+    7. **Claim it**: the page lists each step setup finished and says one step is left, with a **Sign in as** button naming the reserved email and the form behind a "Wrong email, or no code arriving?" toggle; sign in with the code Cloudflare emails to that address, and you are the super admin, on the admin page, which starts complete setup.
 8. **States**: the instance is always in one, and its address shows the page for it.
     1. **Unclaimed**: the setup form.
     2. **Reserved**: a valid token and an email were submitted; the page shows which email it waits for, and the setup form stays open below it.
@@ -495,10 +495,28 @@ The direction the platform is taking: instead of each app deploying the platform
 12. **Admin**: once claimed, `/admin` is the super admin's two setup steps, then the admin interface; every step and setting is checked by the instance before it counts, and says what it confirmed or the sentence that stopped it.
     1. **Look**: every page is built with Service Dark's kit, copied into `apps/instance/src/client/lib/service-dark/` as it ships, in Svelte 5 built by Vite; `wrangler.jsonc`'s build command builds them on every deploy, and the Worker serves them as static assets, with a JSON API under `/api/` (claiming) and `/admin/api/` (behind Access).
     2. **Setup, step 1, the wider token**: a token with the setup permissions plus Hyperdrive Edit, Workers R2 Storage Edit, Zone Read, DNS Edit and Workers Routes Edit on all zones, checked against every domain the account has, replaces the setup token's secret; every missing permission is named at once.
-    3. **Setup, step 2, the GitHub App**: the instance sends GitHub a manifest from the browser, under the org the app repos live in or the super admin's own account, with a one-time state it checks on return; GitHub's code becomes the app's credentials, kept as the secret `GITHUB_APP`. The app is private, so GitHub installs it only where it belongs; installing it waits for adding an app, and adds just that app's repo by default. Its webhook, at `/github/webhook`, is accepted only with a valid signature and does nothing yet.
-    4. **Admin interface**: Service Dark's Sidebar with Apps, empty until adding apps exists, and Settings, the kit's Settings component built from a Zod schema with categories Cloudflare (the token), GitHub (read only), Database (a Neon organization API key, checked by listing its projects, kept as `NEON_API_KEY`), Email (a Resend key with full access, kept as `RESEND_API_KEY`; a send-only key is refused) and Platform admins. Keys are write-only: each shows only whether it is set, with a link to where a new one is made; Replace opens a dialog that sends the typed key straight to the Worker and clears it, so it never enters the Settings component's values; the Worker keeps it only as its own secret, and no response ever carries a stored secret or any part of one.
+    3. **Setup, step 2, the GitHub App**: the instance sends GitHub a manifest from the browser, under the org the app repos live in or the super admin's own account, with a one-time state it checks on return; GitHub's code becomes the app's credentials, kept as the secret `GITHUB_APP`. The app is private, so GitHub installs it only where it belongs; installing it waits for adding an app, and adds just that app's repo by default. Its webhook, at `/github/webhook`, is accepted only with a valid signature, and starts the runs Apps describes.
+    4. **Admin interface**: Service Dark's Sidebar with Apps, below, and Settings, the kit's Settings component built from a Zod schema with categories Cloudflare (the token), GitHub (read only), Database (a Neon organization API key, checked by listing its projects, kept as `NEON_API_KEY`), Email (a Resend key with full access, kept as `RESEND_API_KEY`; a send-only key is refused) and Platform admins. Keys are write-only: each shows only whether it is set, with a link to where a new one is made; Replace opens a dialog that sends the typed key straight to the Worker and clears it, so it never enters the Settings component's values; the Worker keeps it only as its own secret, and no response ever carries a stored secret or any part of one.
     5. **Platform admins**: their emails join the super admin's in the Access rule; signing in, they see Apps only, and every setup and settings route refuses them.
-    6. **Redeploys**: saving a secret deploys a new version; a step that reaches the old version in the seconds after says to wait and reload.
-    7. **Kept through a reset**: resetting the super admin keeps every step's progress and the platform admins.
-    8. **Revoked token**: `/admin` checks the instance's token on every load; once it stops working, revoked, expired or deleted, setup's first step comes back to take a new one. Signing in never needs the token.
-13. **Later**: adding and deploying apps, with the super admin choosing which of the account's domains apps may use and each app's repo added to the GitHub App, alone by default, apps and their scopes, instance updates, and how today's per-app CLI and skills fit the instance.
+    6. **App admins**: each app's admins join the same Access rule; signing in, they see only the apps that name them.
+    7. **Redeploys**: saving a secret deploys a new version; a step that reaches the old version in the seconds after says to wait and reload.
+    8. **Kept through a reset**: resetting the super admin keeps every step's progress, the platform admins and the app admins.
+    9. **Revoked token**: `/admin` checks the instance's token on every load; once it stops working, revoked, expired or deleted, setup's first step comes back to take a new one. Signing in never needs the token.
+13. **Apps**: an app is a GitHub repo with a `platform.jsonc` and its code; the instance builds and deploys it, and makes everything it needs, in the app's own namespace.
+    1. **Adding one**: a platform admin opens Apps, clicks **Add app** and names the repo, as `owner/name` or its link, and its folder when the app is not at the root. The instance reads `platform.jsonc` from the default branch and shows what the app needs, any warnings, and whether the instance's GitHub App is installed on the repo, with a link that installs it on that repo alone. Then the admin gives the app a name, an address, its admins, how it updates, and optionally its build commands, and clicks **Add and deploy**.
+    2. **Name**: 3 to 50 characters of a-z, 0-9 and single hyphens; it names the app's Worker and everything else in the account, so it never changes, and is refused when the account already has a Worker by that name.
+    3. **Address**: a domain or a subdomain of one of the account's domains, refused when it overlaps another app's; several apps share a domain on different subdomains. Apps on one domain share that domain's edge cache, so they could read or replace each other's cached responses; apps on different domains share nothing.
+    4. **Repos anywhere**: any repo the instance can read can be deployed, the same repo to any number of instances; nothing in it is specific to an instance, and it is never copied.
+    5. **Updates**: on every push to the default branch, which needs the GitHub App on the repo and also gives each pull request from the same repo a preview; when an admin deploys a new release, which shows as available; or following the default branch, checked every 15 minutes. A repo the org does not own cannot have the org's GitHub App, so it takes releases or follows the branch.
+14. **`platform.jsonc` under an instance**: it says only what kinds of things the app needs (its Worker, static files, database, email, sign-in, files, live rooms, MCP, access control, previews' email list, and secrets by name); the instance names and places everything.
+    1. **Ignored**: `name` and `hostname`, with a warning on the deploy; the instance gives the app's build its own name and address in their place.
+    2. **Refused**: `${NAME}` variables, a breaking change from the per-app CLI.
+15. **Deploying**: a run, queued per app and run one at a time, with each step it finished shown on the app's page as it happens, and the build's last lines when the build stops it.
+    1. **Provisioned by the instance**: a Neon project of the app's own, Postgres 18, backed up as a branch before every prod deploy, keeping three; a Hyperdrive connection to it; an R2 bucket; a Resend sending domain at the app's address, with its DNS records marked as the app's, and a key that sends only from it; a generated auth secret; and the app's address as the Worker's custom domain, refused when another Worker or a DNS record the instance did not make holds it.
+    2. **Built in a throwaway Container**: one per run, destroyed after, started by the instance. It gets the source, the app's own database address for migrations, and a one-hour token that uploads only this Worker's static files; never the instance's Cloudflare, Neon, Resend or GitHub credentials. It installs by the repo's lockfile, then runs the app's `build` and `test` scripts, each replaceable on the app's page, then uses the framework version the app installed to generate, migrate and bundle the Worker. Containers need Workers Paid; each build costs about a third of a cent past what the plan includes.
+    3. **Uploaded by the instance**: the Worker with only the app's own bindings: its Hyperdrive connection, bucket, its own Durable Objects, rate limits and secrets. What the app's build says is taken only for settings; a binding it names into anything else, such as another Worker's Durable Objects, is dropped.
+    4. **Secrets**: the app's own, named in `platform.jsonc`, are set by its admins on its page, write-only like the instance's keys, and handed to every Worker of the app.
+    5. **Previews**: each pull request from the app's own repo gets a Worker at `pr-<number>.<address>`, a database branch copied from prod and email captured except to the addresses `previews.sendEmailTo` lists; closing it deletes them, and its files expire after 14 days.
+    6. **On GitHub**: where the GitHub App is installed, each deploy shows as a status on its commit, linking to the preview or the app.
+16. **Removing an app**: a platform admin types its name to confirm; the instance deletes its Workers, previews, connections, sending domain and DNS records, and with **Also delete its database and files**, its Neon project and buckets too; without it they stay, and adding the app back by the same name finds them.
+17. **Later**: updating the instance itself, and how today's per-app CLI and skills give way to the instance.

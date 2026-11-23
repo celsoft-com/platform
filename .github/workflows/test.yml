@@ -1,4 +1,4 @@
-# The platform's own tests on every pull request, on Linux, before anything merges.
+# The platform's own tests on every pull request, on Linux like the release job, before anything merges.
 name: test
 
 on:
