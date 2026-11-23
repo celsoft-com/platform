@@ -1,12 +1,12 @@
 <!-- The instance's pages: claiming at / and /reset, everything else under /admin behind Cloudflare Access. -->
 <script lang="ts">
   import { registerIcons } from './lib/service-dark';
-  import { Cloud, Database, GitBranch, Mail } from '@lucide/svelte';
+  import { Cloud, Database, GitBranch, Mail, Rocket } from '@lucide/svelte';
   import Claim from './Claim.svelte';
   import Admin from './Admin.svelte';
   import type { Build } from './api';
 
-  registerIcons({ cloud: Cloud, database: Database, 'git-branch': GitBranch, mail: Mail });
+  registerIcons({ cloud: Cloud, database: Database, 'git-branch': GitBranch, mail: Mail, rocket: Rocket });
 
   const path = location.pathname;
   let build = $state<Build>();

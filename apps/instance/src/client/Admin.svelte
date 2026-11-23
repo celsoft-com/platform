@@ -3,12 +3,15 @@
   import { Button, Dialog, Field, Settings, Sidebar } from './lib/service-dark';
   import type { SettingsPage } from './lib/service-dark/components/Settings.svelte';
   import Report from './Report.svelte';
+  import Apps from './Apps.svelte';
+  import AddApp from './AddApp.svelte';
+  import AppPage from './AppPage.svelte';
   import { InstanceSettings } from './settings';
   import { get, post, type Build, type StepResult } from './api';
 
   interface State {
     build: Build;
-    viewer: { email: string; role: 'super' | 'platform' };
+    viewer: { email: string; role: 'super' | 'platform' | 'app' };
     setup?: { token: boolean; tokenWorks: boolean; github?: { slug: string; owner: string } };
     settings?: InstanceSettings;
     configured?: Record<string, boolean>;
@@ -24,6 +27,16 @@
   let token = $state('');
   let owner = $state('');
   let active = $state('apps');
+  // Which apps page shows: the list, Add app, or one app's page, kept in the address so it survives a reload.
+  let current = $state(path);
+  const appName = $derived(/^\/admin\/apps\/([^/]+)$/.exec(current)?.[1]);
+  function go(to: string) {
+    history.pushState(null, '', to);
+    current = to;
+    active = 'apps';
+    report = { done: [] };
+  }
+  addEventListener('popstate', () => (current = location.pathname));
   let category = $state('cloudflare');
   let settings = $state<InstanceSettings>();
 
@@ -40,7 +53,10 @@
     const params = new URLSearchParams(location.search);
     if (path === '/admin/github/created') report = await post('/admin/api/github/created', { code: params.get('code'), state: params.get('state') });
     if (path === '/admin/github/installed') report = await post('/admin/api/github/installed', {});
-    if (path !== '/admin') history.replaceState(null, '', '/admin');
+    if (path.startsWith('/admin/github/')) {
+      history.replaceState(null, '', '/admin');
+      current = '/admin';
+    }
     await load();
   }
   returned();
@@ -144,12 +160,13 @@
       groups={[{ items: [{ id: 'apps', label: 'Apps', icon: 'box' }, ...(state.viewer.role === 'super' ? [{ id: 'settings', label: 'Settings', icon: 'settings' }] : [])] }]}
       footer={[{ id: 'signout', label: 'Sign out', icon: 'log-out', href: '/cdn-cgi/access/logout' }]}
       bind:active
+      onselect={(id: string) => id === 'apps' && go('/admin')}
       storageKey="platform-sidebar-width"
     />
     <main class="content">
       <header class="topbar">
         <h1 class="title">{active === 'settings' ? 'Settings' : 'Apps'}</h1>
-        <span class="body-sm who">{state.viewer.email}, {state.viewer.role === 'super' ? 'super admin' : 'platform admin'}</span>
+        <span class="body-sm who">{state.viewer.email}, {{ super: 'super admin', platform: 'platform admin', app: 'app admin' }[state.viewer.role]}</span>
       </header>
       <div class="body-area">
         <Report done={report.done} error={report.error} />
@@ -162,11 +179,12 @@
             onsave={save}
             pages={{ cloudflare: keyPage, database: keyPage, email: keyPage }}
           />
+        {:else if current === '/admin/apps/new'}
+          <AddApp {go} />
+        {:else if appName}
+          {#key appName}<AppPage name={appName} {go} />{/key}
         {:else}
-          <section class="sd-panel">
-            <div class="sd-panel-head"><h2 class="sd-panel-title">Apps</h2></div>
-            <p class="sd-list-empty">No apps yet. Adding apps comes in a later version.</p>
-          </section>
+          <Apps {go} />
         {/if}
       </div>
     </main>
