@@ -17,6 +17,19 @@
     configured?: Record<string, boolean>;
     tokenUrl?: string;
     permissions?: string[];
+    instance?: Instance;
+  }
+
+  interface Instance {
+    repo: string;
+    suggested: string;
+    source: string;
+    merged?: { ref: string; commit: string };
+    available?: { ref: string; commit: string };
+    github: {
+      callback: string;
+      check?: { error: string } | { app: string[]; installation: string[]; installed: boolean; settings: string; installationUrl?: string };
+    };
   }
 
   let { path, onbuild }: { path: string; onbuild: (build: Build) => void } = $props();
@@ -53,6 +66,17 @@
     const params = new URLSearchParams(location.search);
     if (path === '/admin/github/created') report = await post('/admin/api/github/created', { code: params.get('code'), state: params.get('state') });
     if (path === '/admin/github/installed') report = await post('/admin/api/github/installed', {});
+    if (path === '/admin/github/authorized' && params.get('error')) report = { done: [], error: `GitHub did not let the instance make the repo: ${params.get('error_description') ?? params.get('error')}.` };
+    else if (path === '/admin/github/authorized') {
+      // GitHub's answer to Add app: the instance makes the app's repo and queues its first run.
+      const answer = await post<StepResult & { name?: string }>('/admin/api/apps/authorized', { code: params.get('code'), state: params.get('state') });
+      if (answer.name && !answer.error) {
+        history.replaceState(null, '', `/admin/apps/${answer.name}`);
+        current = `/admin/apps/${answer.name}`;
+        return load();
+      }
+      report = answer;
+    }
     if (path.startsWith('/admin/github/')) {
       history.replaceState(null, '', '/admin');
       current = '/admin';
@@ -94,6 +118,22 @@
     resendKey: { label: 'Open Resend API keys', url: () => 'https://resend.com/api-keys' },
   };
   const open = (url: string | undefined) => void window.open(url, '_blank', 'noopener');
+
+  // The instance's own repo and its updates, on the GitHub page of Settings.
+  let instanceRepo = $state('');
+  let githubReport = $state<StepResult>({ done: [] });
+  $effect(() => {
+    if (state?.instance && !instanceRepo) instanceRepo = state.instance.repo || state.instance.suggested;
+  });
+  async function saveRepo() {
+    githubReport = await post('/admin/api/instance/repo', { repo: instanceRepo });
+    if (!githubReport.error) await load();
+  }
+  async function updateInstance() {
+    githubReport = { done: ['Merging; this takes a minute.'] };
+    githubReport = await post('/admin/api/instance/update', {});
+    if (!githubReport.error) await load();
+  }
 
   // A key is write-only: typed into the dialog, sent once straight to the Worker, then cleared. It never
   // enters Settings' values, and nothing ever sends it back.
@@ -147,7 +187,7 @@
     <section class="sd-panel card">
       <p class="label step">Setup, step 2 of 2</p>
       <h1 class="display">Create the GitHub App</h1>
-      <p class="body intro">The instance gets its own private GitHub App, which reads app repos and hears their pushes and pull requests. A private app can only be installed where it belongs, so name the org your app repos live in, or leave it empty if they are in your own account.</p>
+      <p class="body intro">The instance gets its own private GitHub App, which makes each app's repo, merges updates into it, and hears its pushes and pull requests. A private app can only be installed where it belongs, so name the org your app repos live in, or leave it empty if they are in your own account.</p>
       <Field label="GitHub org where your app repos live" bind:value={owner} mono autocomplete="off" placeholder="celsoft-com" />
       <Report done={report.done} error={report.error} />
       <Button variant="primary" block onclick={() => createApp()}>Create on GitHub</Button>
@@ -177,7 +217,7 @@
             bind:category
             label="Instance settings"
             onsave={save}
-            pages={{ cloudflare: keyPage, database: keyPage, email: keyPage }}
+            pages={{ cloudflare: keyPage, github: githubPage, database: keyPage, email: keyPage }}
           />
         {:else if current === '/admin/apps/new'}
           <AddApp {go} />
@@ -207,6 +247,64 @@
       {#if page.errors[s.key]}<span class="sd-field-error">{page.errors[s.key]}</span>{/if}
     </div>
   {/each}
+{/snippet}
+
+{#snippet githubPage(page: SettingsPage)}
+  {@const inst = state?.instance}
+  {@const check = inst?.github.check}
+  {#each page.settings as s (s.key)}
+    <div class="sd-setting">
+      <div class="sd-setting-text">
+        <span class="sd-setting-label">{s.title}</span>
+        {#if s.description}<span class="sd-setting-desc">{s.description}</span>{/if}
+      </div>
+      <div class="sd-setting-control"><span class="mono">{settings?.github[s.key as 'app' | 'owner']}</span></div>
+    </div>
+  {/each}
+  {#if inst}
+    <div class="sd-setting">
+      <div class="sd-setting-text">
+        <span class="sd-setting-label">What the app may do</span>
+        {#if check && 'error' in check}
+          <span class="sd-field-error">{check.error}</span>
+        {:else if check && (check.app.length || check.installation.length || !check.installed)}
+          <span class="sd-setting-desc">Making each app's repo and merging updates needs more than the app has. In its settings, give it {[...new Set([...check.app, ...check.installation])].join(', ')}, and set its Callback URL to <span class="mono">{inst.github.callback}</span>; then accept the new permissions where it is installed.</span>
+        {:else}
+          <span class="sd-setting-desc">Everything it needs. Its Callback URL must be <span class="mono">{inst.github.callback}</span>.</span>
+        {/if}
+      </div>
+      <div class="sd-setting-control key">
+        {#if check && !('error' in check)}
+          <Button size="sm" variant="quiet" icon="link" onclick={() => open(check.settings)}>App settings</Button>
+          {#if check.installationUrl}<Button size="sm" variant="quiet" icon="link" onclick={() => open(check.installationUrl)}>Installation</Button>{/if}
+        {/if}
+      </div>
+    </div>
+    <div class="sd-setting">
+      <div class="sd-setting-text">
+        <span class="sd-setting-label">This instance's repo</span>
+        <span class="sd-setting-desc">The repo Deploy to Cloudflare made, which Cloudflare deploys. Update merges {inst.source}'s newer versions into it.</span>
+      </div>
+      <div class="sd-setting-control key">
+        <Field label="Repo" bind:value={instanceRepo} mono autocomplete="off" />
+        <Button size="sm" onclick={() => saveRepo()}>Save</Button>
+      </div>
+    </div>
+    {#if inst.repo}
+      <div class="sd-setting">
+        <div class="sd-setting-text">
+          <span class="sd-setting-label">Version</span>
+          <span class="sd-setting-desc">
+            {inst.merged ? `${inst.source} ${inst.merged.ref} (${inst.merged.commit.slice(0, 7)})` : `Not updated by this instance yet`}{inst.available ? `; ${inst.available.ref} (${inst.available.commit.slice(0, 7)}) is available` : ''}.
+          </span>
+        </div>
+        <div class="sd-setting-control key">
+          <Button size="sm" variant={inst.available ? 'primary' : 'secondary'} icon="refresh-cw" onclick={() => updateInstance()}>{inst.available ? `Update to ${inst.available.ref}` : 'Update now'}</Button>
+        </div>
+      </div>
+    {/if}
+    <Report done={githubReport.done} error={githubReport.error} />
+  {/if}
 {/snippet}
 
 {#if replacing}

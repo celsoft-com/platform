@@ -37,16 +37,28 @@ you want.
 ## Adding an app
 
 1. **Open Apps** and click **Add app**.
-2. **Name the repo:** `owner/name` or its link, and its folder if the app is not at the root;
-   click **Read repo**. The page shows what the app needs and whether the instance's GitHub App is
-   on the repo.
-3. **Install the GitHub App, if you want pushes to deploy:** click **Install on this repo**, which
-   picks that repo alone, then **Check again**. Without it, the app deploys new releases or follows
-   its default branch.
-4. **Fill in:** a name, an address under one of your domains such as `notes.example.com`, the app's
-   admins, and how it updates. Leave the build commands empty to use the repo's own.
-5. **Click Add and deploy:** the app's page shows each step as it runs, and links to the app once
-   it is live. A database needs a Neon key in Settings, and email a Resend key.
+2. **Name the source repo:** `owner/name` or its link, such as `celsoft-com/pages`, and its folder if
+   the app is not at the root; click **Read repo**. The page shows what the app needs.
+3. **Fill in:** a name, an address under one of your domains such as `notes.example.com`, and the
+   app's admins. The name also names the app's repo. Leave the build commands empty to use the
+   repo's own.
+4. **Click Add and deploy:** GitHub asks you once to let the instance make `<owner>/<name>`, a
+   private clone of the source. Then the app's page shows each step as it runs, and links to the
+   app once it is live. A database needs a Neon key in Settings, and email a Resend key.
+5. **From then on:** pushes to the app's repo deploy it, its pull requests get previews, and
+   **Update** on its page merges the source's newer versions in.
+
+## Updating the instance
+
+1. **Name its repo:** in Settings, GitHub, enter the repo Deploy to Cloudflare made and save.
+2. **Update:** when a newer platform version is out, Settings, GitHub shows it; **Update** merges it
+   into that repo, and Cloudflare deploys it.
+
+## Before adding apps with an older GitHub App
+
+An instance whose GitHub App was made before apps were cloned needs two changes to it, which
+Settings, GitHub lists with links: give it Administration and Contents read and write, set its
+Callback URL to the address shown, then accept the new permissions where it is installed.
 
 ## Getting back in
 

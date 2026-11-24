@@ -34,6 +34,7 @@ export interface RunView {
   error?: string;
   log?: string[];
   url?: string;
+  merge?: { source: { owner: string; name: string }; ref: string; clone: boolean };
   queuedAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -44,15 +45,11 @@ export interface AppRow {
   address: string;
   repo: string;
   dir: string;
-  updates: "push" | "releases" | "branch";
+  // The repo it was cloned from, and the version of it last merged in.
+  source?: string;
+  sourceRef?: string;
   deployed?: { ref: string; commit: string; at: string };
   available?: { ref: string; commit: string };
   previews: number[];
   last?: RunView;
 }
-
-export const UPDATES = [
-  { id: "push", label: "On every push to the default branch", note: "Needs the instance's GitHub App on the repo; pull requests get previews." },
-  { id: "releases", label: "When you deploy a new release", note: "A newer release shows as available; nothing changes until an admin deploys it." },
-  { id: "branch", label: "Follow the default branch", note: "The instance checks every 15 minutes and deploys new commits." },
-] as const;

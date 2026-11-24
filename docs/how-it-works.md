@@ -9,7 +9,7 @@ Each org deploys this repo once, as its own Platform Instance; [design.md](desig
 1. **Deploy:** the README's **Deploy to Cloudflare** button clones the repo into a new repo in the org's GitHub and deploys its root; every push to the clone's `main` deploys again.
 2. **Claim:** the super admin pastes a Cloudflare token and their email into the instance's setup form, then signs in with the code Cloudflare Access emails them.
 3. **Complete setup:** on the admin page, a wider Cloudflare token and the instance's own GitHub App, then Neon and Resend keys in Settings.
-4. **Add apps:** in Apps, a platform admin names an app's repo, its address and admins; the instance reads `platform.jsonc`, provisions the app's database, files and email in its own namespace, builds the repo in a throwaway Container that holds none of the instance's credentials, and deploys the Worker with only the app's own bindings. Pushes, releases or new commits deploy it again, and pull requests get previews.
+4. **Add apps:** in Apps, a platform admin names an app's source repo, its address and admins; the instance clones the source into a new repo in the org, reads `platform.jsonc`, provisions the app's database, files and email in its own namespace, builds the repo in a throwaway Container that holds none of the instance's credentials, and deploys the Worker with only the app's own bindings. Pushes to the app's repo deploy it again, its pull requests get previews, and Update merges the source's newer versions in.
 5. **The rest of this page:** what an app writes and what the framework gives it, the same under an instance; the per-app deploy it also describes is how the demo still deploys.
 
 ## At a glance

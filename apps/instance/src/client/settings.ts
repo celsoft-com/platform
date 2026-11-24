@@ -13,7 +13,7 @@ export const InstanceSettings = z.object({
       app: z.string().default("").meta({ title: "GitHub App", description: "The instance's own private app.", mono: true, readOnly: true }),
       owner: z.string().default("").meta({ title: "Owner", description: "Where the app belongs, and where app repos must live.", mono: true, readOnly: true }),
     })
-    .meta({ title: "GitHub", icon: "git-branch", description: "Reads app repos and hears their pushes and pull requests." }),
+    .meta({ title: "GitHub", icon: "git-branch", description: "Makes each app's repo, merges updates into it, and hears its pushes and pull requests." }),
   database: z
     .object({ neonKey: secret("Neon API key", "An organization API key; the instance makes each app's database with it.", "Paste a Neon organization API key") })
     .meta({ title: "Database", icon: "database", description: "Where apps' databases live." }),
