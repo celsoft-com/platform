@@ -31,13 +31,25 @@ function note(line) {
 class Failed extends Error {}
 
 function sh(command, cwd, env = {}) {
+  return capture(command, cwd, env).then(({ code }) => {
+    if (code !== 0) throw new Failed(`\`${command}\` failed with code ${code}`);
+  });
+}
+
+// Runs a command, logging it as written (a token is passed in env and named, never written out),
+// and keeps its output for the caller.
+function capture(command, cwd, env = {}) {
   note(`$ ${command}`);
   return new Promise((resolve, reject) => {
     const child = spawn("bash", ["-lc", command], { cwd, env: { ...process.env, ...env } });
-    child.stdout.on("data", note);
+    let stdout = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      note(chunk);
+    });
     child.stderr.on("data", note);
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Failed(`\`${command}\` failed with code ${code}`))));
+    child.on("exit", (code) => resolve({ code, stdout: stdout.trim() }));
   });
 }
 
@@ -219,6 +231,87 @@ async function upload({ account, jwt, buckets }) {
   return { jwt: completion };
 }
 
+// Git: cloning a source into an app's new repo, and merging a newer source into it. Only the
+// instance's git machine does this, never a build machine, since it holds a token that writes the repo.
+const GIT = join(WORK, "git");
+const remote = (repo) => `${process.env.GIT_REMOTE ?? "https://github.com/"}${repo}.git`;
+const header = (token) => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`;
+
+// A git command that reaches GitHub, with the token for that repo, if any, from the environment.
+function gitEnv({ sourceToken, token, author }) {
+  return {
+    ...(sourceToken ? { SOURCE_AUTH: header(sourceToken) } : {}),
+    ...(token ? { TARGET_AUTH: header(token) } : {}),
+    ...(author ? { GIT_AUTHOR_NAME: author.name, GIT_AUTHOR_EMAIL: author.email, GIT_COMMITTER_NAME: author.name, GIT_COMMITTER_EMAIL: author.email } : {}),
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+const fromSource = (input) => (input.sourceToken ? `git -c "http.https://github.com/.extraheader=$SOURCE_AUTH"` : "git");
+const toTarget = `git -c "http.https://github.com/.extraheader=$TARGET_AUTH"`;
+
+async function freshGit() {
+  await rm(GIT, { recursive: true, force: true });
+  await mkdir(GIT, { recursive: true });
+  await sh("git init -q -b main", GIT);
+}
+
+async function clone(input) {
+  await freshGit();
+  const env = gitEnv(input);
+  await sh(`${fromSource(input)} fetch -q --no-tags ${remote(input.source)} ${input.commit}`, GIT, env);
+  await sh(`${toTarget} push -q ${remote(input.target)} ${input.commit}:refs/heads/main`, GIT, env);
+  note(`cloned ${input.source} at ${input.commit.slice(0, 7)} into ${input.target}`);
+  return { commit: input.commit };
+}
+
+// Merges the source at a newer commit into the repo's branch. A repo cloned with the source's
+// history merges as git does; one that started as a copy of its files, as Deploy to Cloudflare
+// makes, takes the source's changes since the commit it started from.
+async function merge(input) {
+  await freshGit();
+  const env = gitEnv(input);
+  await sh(`${toTarget} fetch -q --no-tags ${remote(input.target)} refs/heads/${input.branch}`, GIT, env);
+  await sh("git checkout -q -B work FETCH_HEAD", GIT, env);
+  await sh(`${fromSource(input)} fetch -q --no-tags ${remote(input.source)} ${input.commit}`, GIT, env);
+  const source = input.commit;
+  if ((await capture(`git merge-base --is-ancestor ${source} HEAD`, GIT)).code === 0) {
+    note("already up to date");
+    return { commit: (await capture("git rev-parse HEAD", GIT)).stdout, upToDate: true };
+  }
+  const conflicts = async () => (await capture("git diff --name-only --diff-filter=U", GIT)).stdout.split("\n").filter(Boolean);
+  let commit;
+  if ((await capture(`git merge-base HEAD ${source}`, GIT)).code === 0) {
+    if ((await capture(`git merge -q -m ${JSON.stringify(input.message)} ${source}`, GIT, env)).code !== 0) {
+      const files = await conflicts();
+      await capture("git merge --abort", GIT);
+      return { conflicts: files };
+    }
+    commit = (await capture("git rev-parse HEAD", GIT)).stdout;
+  } else {
+    let base = input.base;
+    if (!base) {
+      const root = (await capture("git rev-list --max-parents=0 HEAD", GIT)).stdout.split("\n").at(-1);
+      const started = (await capture(`git log -1 --format=%cI ${root}`, GIT)).stdout;
+      base = (await capture(`git rev-list -1 --before=${JSON.stringify(started)} ${source}`, GIT)).stdout;
+      if (!base) throw new Failed(`the repo shares no history with ${input.source}, and no source commit is older than its first commit, so there is nothing to merge from`);
+      note(`the repo started from ${input.source} at ${base.slice(0, 7)}`);
+    }
+    if (!(await capture(`git diff --name-only ${base} ${source}`, GIT)).stdout) {
+      note("the source has not changed since the repo started");
+      return { commit: (await capture("git rev-parse HEAD", GIT)).stdout, upToDate: true };
+    }
+    if ((await capture(`git diff --binary ${base} ${source} | git apply --3way --index`, GIT, env)).code !== 0) {
+      const files = await conflicts();
+      return { conflicts: files.length ? files : ["(the changes did not apply)"] };
+    }
+    const tree = (await capture("git write-tree", GIT)).stdout;
+    commit = (await capture(`git commit-tree ${tree} -p HEAD -p ${source} -m ${JSON.stringify(input.message)}`, GIT, env)).stdout;
+  }
+  await sh(`${toTarget} push -q ${remote(input.target)} ${commit}:refs/heads/${input.branch}`, GIT, env);
+  note(`merged ${input.source} at ${source.slice(0, 7)} into ${input.target}`);
+  return { commit, merged: source };
+}
+
 function need() {
   if (!app) throw new Failed("build first");
   return app;
@@ -236,6 +329,8 @@ const routes = {
   "/migrate": async (request) => migrate(await body(request)),
   "/bundle": async () => bundle(),
   "/upload": async (request) => upload(await body(request)),
+  "/git/clone": async (request) => clone(await body(request)),
+  "/git/merge": async (request) => merge(await body(request)),
 };
 
 let busy = false;

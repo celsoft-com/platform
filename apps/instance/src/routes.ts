@@ -1,7 +1,7 @@
 // The Worker's routes: a JSON API for the pages (/api/ for claiming, /admin/api/ behind Cloudflare
 // Access), the GitHub App's webhook, and the built pages for every other path.
 
-import { appRoute, githubEvent, type AppContext } from "./app-routes.ts";
+import { appRoute, githubEvent, instanceRepo, instanceUpdate, instanceView, type AppContext } from "./app-routes.ts";
 import { appAdmins } from "./apps.ts";
 import { APP_PERMISSIONS, PERMISSIONS, SetupError } from "./cloudflare.ts";
 import * as complete from "./complete.ts";
@@ -109,6 +109,7 @@ async function admin(request: Request, route: string, who: Viewer, ctx: Context)
       configured: { token: !!ctx.secrets.CLOUDFLARE_API_TOKEN, neonKey: !!ctx.secrets.NEON_API_KEY, resendKey: !!ctx.secrets.RESEND_API_KEY },
       tokenUrl: WIDER_TOKEN_URL,
       permissions: [...Object.values(PERMISSIONS), ...Object.values(APP_PERMISSIONS)],
+      ...(record.state === "claimed" && setup.github ? { instance: await instanceView(ctx, record) } : {}),
     });
   }
 
@@ -131,6 +132,10 @@ async function admin(request: Request, route: string, who: Viewer, ctx: Context)
       return attempt((done) => complete.githubCreated(ctx, text(input.code), text(input.state), done));
     case "github/installed":
       return attempt((done) => complete.githubInstalled(ctx, done));
+    case "instance/repo":
+      return attempt((done) => instanceRepo(ctx, text(input.repo), done));
+    case "instance/update":
+      return attempt((done) => instanceUpdate(ctx, who, done));
     case "settings": {
       const changes = (input.changes ?? {}) as Record<string, unknown>;
       switch (input.category) {

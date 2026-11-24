@@ -1,20 +1,18 @@
 // The admin API for apps: adding one from its repo, its page, deploying it, its secrets and its
 // removal, each scoped to who is asking; and the GitHub events and checks that deploy apps by themselves.
 
-import { APP_NAME, CONFIG_FILE, HOSTNAME, needs, readConfig, zoneFor, type App, type Updates } from "./apps.ts";
+import { APP_NAME, CONFIG_FILE, HOSTNAME, needs, readConfig, zoneFor, type App, type Upstream } from "./apps.ts";
 import { Cloudflare, SetupError } from "./cloudflare.ts";
 import { claimed, stored, syncAccess, type Context } from "./complete.ts";
-import { remove, type Builder, type DeployEnv, type Run } from "./deploy.ts";
-import { installUrl, parseRepo, Source, type GitHubApp } from "./github.ts";
+import { machineStep, remove, type Builder, type DeployEnv, type Merge, type Run } from "./deploy.ts";
+import { authorizeUrl, callbackUrl, checkApp, createRepo, installUrl, parseRepo, Source, userToken, type GitHubApp } from "./github.ts";
 import { Neon } from "./neon.ts";
 import { Resend } from "./resend.ts";
-import { EMAIL, type InstanceRecord, type Viewer } from "./setup.ts";
+import { EMAIL, PLATFORM_SOURCE, type InstanceRecord, type Viewer } from "./setup.ts";
 
 export interface AppContext extends Context {
   builder?: (run: string) => Builder;
 }
-
-const UPDATES: Updates[] = ["push", "releases", "branch"];
 
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { "cache-control": "no-store" } });
 
@@ -38,9 +36,11 @@ export function deployEnv(ctx: AppContext, record: InstanceRecord, host: string,
   };
 }
 
-export function newRun(app: string, kind: Run["kind"], target: Run["target"], ref: string, by: string, commit?: string): Run {
-  const id = `${Date.now().toString(36)}-${[...crypto.getRandomValues(new Uint8Array(4))].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-  return { id, app, kind, target, ref, ...(commit ? { commit } : {}), by, state: "queued", done: [], warnings: [], queuedAt: new Date().toISOString() };
+const random = (bytes: number) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+export function newRun(app: string, kind: Run["kind"], target: Run["target"], ref: string, by: string, commit?: string, merge?: Merge): Run {
+  const id = `${Date.now().toString(36)}-${random(4)}`;
+  return { id, app, kind, target, ref, ...(commit ? { commit } : {}), ...(merge ? { merge } : {}), by, state: "queued", done: [], warnings: [], queuedAt: new Date().toISOString() };
 }
 
 const sees = (who: Viewer, app: App) => who.role !== "app" || app.admins.includes(who.email);
@@ -74,10 +74,19 @@ function build(value: unknown): App["build"] {
   return out;
 }
 
-// The latest version to deploy: the newest release, or the default branch.
-async function latest(source: Source, app: Pick<App, "updates" | "repo">): Promise<string> {
-  if (app.updates === "releases") return (await source.latestRelease()) ?? app.repo.defaultBranch;
-  return app.repo.defaultBranch;
+// A source's newest version: its latest release, or its default branch if it makes none.
+export async function newest(source: Source): Promise<{ ref: string; commit: string }> {
+  const ref = (await source.latestRelease()) ?? (await source.repo()).defaultBranch;
+  return { ref, commit: await source.commit(ref) };
+}
+
+// An app's repo is its own clone of its source, in the instance's owner; a repo already there is used as it is.
+const clones = (gh: GitHubApp | undefined, owner: string) => !gh || gh.owner.toLowerCase() !== owner.toLowerCase();
+
+interface Held {
+  by: string;
+  app: Omit<App, "repo" | "addedAt">;
+  source: Upstream;
 }
 
 export async function appRoute(request: Request, route: string, who: Viewer, ctx: AppContext): Promise<Response> {
@@ -99,6 +108,11 @@ export async function appRoute(request: Request, route: string, who: Viewer, ctx
   if (route === "add" && post) {
     if (!manages(who)) return json({ error: "Only platform admins add apps." }, 403);
     return attempt((done) => add(ctx, record, who, body, done));
+  }
+
+  if (route === "authorized" && post) {
+    if (!manages(who)) return json({ error: "Only platform admins add apps." }, 403);
+    return attempt((done) => authorized(ctx, record, who, text(body.code), text(body.state), done));
   }
 
   const [name = "", action = ""] = route.split("/");
@@ -135,28 +149,38 @@ export async function appRoute(request: Request, route: string, who: Viewer, ctx
   switch (action) {
     case "deploy":
       return attempt(async (done) => {
-        const source = new Source(app.repo.owner, app.repo.name, github(ctx), ctx.fetcher);
-        const ref = app.available?.ref ?? (await latest(source, app));
-        await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, ref, who.email), ctx.self.host);
-        done.push(`Queued a deploy of ${ref}.`);
+        await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, app.repo.defaultBranch, who.email), ctx.self.host);
+        done.push(`Queued a deploy of ${app.repo.defaultBranch}.`);
+      });
+    case "update":
+      return attempt(async (done) => {
+        if (!app.source || !app.available) throw new SetupError(`${app.name} has no update waiting.`);
+        const merge: Merge = { source: { owner: app.source.owner, name: app.source.name }, ref: app.available.ref, commit: app.available.commit, clone: false, author: who.email };
+        await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, app.available.ref, who.email, undefined, merge), ctx.self.host);
+        done.push(`Queued merging ${app.source.owner}/${app.source.name} ${app.available.ref} into ${app.repo.owner}/${app.repo.name}, then a deploy.`);
       });
     case "settings":
       return attempt(async (done) => {
         const patch: Partial<App> = {};
         if (body.build !== undefined) patch.build = build(body.build);
-        if (body.updates !== undefined) {
-          if (!UPDATES.includes(body.updates as Updates)) throw new SetupError("Updates must be push, releases or branch.");
-          if (body.updates === "push" && !(await new Source(app.repo.owner, app.repo.name, github(ctx), ctx.fetcher).installed())) throw new SetupError("Deploying on push needs the instance's GitHub App installed on the repo.");
-          patch.updates = body.updates as Updates;
-        }
         if (body.admins !== undefined) {
           if (!manages(who)) throw new SetupError("Only platform admins change who administers an app.");
           patch.admins = emails(body.admins);
+        }
+        const address = body.address === undefined ? app.address : text(body.address).toLowerCase();
+        if (address !== app.address) {
+          if (!manages(who)) throw new SetupError("Only platform admins change an app's address.");
+          const zone = await checkNewAddress(ctx, record, address, app.name);
+          Object.assign(patch, { address, zone: { id: zone.id, name: zone.name }, moved: [...(app.moved ?? []), { address: app.address, zone: app.zone }] });
         }
         await ctx.apps.patch(app.name, patch);
         if (patch.admins) {
           await syncAccess(ctx, record);
           done.push(patch.admins.length ? `${patch.admins.join(", ")} administer ${app.name}.` : `${app.name} has no app admins.`);
+        }
+        if (patch.address) {
+          await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, app.repo.defaultBranch, who.email), ctx.self.host);
+          done.push(`Queued a deploy that moves ${app.name} from ${app.address} to ${address}.`);
         }
         done.push("Saved.");
       });
@@ -183,14 +207,35 @@ export async function appRoute(request: Request, route: string, who: Viewer, ctx
 }
 
 function summary(app: App) {
-  return { name: app.name, address: app.address, repo: `${app.repo.owner}/${app.repo.name}`, dir: app.dir, updates: app.updates, deployed: app.deployed, available: app.available, previews: app.previews };
+  return {
+    name: app.name,
+    address: app.address,
+    repo: `${app.repo.owner}/${app.repo.name}`,
+    dir: app.dir,
+    ...(app.source ? { source: `${app.source.owner}/${app.source.name}`, sourceRef: app.source.ref } : {}),
+    deployed: app.deployed,
+    available: app.available,
+    previews: app.previews,
+  };
 }
 
-// What Add app shows once a repo is named: what the app needs, and whether the instance reaches it.
+// An address an app may have: a hostname in one of the account's domains, overlapping no other app's.
+async function checkNewAddress(ctx: AppContext, record: InstanceRecord, address: string, name: string) {
+  if (!HOSTNAME.test(address)) throw new SetupError("The address must be a hostname, like pages.example.com.");
+  const taken = (await ctx.apps.list()).find((a) => a.name !== name && (address === a.address || address.endsWith(`.${a.address}`) || a.address.endsWith(`.${address}`)));
+  if (taken) throw new SetupError(`${address} overlaps ${taken.name}'s address ${taken.address}; each app gets an address of its own.`);
+  if (address === ctx.self.host) throw new SetupError("That is this instance's own address.");
+  const zone = zoneFor(address, await stored(ctx).zones(record.account));
+  if (!zone) throw new SetupError(`${address} is not in any of this account's domains; add its domain to Cloudflare first, or choose an address under one of them.`);
+  return zone;
+}
+
+// What Add app shows once a repo is named: what the app needs, and the repo it will deploy from.
 async function inspect(ctx: AppContext, record: InstanceRecord, input: string, dir: string) {
   const parsed = parseRepo(input);
   if (!parsed) throw new SetupError("Enter a GitHub repo, like celsoft-com/pages or its link.");
   const gh = github(ctx);
+  if (!gh) throw new SetupError("This instance has no GitHub App yet; the super admin creates it first.");
   const source = new Source(parsed.owner, parsed.name, gh, ctx.fetcher);
   const repo = await source.repo();
   const installed = await source.installed();
@@ -200,85 +245,100 @@ async function inspect(ctx: AppContext, record: InstanceRecord, input: string, d
   const suggested = repo.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
   const config = readConfig(text, suggested, "app.invalid");
   const zones = (await stored(ctx).zones(record.account)).map((z) => z.name).sort();
-  const release = await source.latestRelease();
+  const clone = clones(gh, repo.owner);
   return {
     repo: { owner: repo.owner, name: repo.name, private: repo.private, defaultBranch: repo.defaultBranch },
+    clone,
+    owner: gh.owner,
     installed,
-    ...(gh && !installed ? { installUrl: installUrl(gh, repo) } : {}),
+    ...(!clone && !installed ? { installUrl: installUrl(gh, repo) } : {}),
     needs: needs(config.features),
     warnings: config.warnings,
     zones,
     name: suggested,
-    release,
-    updates: installed ? "push" : release ? "releases" : "branch",
+    release: await source.latestRelease(),
   };
 }
 
+// Adding an app checks everything, then, for a source outside the instance's owner, sends the admin
+// to GitHub to let the instance make the app's repo as them; GitHub's answer finishes it.
 async function add(ctx: AppContext, record: InstanceRecord, who: Viewer, body: Record<string, unknown>, done: string[]) {
   const parsed = parseRepo(text(body.repo));
   if (!parsed) throw new SetupError("Enter a GitHub repo, like celsoft-com/pages or its link.");
+  const gh = github(ctx);
+  if (!gh) throw new SetupError("This instance has no GitHub App yet; the super admin creates it first.");
   const name = text(body.name);
   if (!APP_NAME.test(name)) throw new SetupError("The name must be 3 to 50 characters of a-z, 0-9 and single hyphens, starting with a letter.");
   const address = text(body.address).toLowerCase();
-  if (!HOSTNAME.test(address)) throw new SetupError("The address must be a hostname, like pages.example.com.");
-  const updates = text(body.updates) as Updates;
-  if (!UPDATES.includes(updates)) throw new SetupError("Choose how the app updates.");
   const admins = emails(body.admins);
   const dir = text(body.dir).replace(/^\/+|\/+$/g, "");
 
-  const apps = await ctx.apps.list();
-  if (apps.some((a) => a.name === name)) throw new SetupError(`There is already an app named ${name}.`);
-  const taken = apps.find((a) => address === a.address || address.endsWith(`.${a.address}`) || a.address.endsWith(`.${address}`));
-  if (taken) throw new SetupError(`${address} overlaps ${taken.name}'s address ${taken.address}; each app gets an address of its own.`);
-  if (address === ctx.self.host) throw new SetupError("That is this instance's own address.");
+  if (await ctx.apps.get(name)) throw new SetupError(`There is already an app named ${name}.`);
   const cf = stored(ctx);
   if (name === record.script || (await cf.script(record.account, name))) throw new SetupError(`This Cloudflare account already has a Worker named ${name}; choose another name.`);
-  const zone = zoneFor(address, await cf.zones(record.account));
-  if (!zone) throw new SetupError(`${address} is not in any of this account's domains; add its domain to Cloudflare first, or choose an address under one of them.`);
+  const zone = await checkNewAddress(ctx, record, address, name);
   done.push(`${address} is in the account's domain ${zone.name}.`);
 
-  const source = new Source(parsed.owner, parsed.name, github(ctx), ctx.fetcher);
+  const source = new Source(parsed.owner, parsed.name, gh, ctx.fetcher);
   const repo = await source.repo();
-  if (updates === "push" && !(await source.installed())) throw new SetupError("Deploying on push needs the instance's GitHub App installed on the repo; install it, or choose releases or the default branch.");
   const path = dir ? `${dir}/${CONFIG_FILE}` : CONFIG_FILE;
   const config = await source.file(path, repo.defaultBranch);
   if (config === undefined) throw new SetupError(`${repo.owner}/${repo.name} has no ${path}.`);
   readConfig(config, name, address);
   done.push(`Read ${path} from ${repo.owner}/${repo.name}.`);
 
-  const app: App = {
-    name,
-    repo: { owner: repo.owner, ownerId: repo.ownerId, name: repo.name, id: repo.id, private: repo.private, defaultBranch: repo.defaultBranch },
-    dir,
-    address,
-    zone: { id: zone.id, name: zone.name },
-    admins,
-    build: build(body.build),
-    updates,
-    resources: {},
-    previews: [],
-    addedBy: who.email,
-    addedAt: new Date().toISOString(),
-  };
-  await ctx.apps.put(app);
-  if (admins.length) {
-    await syncAccess(ctx, record);
-    done.push(`Cloudflare Access lets in ${admins.join(", ")} as ${name}'s admins.`);
+  const app: Held["app"] = { name, dir, address, zone: { id: zone.id, name: zone.name }, admins, build: build(body.build), resources: {}, previews: [], addedBy: who.email };
+  if (!clones(gh, repo.owner)) {
+    if (!(await source.installed())) throw new SetupError(`The instance's GitHub App is not on ${repo.owner}/${repo.name}; install it there first.`);
+    await finish(ctx, record, who, { ...app, repo, addedAt: new Date().toISOString() }, undefined, done);
+    return { name };
   }
-  const ref = await latest(source, app);
-  await ctx.apps.enqueue(newRun(name, "deploy", { kind: "prod" }, ref, who.email), ctx.self.host);
-  done.push(`Added ${name}, and queued its first deploy of ${ref}.`);
-  return { name };
+
+  if (await new Source(gh.owner, name, gh, ctx.fetcher).repo().then(() => true, () => false)) {
+    throw new SetupError(`${gh.owner}/${name} already exists on GitHub; choose another name, or add that repo itself.`);
+  }
+  const state = random(16);
+  const held: Held = { by: who.email, app, source: { owner: repo.owner, name: repo.name, ...(await newest(source)) } };
+  await ctx.apps.hold(state, held);
+  done.push(`GitHub asks you to let the instance make ${gh.owner}/${name} as you, once.`);
+  return { name, authorize: authorizeUrl(gh, ctx.self.host, state) };
 }
 
-// GitHub's events for repos the instance's app is installed on: a push to the default branch
-// deploys an app that updates on push; a pull request from the same repo gets a preview.
+// GitHub's answer: the app's repo is made as the admin, the instance's app put on it, and the
+// first run clones the source into it, then deploys.
+async function authorized(ctx: AppContext, record: InstanceRecord, who: Viewer, code: string, state: string, done: string[]) {
+  const held = (await ctx.apps.take(state)) as Held | undefined;
+  if (!held || held.by !== who.email) throw new SetupError("This answer from GitHub is not for an Add app you started, or it is over an hour old; add the app again.");
+  const gh = github(ctx)!;
+  if (await ctx.apps.get(held.app.name)) throw new SetupError(`There is already an app named ${held.app.name}.`);
+  const token = await userToken(gh, code, ctx.fetcher);
+  const repo = await createRepo(gh, token, held.app.name, `${held.app.name}, cloned from ${held.source.owner}/${held.source.name}; deployed by the Platform Instance at ${ctx.self.host}.`, ctx.fetcher);
+  done.push(`Made ${repo.owner}/${repo.name}, private, with the instance's GitHub App on it.`);
+  const merge: Merge = { source: { owner: held.source.owner, name: held.source.name }, ref: held.source.ref, commit: held.source.commit, clone: true, author: who.email };
+  await finish(ctx, record, who, { ...held.app, repo, addedAt: new Date().toISOString() }, merge, done);
+  return { name: held.app.name };
+}
+
+async function finish(ctx: AppContext, record: InstanceRecord, who: Viewer, app: App, merge: Merge | undefined, done: string[]) {
+  await ctx.apps.put(app);
+  if (app.admins.length) {
+    await syncAccess(ctx, record);
+    done.push(`Cloudflare Access lets in ${app.admins.join(", ")} as ${app.name}'s admins.`);
+  }
+  await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, merge?.ref ?? app.repo.defaultBranch, who.email, undefined, merge), ctx.self.host);
+  done.push(`Added ${app.name}, and queued its first ${merge ? "clone and " : ""}deploy.`);
+}
+
+// GitHub's events for app repos: a push to the default branch deploys, unless a run already has
+// that commit; a pull request from the same repo gets a preview.
 export async function githubEvent(ctx: AppContext, event: string | null, payload: Record<string, any>): Promise<void> {
   const repoId = payload.repository?.id as number | undefined;
   if (!repoId) return;
   const apps = (await ctx.apps.list()).filter((a) => a.repo.id === repoId);
   for (const app of apps) {
-    if (event === "push" && app.updates === "push" && payload.ref === `refs/heads/${app.repo.defaultBranch}` && payload.after && !payload.deleted) {
+    if (event === "push" && payload.ref === `refs/heads/${app.repo.defaultBranch}` && payload.after && !payload.deleted) {
+      const runs = await ctx.apps.runs(app.name);
+      if (runs.some((r) => r.state !== "failed" && (r.commit === payload.after || (r.merge && r.state !== "done")))) continue;
       await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, app.repo.defaultBranch, `push by ${payload.pusher?.name ?? "someone"}`, payload.after), ctx.self.host);
     }
     if (event === "pull_request") {
@@ -294,25 +354,74 @@ export async function githubEvent(ctx: AppContext, event: string | null, payload
   }
 }
 
-// The scheduled check: an app that follows its default branch deploys any new commit; one that
-// takes releases shows a newer release as available, for its admins to deploy.
+// The scheduled check: each source's newest version, shown as available until someone updates.
 export async function checkUpdates(ctx: AppContext): Promise<void> {
+  const gh = github(ctx);
   for (const app of await ctx.apps.list()) {
-    if (app.updates === "push") continue;
+    if (!app.source) continue;
     try {
-      const source = new Source(app.repo.owner, app.repo.name, github(ctx), ctx.fetcher);
-      if (app.updates === "branch") {
-        const commit = await source.commit(app.repo.defaultBranch);
-        if (commit !== app.deployed?.commit && commit !== app.available?.commit) {
-          await ctx.apps.patch(app.name, { available: { ref: app.repo.defaultBranch, commit } });
-          await ctx.apps.enqueue(newRun(app.name, "deploy", { kind: "prod" }, app.repo.defaultBranch, "a new commit", commit), ctx.self.host);
-        }
-      } else {
-        const tag = await source.latestRelease();
-        if (tag && tag !== app.deployed?.ref) await ctx.apps.patch(app.name, { available: { ref: tag, commit: await source.commit(tag) } });
-      }
+      const found = await newest(new Source(app.source.owner, app.source.name, gh, ctx.fetcher));
+      if (found.commit !== app.source.commit && found.commit !== app.available?.commit) await ctx.apps.patch(app.name, { available: found });
     } catch (error) {
       console.error(`checking ${app.name} for updates`, error);
     }
+  }
+  try {
+    const record = await ctx.store.get();
+    if (!record?.repo) return;
+    const found = await newest(new Source(PLATFORM_SOURCE.owner, PLATFORM_SOURCE.name, gh, ctx.fetcher));
+    if (found.commit !== record.source?.commit && found.commit !== record.available?.commit) await ctx.store.put({ ...record, available: found });
+  } catch (error) {
+    console.error("checking the platform for updates", error);
+  }
+}
+
+// The instance's own repo and its updates, which only the super admin sees.
+export async function instanceView(ctx: AppContext, record: InstanceRecord) {
+  const gh = github(ctx);
+  let check: Awaited<ReturnType<typeof checkApp>> | { error: string } | undefined;
+  if (gh) check = await checkApp(gh, ctx.fetcher).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
+  return {
+    repo: record.repo ? `${record.repo.owner}/${record.repo.name}` : "",
+    suggested: gh ? `${gh.owner}/${record.script}` : "",
+    source: `${PLATFORM_SOURCE.owner}/${PLATFORM_SOURCE.name}`,
+    merged: record.source,
+    available: record.available,
+    github: { check, callback: callbackUrl(ctx.self.host) },
+  };
+}
+
+export async function instanceRepo(ctx: AppContext, input: string, done: string[]): Promise<void> {
+  const parsed = parseRepo(input);
+  if (!parsed) throw new SetupError("Enter the instance's repo, like celsoft-com/platform-deployed or its link.");
+  const repo = await new Source(parsed.owner, parsed.name, github(ctx), ctx.fetcher).repo();
+  if (!(await new Source(repo.owner, repo.name, github(ctx), ctx.fetcher).installed())) throw new SetupError(`The instance's GitHub App is not on ${repo.owner}/${repo.name}; install it there, then save again.`);
+  const record = (await ctx.store.get())!;
+  await ctx.store.put({ ...record, repo: { owner: repo.owner, name: repo.name, branch: repo.defaultBranch } });
+  done.push(`Updates merge into ${repo.owner}/${repo.name}'s ${repo.defaultBranch}, which Cloudflare deploys.`);
+}
+
+// Merges the platform's newest version into the instance's repo; Workers Builds deploys the push.
+export async function instanceUpdate(ctx: AppContext, who: Viewer, done: string[]): Promise<void> {
+  const record = (await ctx.store.get())!;
+  if (!record.repo) throw new SetupError("Name the instance's repo first.");
+  if (!ctx.builder) throw new SetupError("This instance has no machine to merge on.");
+  const gh = github(ctx);
+  const from = `${PLATFORM_SOURCE.owner}/${PLATFORM_SOURCE.name}`;
+  const into = `${record.repo.owner}/${record.repo.name}`;
+  const found = record.available ?? (await newest(new Source(PLATFORM_SOURCE.owner, PLATFORM_SOURCE.name, gh, ctx.fetcher)));
+  const token = await new Source(record.repo.owner, record.repo.name, gh, ctx.fetcher).writeToken();
+  const machine = ctx.builder(`git-instance-${Date.now().toString(36)}`);
+  const log = { log: undefined } as unknown as Run;
+  try {
+    const input = { source: from, commit: found.commit, target: into, branch: record.repo.branch, token, ...(record.source ? { base: record.source.commit } : {}), author: { name: who.email, email: who.email }, message: `Update from ${from} ${found.ref}` };
+    const result = await machineStep<{ commit: string; upToDate?: boolean; conflicts?: string[] }>(machine, log, "Merging the platform", "/git/merge", JSON.stringify(input));
+    if (result.conflicts) throw new SetupError(`${from} ${found.ref} changes what ${into} changed too, in ${result.conflicts.join(", ")}; merge it there by hand.`);
+    const latest = (await ctx.store.get())!;
+    const { available: _done, ...rest } = latest;
+    await ctx.store.put({ ...rest, source: found });
+    done.push(result.upToDate ? `${into} already has ${from} ${found.ref}.` : `Merged ${from} ${found.ref} into ${into}; Cloudflare is deploying it, and this page shows the new version in a few minutes.`);
+  } finally {
+    await machine.destroy().catch(() => undefined);
   }
 }

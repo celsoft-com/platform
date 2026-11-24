@@ -58,6 +58,17 @@ export class InstanceState extends DurableObject {
     return (await this.ctx.storage.get<Record<string, string>>(`secrets:${name}`)) ?? {};
   }
 
+  // Held for at most an hour; GitHub's codes last ten minutes.
+  async hold(key: string, value: unknown): Promise<void> {
+    await this.ctx.storage.put(`held:${key}`, { value, at: Date.now() });
+  }
+
+  async take(key: string): Promise<unknown> {
+    const held = await this.ctx.storage.get<{ value: unknown; at: number }>(`held:${key}`);
+    await this.ctx.storage.delete(`held:${key}`);
+    return held && Date.now() - held.at < 3_600_000 ? held.value : undefined;
+  }
+
   async setAppSecret(name: string, key: string, value: string | undefined): Promise<void> {
     const secrets = await this.appSecrets(name);
     if (value === undefined) delete secrets[key];
@@ -146,6 +157,8 @@ function apps(env: Env): AppStore {
     setSecret: (name, key, value) => stub.setAppSecret(name, key, value),
     runs: (name) => runs(name).list(),
     enqueue: (run, host) => runs(run.app).enqueue(run, host),
+    hold: (key, value) => stub.hold(key, value),
+    take: (key) => stub.take(key),
   };
 }
 

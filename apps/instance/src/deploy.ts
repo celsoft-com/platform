@@ -23,9 +23,20 @@ export interface Run {
   // The build's last lines, when the build stopped it.
   log?: string[];
   url?: string;
+  // Brings the source into the app's repo first: its first clone, or an Update.
+  merge?: Merge;
   queuedAt: string;
   startedAt?: string;
   finishedAt?: string;
+}
+
+export interface Merge {
+  source: { owner: string; name: string };
+  ref: string;
+  commit: string;
+  clone: boolean;
+  // Who asked, whose name the merge commit carries.
+  author: string;
 }
 
 // One build machine, started for one run and destroyed after it.
@@ -89,6 +100,12 @@ export async function deploy(env: DeployEnv, app: App, run: Run, save: (run: Run
   const hostname = target.kind === "prod" ? app.address : previewAddress(target.pr, app.address);
   const patch: Partial<App> = {};
 
+  if (run.merge) {
+    const merged = await mergeSource(env, app, run, say);
+    Object.assign(patch, merged.patch);
+    run.commit = merged.commit;
+    run.ref = app.repo.defaultBranch;
+  }
   const source = new Source(app.repo.owner, app.repo.name, env.github, env.fetcher);
   const commit = run.commit ?? (await source.commit(run.ref));
   run.commit = commit;
@@ -131,17 +148,7 @@ export async function deploy(env: DeployEnv, app: App, run: Run, save: (run: Run
     // The build: nothing in the machine can reach anything but this app.
     const builder = env.builder(run.id);
     try {
-      const step = async <T>(path: string, body?: BodyInit): Promise<T> => {
-        // A streamed body must say it is sent before the answer starts.
-        const init = { method: "POST", ...(body === undefined ? {} : { body }), ...(body instanceof ReadableStream ? { duplex: "half" } : {}) } as RequestInit;
-        const response = await builder.fetch(new Request(`http://builder${path}`, init));
-        const result = (await response.json().catch(() => ({ error: `the build machine answered ${response.status}` }))) as T & { error?: string; log?: string[] };
-        if (!response.ok || result.error) {
-          run.log = result.log;
-          throw new SetupError(`The build stopped: ${result.error ?? response.status}.`);
-        }
-        return result;
-      };
+      const step = <T>(path: string, body?: BodyInit) => machineStep<T>(builder, run, "The build", path, body);
       await step("/source", await source.tarball(commit));
       await say.done("The build machine has the source.");
       const built = await step<Built>("/build", JSON.stringify({ config: config.text, dir: app.dir, ...app.build }));
@@ -198,12 +205,46 @@ export async function deploy(env: DeployEnv, app: App, run: Run, save: (run: Run
     await source.status(commit, "success", `Deployed to ${hostname}`, run.url).catch(() => undefined);
     if (target.kind === "prod") {
       patch.deployed = { ref: run.ref, commit, at: env.now().toISOString() };
-      if (app.available?.commit === commit) patch.available = undefined;
+      for (const old of app.moved ?? []) await retireAddress(env, app, old, say);
+      if (app.moved) patch.moved = undefined;
     } else if (!app.previews.includes(target.pr)) patch.previews = [...app.previews, target.pr];
     return { patch };
   } catch (error) {
     await source.status(commit, "failure", error instanceof Error ? error.message : "The deploy failed", link).catch(() => undefined);
     throw error;
+  }
+}
+
+// One step on a machine; what it logged before failing goes on the run.
+export async function machineStep<T>(machine: Builder, run: Run, what: string, path: string, body?: BodyInit): Promise<T> {
+  // A streamed body must say it is sent before the answer starts.
+  const init = { method: "POST", ...(body === undefined ? {} : { body }), ...(body instanceof ReadableStream ? { duplex: "half" } : {}) } as RequestInit;
+  const response = await machine.fetch(new Request(`http://builder${path}`, init));
+  const result = (await response.json().catch(() => ({ error: `the machine answered ${response.status}` }))) as T & { error?: string; log?: string[] };
+  if (!response.ok || result.error) {
+    run.log = result.log;
+    throw new SetupError(`${what} stopped: ${result.error ?? response.status}.`);
+  }
+  return result;
+}
+
+// Brings the source into the app's repo on a machine of its own, never the build's: it holds the
+// one token that writes the repo, and no app code runs there.
+async function mergeSource(env: DeployEnv, app: App, run: Run, say: Reporter): Promise<{ commit: string; patch: Partial<App> }> {
+  const m = run.merge!;
+  const from = `${m.source.owner}/${m.source.name}`;
+  const into = `${app.repo.owner}/${app.repo.name}`;
+  const token = await new Source(app.repo.owner, app.repo.name, env.github, env.fetcher).writeToken();
+  const sourceToken = await new Source(m.source.owner, m.source.name, env.github, env.fetcher).token();
+  const git = env.builder(`git-${run.id}`);
+  try {
+    const input = { source: from, commit: m.commit, target: into, branch: app.repo.defaultBranch, token, ...(sourceToken ? { sourceToken } : {}), ...(app.source && !m.clone ? { base: app.source.commit } : {}), author: { name: m.author, email: m.author }, message: `Update from ${from} ${m.ref}` };
+    const result = await machineStep<{ commit: string; upToDate?: boolean; conflicts?: string[] }>(git, run, "Merging the source", m.clone ? "/git/clone" : "/git/merge", JSON.stringify(input));
+    if (result.conflicts) throw new SetupError(`${from} ${m.ref} changes what ${into} changed too, in ${result.conflicts.join(", ")}; merge it there by hand, then deploy.`);
+    await say.done(m.clone ? `Cloned ${from} at ${m.ref} into ${into}.` : result.upToDate ? `${into} already has ${from} ${m.ref}.` : `Merged ${from} ${m.ref} into ${into}.`);
+    return { commit: result.commit, patch: { source: { owner: m.source.owner, name: m.source.name, ref: m.ref, commit: m.commit }, available: undefined } };
+  } finally {
+    await git.destroy().catch(() => undefined);
   }
 }
 
@@ -387,7 +428,8 @@ async function prepareEmail(env: DeployEnv, app: App, f: Features, target: Targe
   };
   if (target.kind === "prod") {
     const domain = await ensureMailDomain(env, app, hostname, say);
-    if (!workerSecrets.includes("EMAIL_API_KEY")) await fresh(domain);
+    // A sending key sends only from its own domain, so a new address needs a new key.
+    if (!workerSecrets.includes("EMAIL_API_KEY") || app.moved?.length) await fresh(domain);
     return { vars: { EMAIL_MODE: "send", EMAIL_FROM: `noreply@${hostname}` }, generated };
   }
   const allowed = f.previews.sendEmailTo;
@@ -434,6 +476,25 @@ async function ensureMailDomain(env: DeployEnv, app: App, hostname: string, say:
 }
 
 const unquote = (value: string) => value.replace(/^"|"$/g, "");
+
+// An address the app moved away from: its domains, its previews' domains, its sending domain and
+// the records the instance made for it go.
+async function retireAddress(env: DeployEnv, app: App, old: { address: string; zone: { id: string } }, say: Reporter): Promise<void> {
+  const ours = new Set([app.name, ...app.previews.map((pr) => names(app.name, { kind: "preview", pr }).worker)]);
+  for (const hostname of [old.address, ...app.previews.map((pr) => previewAddress(pr, old.address))]) {
+    for (const d of await env.cf.domains(env.account, hostname)) if (d.hostname === hostname && ours.has(d.service)) await env.cf.detachDomain(env.account, d.id);
+  }
+  if (env.resend) {
+    const domain = await env.resend.findDomain(old.address);
+    if (domain) await env.resend.deleteDomain(domain.id);
+    const key = await env.resend.findKey(sendKeyName(old.address));
+    if (key) await env.resend.deleteKey(key);
+  }
+  for (const record of await env.cf.commented(old.zone.id, dnsComment(app.name))) {
+    if (record.name === old.address || record.name.endsWith(`.${old.address}`)) await env.cf.deleteRecord(old.zone.id, record.id);
+  }
+  await say.done(`${old.address} no longer serves the app.`);
+}
 
 // Removes a preview: its Worker, database branch and sending key. Its files expire on their own.
 export async function cleanup(env: DeployEnv, app: App, run: Run, save: (run: Run) => Promise<void>): Promise<Outcome> {

@@ -16,7 +16,14 @@ export interface InstanceRecord {
   host?: string;
   admins?: string[];
   setup?: Progress;
+  // The instance's own repo, made by Deploy to Cloudflare, and the platform's source last merged into it.
+  repo?: { owner: string; name: string; branch: string };
+  source?: { ref: string; commit: string };
+  available?: { ref: string; commit: string };
 }
+
+// Where the platform's releases come from.
+export const PLATFORM_SOURCE = { owner: "celsoft-com", name: "platform" } as const;
 
 // Complete setup's steps, each kept once the instance has confirmed it.
 export interface Progress {

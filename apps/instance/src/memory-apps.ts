@@ -8,6 +8,7 @@ export class MemoryApps implements AppStore {
   secretValues = new Map<string, Record<string, string>>();
   queued: Run[] = [];
   history = new Map<string, Run[]>();
+  held = new Map<string, unknown>();
 
   async list() {
     return [...this.apps.values()];
@@ -43,5 +44,13 @@ export class MemoryApps implements AppStore {
   }
   async enqueue(run: Run) {
     this.queued = [...this.queued.filter((r) => !(r.app === run.app && r.kind === run.kind && JSON.stringify(r.target) === JSON.stringify(run.target))), run];
+  }
+  async hold(key: string, value: unknown) {
+    this.held.set(key, structuredClone(value));
+  }
+  async take(key: string) {
+    const value = this.held.get(key);
+    this.held.delete(key);
+    return value;
   }
 }

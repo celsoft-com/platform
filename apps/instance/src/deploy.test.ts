@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { readConfig, type App } from "./apps.ts";
 import { Cloudflare, SetupError } from "./cloudflare.ts";
 import { deploy, cleanup, namespaceId, pendingMigrations, remove, type Builder, type DeployEnv, type Run, type Wrangler } from "./deploy.ts";
 import { Neon } from "./neon.ts";
 import { Resend } from "./resend.ts";
+import type { GitHubApp } from "./github.ts";
+import { testApp } from "./test-keys.ts";
 
 const PAGES = JSON.stringify({
   name: "pages",
@@ -51,6 +53,8 @@ class World {
   mailDomains: { id: string; name: string; status: string; records: unknown[] }[] = [];
   keys: { id: string; name: string }[] = [];
   upload?: { metadata: Record<string, any>; modules: string[] };
+  // Tokens the instance's GitHub App minted, with what each may do.
+  tokens: { token: string; permissions: Record<string, string> }[] = [];
   files: Record<string, string> = { "platform.jsonc": PAGES };
 
   fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -89,6 +93,7 @@ class World {
         return ok({ id: name });
       }
       if (path.endsWith("/workers/domains") && method === "GET") return ok(this.domains.filter((d) => d.hostname === url.searchParams.get("hostname")));
+      if ((m = /\/workers\/domains\/([^/]+)$/.exec(path)) && method === "DELETE") return (this.domains = this.domains.filter((d) => d.id !== m![1])), ok({});
       if (path.endsWith("/workers/domains") && method === "PUT") {
         const b = body as { hostname: string; service: string; zone_id: string };
         this.domains.push({ id: `d${this.domains.length}`, ...b });
@@ -173,6 +178,14 @@ class World {
     }
 
     if (host === "api.github.com") {
+      if (path === "/repos/acme/pages/installation") return Response.json({ id: 5 });
+      if (path === "/app/installations/5/access_tokens") {
+        const permissions = (body as { permissions: Record<string, string> }).permissions;
+        const token = `ghs_${permissions.contents}_${this.tokens.length}`;
+        this.tokens.push({ token, permissions });
+        return Response.json({ token });
+      }
+      if (path.includes("/statuses/")) return new Response(null, { status: 201 });
       if (path.endsWith("/installation")) return new Response(null, { status: 404 });
       if (path.includes("/commits/")) return new Response(path.endsWith("/main") ? COMMIT : PR_COMMIT);
       if (path.includes("/contents/")) {
@@ -210,6 +223,25 @@ class FakeBuilder implements Builder {
 
 let world: World;
 let builder: FakeBuilder;
+let gh: GitHubApp;
+
+beforeAll(async () => {
+  gh = await testApp("acme");
+});
+
+// The machine merges run on: it answers as the real one does, and records what it was handed.
+class FakeGit implements Builder {
+  received: Record<string, any> = {};
+  destroyed = false;
+  answer: Record<string, unknown> = { commit: "c".repeat(40), merged: "2".repeat(40) };
+  async fetch(request: Request): Promise<Response> {
+    this.received[new URL(request.url).pathname] = JSON.parse(await request.text());
+    return Response.json(this.answer);
+  }
+  async destroy() {
+    this.destroyed = true;
+  }
+}
 
 const APP: App = {
   name: "pages",
@@ -219,7 +251,6 @@ const APP: App = {
   zone: { id: "z1", name: "acme.dev" },
   admins: [],
   build: {},
-  updates: "branch",
   resources: {},
   previews: [],
   addedBy: "ann@example.com",
@@ -415,4 +446,53 @@ test("Durable Object migrations pick up after the Worker's last tag", () => {
   expect(pendingMigrations(all, undefined)).toEqual(all);
   expect(pendingMigrations(all, "b")).toEqual([{ tag: "c" }]);
   expect(pendingMigrations(all, "c")).toEqual([]);
+});
+
+describe("the app's repo", () => {
+  const CLONE: App = { ...APP, repo: { owner: "acme", ownerId: 2, name: "pages", id: 99, private: true, defaultBranch: "main" } };
+  const SOURCE = { owner: "celsoft-com", name: "pages" };
+  let git: FakeGit;
+  const machines = (id: string) => (id.startsWith("git-") ? git : builder);
+
+  beforeEach(() => {
+    git = new FakeGit();
+  });
+
+  test("the first run clones the source on a machine of its own, whose write token the build machine never sees", async () => {
+    const r = run({ merge: { source: SOURCE, ref: "v1", commit: "1".repeat(40), clone: true, author: "pat@example.com" } });
+    const { patch } = await deploy(env({ github: gh, builder: machines }), CLONE, r, async () => {});
+    const write = world.tokens.find((t) => t.permissions.contents === "write")!;
+    expect(write.permissions).toEqual({ contents: "write", metadata: "read" });
+    expect(git.received["/git/clone"]).toMatchObject({ source: "celsoft-com/pages", commit: "1".repeat(40), target: "acme/pages", token: write.token, author: { email: "pat@example.com" } });
+    expect(git.destroyed).toBe(true);
+    expect(JSON.stringify(builder.received)).not.toContain(write.token);
+    expect(r.commit).toBe("c".repeat(40));
+    expect(patch.source).toEqual({ ...SOURCE, ref: "v1", commit: "1".repeat(40) });
+    expect(r.done[0]).toBe("Cloned celsoft-com/pages at v1 into acme/pages.");
+  });
+
+  test("an Update merges from the source commit it last took, and stops on files both changed, before anything builds", async () => {
+    git.answer = { conflicts: ["src/worker.ts", "package.json"] };
+    const app = { ...CLONE, source: { ...SOURCE, ref: "v1", commit: "1".repeat(40) } };
+    const r = run({ merge: { source: SOURCE, ref: "v2", commit: "2".repeat(40), clone: false, author: "bob@example.com" } });
+    await expect(deploy(env({ github: gh, builder: machines }), app, r, async () => {})).rejects.toThrow("in src/worker.ts, package.json; merge it there by hand");
+    expect(git.received["/git/merge"]).toMatchObject({ commit: "2".repeat(40), base: "1".repeat(40), branch: "main", message: "Update from celsoft-com/pages v2" });
+    expect(builder.received["/source"]).toBeUndefined();
+  });
+
+  test("a moved app's next deploy retires its old address: domain, sending domain, records and key", async () => {
+    world.domains.push({ id: "old", hostname: "old.acme.dev", service: "pages", zone_id: "z1" });
+    world.records.push({ id: "rold", type: "TXT", name: "resend._domainkey.old.acme.dev", content: "p=old", comment: "managed by @celsoft/platform for pages" });
+    world.mailDomains.push({ id: "mdold", name: "old.acme.dev", status: "verified", records: [] });
+    world.keys.push({ id: "kold", name: "platform old.acme.dev" });
+    world.scripts.set("pages", { secrets: ["BETTER_AUTH_SECRET", "EMAIL_API_KEY"] });
+    const { patch } = await deploy(env(), { ...APP, moved: [{ address: "old.acme.dev", zone: { id: "z1", name: "acme.dev" } }] }, run(), async () => {});
+    expect(world.domains.map((d) => d.hostname)).toEqual(["pages.acme.dev"]);
+    expect(world.records.map((r) => r.name)).not.toContain("resend._domainkey.old.acme.dev");
+    expect(world.mailDomains.map((d) => d.name)).toEqual(["pages.acme.dev"]);
+    expect(world.keys.map((k) => k.name)).toEqual(["platform pages.acme.dev"]);
+    // The new sending domain needs its own key, though the Worker had one.
+    expect(binding("secret_text").map((b: { name: string }) => b.name)).toEqual(["EMAIL_API_KEY"]);
+    expect("moved" in patch && patch.moved === undefined).toBe(true);
+  });
 });

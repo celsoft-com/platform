@@ -22,6 +22,12 @@ export function manifestAction(owner: string, state: string): string {
   return `${base}?state=${encodeURIComponent(state)}`;
 }
 
+// What the instance's app needs: making each app's repo in its owner (administration), writing
+// clones and merges into it (contents), and showing deploys on commits and pull requests.
+export const PERMISSIONS = { administration: "write", contents: "write", metadata: "read", pull_requests: "write", statuses: "write" } as const;
+
+export const callbackUrl = (host: string) => `https://${host}/admin/github/authorized`;
+
 export function manifest(host: string, script: string): string {
   const account = host.split(".")[1] ?? "";
   return JSON.stringify({
@@ -31,8 +37,9 @@ export function manifest(host: string, script: string): string {
     redirect_url: `https://${host}/admin/github/created`,
     setup_url: `https://${host}/admin/github/installed`,
     setup_on_update: true,
+    callback_urls: [callbackUrl(host)],
     public: false,
-    default_permissions: { contents: "read", metadata: "read", pull_requests: "write", statuses: "write" },
+    default_permissions: PERMISSIONS,
     default_events: ["push", "pull_request"],
   });
 }
@@ -138,17 +145,26 @@ export class Source {
 
   // An installation token that reads this one repo, when the app is installed on it.
   token(): Promise<string | undefined> {
-    this.auth ??= (async () => {
-      if (!this.app) return undefined;
-      const jwt = `Bearer ${await appJwt(this.app, this.now())}`;
-      const found = await (0, this.fetcher)(`${API}${this.path}/installation`, { headers: { ...HEADERS, authorization: jwt } });
-      if (found.status === 404) return undefined;
-      if (!found.ok) throw new SetupError(`GitHub refused to say whether the instance's app is installed on ${this.owner}/${this.name} (${found.status}).`);
-      const { id } = (await found.json()) as { id: number };
-      const made = await github<{ token: string }>(this.fetcher, `read ${this.owner}/${this.name}`, "POST", `/app/installations/${id}/access_tokens`, jwt, { repositories: [this.name], permissions: { contents: "read", metadata: "read", statuses: "write", pull_requests: "write" } });
-      return made.token;
-    })();
+    this.auth ??= this.mint({ contents: "read", metadata: "read", statuses: "write", pull_requests: "write" });
     return this.auth;
+  }
+
+  // A token that writes only this repo's contents, for merging into it; never handed to an app's build.
+  async writeToken(): Promise<string> {
+    const token = await this.mint({ contents: "write", metadata: "read" });
+    if (!token) throw new SetupError(`The instance's GitHub App is not on ${this.owner}/${this.name}, so it cannot write to it.`);
+    return token;
+  }
+
+  private async mint(permissions: Record<string, string>): Promise<string | undefined> {
+    if (!this.app) return undefined;
+    const jwt = `Bearer ${await appJwt(this.app, this.now())}`;
+    const found = await (0, this.fetcher)(`${API}${this.path}/installation`, { headers: { ...HEADERS, authorization: jwt } });
+    if (found.status === 404) return undefined;
+    if (!found.ok) throw new SetupError(`GitHub refused to say whether the instance's app is installed on ${this.owner}/${this.name} (${found.status}).`);
+    const { id } = (await found.json()) as { id: number };
+    const made = await github<{ token: string }>(this.fetcher, `get a token for ${this.owner}/${this.name}`, "POST", `/app/installations/${id}/access_tokens`, jwt, { repositories: [this.name], permissions });
+    return made.token;
   }
 
   async installed(): Promise<boolean> {
@@ -208,4 +224,62 @@ export class Source {
       body: JSON.stringify({ state, description: description.slice(0, 140), target_url: url, context: "platform" }),
     });
   }
+}
+
+const LEVEL: Record<string, number> = { read: 1, write: 2, admin: 3 };
+
+// The permissions the app or its installation on its owner lacks; an installation lags behind its
+// app until the owner accepts the new permissions on GitHub.
+export interface AppCheck {
+  // What the app's settings lack, and what its installation on the owner has not accepted yet.
+  app: string[];
+  installation: string[];
+  installed: boolean;
+  // Where the owner changes the app's permissions and callback URL, and accepts them.
+  settings: string;
+  installationUrl?: string;
+}
+
+export async function checkApp(app: GitHubApp, fetcher: typeof fetch = fetch, now = Date.now()): Promise<AppCheck> {
+  const jwt = `Bearer ${await appJwt(app, now)}`;
+  const lacks = (has: Record<string, string> = {}) => Object.entries(PERMISSIONS).filter(([key, level]) => (LEVEL[has[key] ?? ""] ?? 0) < LEVEL[level]!).map(([key, level]) => `${key.replace(/_/g, " ")}: ${level === "write" ? "read and write" : "read"}`);
+  const own = await github<{ permissions: Record<string, string> }>(fetcher, "read the instance's app", "GET", "/app", jwt);
+  const owner = await github<{ type: string }>(fetcher, `read ${app.owner}`, "GET", `/users/${encodeURIComponent(app.owner)}`);
+  const org = owner.type === "Organization";
+  const settings = org ? `https://github.com/organizations/${encodeURIComponent(app.owner)}/settings/apps/${app.slug}/permissions` : `https://github.com/settings/apps/${app.slug}/permissions`;
+  const found = await fetcher(`${API}/users/${encodeURIComponent(app.owner)}/installation`, { headers: { ...HEADERS, authorization: jwt } });
+  if (found.status === 404) return { app: lacks(own.permissions), installation: [], installed: false, settings };
+  if (!found.ok) throw new SetupError(`GitHub refused to say where the instance's app is installed (${found.status}).`);
+  const installation = (await found.json()) as { id: number; permissions: Record<string, string> };
+  const installationUrl = org ? `https://github.com/organizations/${encodeURIComponent(app.owner)}/settings/installations/${installation.id}` : `https://github.com/settings/installations/${installation.id}`;
+  return { app: lacks(own.permissions), installation: lacks(installation.permissions), installed: true, settings, installationUrl };
+}
+
+// GitHub's page where the admin lets the instance act as them, once, to make a repo in its owner.
+export function authorizeUrl(app: GitHubApp, host: string, state: string): string {
+  return `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(app.client_id)}&redirect_uri=${encodeURIComponent(callbackUrl(host))}&state=${encodeURIComponent(state)}`;
+}
+
+// The admin's own token, good for this one request and never kept.
+export async function userToken(app: GitHubApp, code: string, fetcher: typeof fetch = fetch): Promise<string> {
+  const response = await fetcher("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json", "user-agent": HEADERS["user-agent"] },
+    body: JSON.stringify({ client_id: app.client_id, client_secret: app.client_secret, code }),
+  });
+  const result = (await response.json().catch(() => ({}))) as { access_token?: string; error_description?: string };
+  if (!result.access_token) throw new SetupError(`GitHub did not let the instance act as you: ${result.error_description ?? response.status}. Start again; GitHub's codes last ten minutes.`);
+  return result.access_token;
+}
+
+// Makes the app's repo in the instance's owner, as the admin, private, and puts the instance's app on it.
+export async function createRepo(app: GitHubApp, token: string, name: string, description: string, fetcher: typeof fetch = fetch, now = Date.now()): Promise<Repo> {
+  const user = `token ${token}`;
+  const me = await github<{ login: string }>(fetcher, "say who you are", "GET", "/user", user);
+  const path = me.login.toLowerCase() === app.owner.toLowerCase() ? "/user/repos" : `/orgs/${encodeURIComponent(app.owner)}/repos`;
+  const made = await github<{ id: number; name: string; private: boolean; default_branch: string; owner: { login: string; id: number } }>(fetcher, `make the repo ${app.owner}/${name} as ${me.login}`, "POST", path, user, { name, description, private: true, has_wiki: false });
+  const jwt = `Bearer ${await appJwt(app, now)}`;
+  const installation = await github<{ id: number; repository_selection: string }>(fetcher, `find the instance's app on ${app.owner}`, "GET", `/users/${encodeURIComponent(app.owner)}/installation`, jwt);
+  if (installation.repository_selection === "selected") await github(fetcher, `put the instance's app on ${app.owner}/${name}`, "PUT", `/user/installations/${installation.id}/repositories/${made.id}`, user);
+  return { id: made.id, owner: made.owner.login, ownerId: made.owner.id, name: made.name, private: made.private, defaultBranch: "main" };
 }

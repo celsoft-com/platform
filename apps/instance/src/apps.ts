@@ -12,8 +12,6 @@ export const CONFIG_FILE = "platform.jsonc";
 export const APP_NAME = /^(?=.{3,50}$)[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-export type Updates = "push" | "releases" | "branch";
-
 export interface App {
   name: string;
   repo: { owner: string; ownerId: number; name: string; id: number; private: boolean; defaultBranch: string };
@@ -24,15 +22,26 @@ export interface App {
   admins: string[];
   // Each command left out is found from the repo; an empty one is skipped.
   build: { install?: string; build?: string; test?: string };
-  updates: Updates;
+  // The repo the app was cloned from, and its commit last merged into the app's repo; an app
+  // added from a repo already in the instance's owner has none.
+  source?: Upstream;
   // What the instance made for the app, found again by these on every deploy and on removal.
   resources: { neonProject?: string; region?: string };
   deployed?: { ref: string; commit: string; at: string };
-  // A newer release, or a newer commit on the default branch, not deployed yet.
+  // The source's newer release, or newer default-branch commit if it makes no releases, not merged yet.
   available?: { ref: string; commit: string };
+  // Addresses the app had before, whose domains and sending domains its next deploy removes.
+  moved?: { address: string; zone: { id: string; name: string } }[];
   previews: number[];
   addedBy: string;
   addedAt: string;
+}
+
+export interface Upstream {
+  owner: string;
+  name: string;
+  ref: string;
+  commit: string;
 }
 
 // The part of platform.jsonc the instance acts on. The app's own framework checks the rest when it builds.
@@ -136,6 +145,9 @@ export interface AppStore {
   runs(name: string): Promise<Run[]>;
   // Queues a run; a queued run for the same app and target is replaced, since only the newest matters.
   enqueue(run: Run, host: string): Promise<void>;
+  // Keeps an Add app between the form and GitHub's answer, taken once.
+  hold(key: string, value: unknown): Promise<void>;
+  take(key: string): Promise<unknown>;
 }
 
 export const appAdmins = async (apps: AppStore) => [...new Set((await apps.list()).flatMap((a) => a.admins))];
