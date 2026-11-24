@@ -454,16 +454,16 @@ The direction the platform is taking: instead of each app deploying the platform
     4. **No per-app wiring**: pointing the instance at a repo is all an app will need.
 5. **Two setup phases**: initial setup, below, needs only Cloudflare and GitHub; complete setup, on the admin page, gives the instance what deploying apps needs.
 6. **Deploying the instance**: the repo's root is the instance.
-    1. **Deploy to Cloudflare**: the button in the README copies the whole repo into a new repo in the org's GitHub account and connects it to Workers Builds, which deploys the root.
-    2. **Every push deploys**: Workers Builds deploys each push to the copy's `main`; the org decides when and how it takes this repo's changes into its copy.
-    3. **Push is super admin power**: whoever can push to the copy's `main` controls the instance's code and the token it holds, so push access belongs to super admins only, like membership in the Cloudflare account.
+    1. **Deploy to Cloudflare**: the button in the README clones the whole repo into a new repo in the org's GitHub account, not a fork, and connects it to Workers Builds, which deploys the root.
+    2. **Every push deploys**: Workers Builds deploys each push to the clone's `main`; the org decides when and how it takes this repo's changes into its clone.
+    3. **Push is super admin power**: whoever can push to the clone's `main` controls the instance's code and the token it holds, so push access belongs to super admins only, like membership in the Cloudflare account.
     4. **Its own storage**: the instance keeps its state in a Durable Object the deploy creates, so the button needs nothing filled in.
     5. **Where it lives**: `wrangler.jsonc` at the root deploys `apps/instance`: its Worker in `src/`, its pages in `src/client/`.
     6. **The framework package**: the instance builds from the code in its own copy of the repo and is never installed from npm. Apps install the framework, `@celsoft/platform`, from npm: its runtime, testing and local tools, which the instance's build uses too; nothing in it deploys.
 7. **Initial setup**: what the super admin does, all in the browser.
     1. **Prerequisites**: a Cloudflare account on Workers Paid and a GitHub account.
     2. **Start**: on the repo's GitHub page, click **Deploy to Cloudflare**.
-    3. **Sign in**: sign in to Cloudflare; the first time, connect GitHub and pick the account or org that will hold the copy.
+    3. **Sign in**: sign in to Cloudflare; the first time, connect GitHub and pick the account or org that will hold the clone.
     4. **Create**: confirm the repo and Worker names, `platform` by default, and click **Create and deploy**; the build runs on Cloudflare, about two minutes.
     5. **Open it**: visit the Worker's address, which shows the setup form.
     6. **Reserve it**: click **Create token**, which opens the Cloudflare dashboard with the token's permissions filled in; create it, paste it into the form with your email, and submit.

@@ -6,13 +6,13 @@ section 16 is the full design, including what happens in each state.
 ## You need
 
 1. **Cloudflare:** an account on the Workers Paid plan.
-2. **GitHub:** an account, or an org, to hold your copy of this repo.
+2. **GitHub:** an account, or an org, to hold your clone of this repo, a new repo Deploy to Cloudflare creates.
 
 ## Steps
 
 1. **Start:** on this repo's GitHub page, click **Deploy to Cloudflare**.
 2. **Sign in:** sign in to Cloudflare. The first time, connect GitHub and pick the account or org
-   that will hold the copy.
+   that will hold the clone.
 3. **Create:** confirm the repo and Worker names, `platform` by default, and click **Create and
    deploy**. The build runs on Cloudflare and takes about two minutes.
 4. **Open it:** visit the Worker's address, which shows the setup form.
@@ -65,7 +65,7 @@ you want.
 
 ## Keep it safe
 
-1. **Your copy of the repo:** Cloudflare deploys every push to its `main`, so give push access only
+1. **Your clone of the repo:** Cloudflare deploys every push to its `main`, so give push access only
    to super admins.
 2. **The Cloudflare account:** anyone who is a member can go around the instance, so keep members
    to super admins.
